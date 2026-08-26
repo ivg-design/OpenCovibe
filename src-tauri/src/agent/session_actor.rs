@@ -931,7 +931,7 @@ impl SessionActor {
             soft_deadline: now + USER_SOFT_TIMEOUT,
             // None (timeout disabled) falls back to the default deadline — the
             // tick gate (user_hard_timeout.is_some()) keeps it from ever firing.
-            hard_deadline: now + self.user_hard_timeout.map_or(USER_HARD_TIMEOUT, |d| d),
+            hard_deadline: now + self.user_hard_timeout.unwrap_or(USER_HARD_TIMEOUT),
             turn_index: ticket.turn_index,
         });
     }
@@ -1098,7 +1098,7 @@ impl SessionActor {
             soft_deadline: now + USER_SOFT_TIMEOUT,
             // None (timeout disabled) falls back to the default deadline — the
             // tick gate (user_hard_timeout.is_some()) keeps it from ever firing.
-            hard_deadline: now + self.user_hard_timeout.map_or(USER_HARD_TIMEOUT, |d| d),
+            hard_deadline: now + self.user_hard_timeout.unwrap_or(USER_HARD_TIMEOUT),
             turn_index,
         });
 
