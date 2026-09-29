@@ -18,6 +18,7 @@
   import Input from "$lib/components/Input.svelte";
   import KeybindingEditor from "$lib/components/KeybindingEditor.svelte";
   import ProviderIcon from "$lib/components/ProviderIcon.svelte";
+  import CustomPaletteEditor from "$lib/components/CustomPaletteEditor.svelte";
   import { formatKeyDisplay } from "$lib/stores/keybindings.svelte";
   import {
     PLATFORM_PRESETS,
@@ -50,6 +51,9 @@
   import { t, LOCALE_REGISTRY, currentLocale, switchLocale } from "$lib/i18n/index.svelte";
   import { getTransport } from "$lib/transport";
   import { THEME_CONTEXT, THEME_MODES, type ThemeController } from "$lib/utils/theme";
+
+  // Palette strings are merged into the locale catalog by the integration owner.
+  const paletteT = t as (key: string) => string;
 
   const themeController = getContext<ThemeController>(THEME_CONTEXT);
 
@@ -1933,6 +1937,14 @@
                 </button>
               {/each}
             </div>
+          </div>
+          <div class="border-t border-border/50"></div>
+          <div class="space-y-2">
+            <div>
+              <p class="text-sm font-medium">{paletteT("palette_title")}</p>
+              <p class="text-xs text-muted-foreground">{paletteT("palette_description")}</p>
+            </div>
+            <CustomPaletteEditor />
           </div>
           <div class="border-t border-border/50"></div>
           <div class="flex items-center justify-between gap-4">

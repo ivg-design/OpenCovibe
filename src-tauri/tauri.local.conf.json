@@ -1,0 +1,8 @@
+{
+  "productName": "OpenCovibe Local",
+  "identifier": "design.ivg.opencovibe.local",
+  "build": {
+    "devUrl": "http://localhost:1424",
+    "beforeDevCommand": "npm run dev -- --port 1424"
+  }
+}

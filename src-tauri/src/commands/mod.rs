@@ -19,6 +19,7 @@ pub mod onboarding;
 pub mod plugins;
 pub mod preview;
 pub mod remote_fs;
+pub mod rooms;
 pub mod runs;
 pub mod screenshot;
 pub mod session;

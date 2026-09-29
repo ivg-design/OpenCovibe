@@ -1,0 +1,287 @@
+use super::models::{Board, BoardItem, RoomProject};
+use crate::agent::claude_stream::{augmented_path, which_binary};
+use serde_json::{json, Value};
+use std::process::Stdio;
+use tokio::io::AsyncWriteExt;
+
+pub fn repository_parts(repository: &str) -> Result<(&str, &str), String> {
+    let (owner, name) = repository
+        .trim()
+        .split_once('/')
+        .ok_or("repository must be OWNER/REPO")?;
+    if owner.is_empty()
+        || name.is_empty()
+        || owner.len() > 100
+        || name.len() > 100
+        || !owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+        || name == "."
+        || name == ".."
+    {
+        return Err("repository must be a valid GitHub OWNER/REPO".into());
+    }
+    Ok((owner, name))
+}
+
+pub async fn graphql(query: &str, variables: Value) -> Result<Value, String> {
+    let gh = which_binary("gh")
+        .ok_or("GitHub CLI unavailable. Install/authenticate gh with Project access.")?;
+    let mut child = tokio::process::Command::new(gh)
+        .env("PATH", augmented_path())
+        .args(["api", "graphql", "--input", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| {
+            format!("GitHub CLI unavailable: {e}. Install/authenticate gh with Project access.")
+        })?;
+    let bytes = serde_json::to_vec(&json!({"query": query, "variables": variables}))
+        .map_err(|e| e.to_string())?;
+    let output = tokio::time::timeout(std::time::Duration::from_secs(30), async move {
+        let mut stdin = child.stdin.take().ok_or("GitHub CLI stdin unavailable")?;
+        stdin.write_all(&bytes).await.map_err(|e| e.to_string())?;
+        drop(stdin);
+        child.wait_with_output().await.map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|_| "GitHub request timed out; refresh before retrying a write".to_string())??;
+    let parsed = serde_json::from_slice::<Value>(&output.stdout);
+    if let Ok(value) = &parsed {
+        if let Some(errors) = value.get("errors").and_then(Value::as_array) {
+            if !errors.is_empty() {
+                let messages = errors
+                    .iter()
+                    .filter_map(|e| e["message"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(format!("GitHub rejected request: {messages}"));
+            }
+        }
+    }
+    if !output.status.success() {
+        let message: String = String::from_utf8_lossy(&output.stderr)
+            .chars()
+            .take(1500)
+            .collect();
+        return Err(format!("GitHub request failed: {}", message.trim()));
+    }
+    let value = parsed.map_err(|e| format!("invalid GitHub response: {e}"))?;
+    value
+        .get("data")
+        .cloned()
+        .filter(|v| !v.is_null())
+        .ok_or("GitHub response contains no data".into())
+}
+
+pub async fn repository_ids(repository: &str) -> Result<(String, String), String> {
+    let (owner, name) = repository_parts(repository)?;
+    let data = graphql(
+        "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id owner{id}}}",
+        json!({"owner": owner, "name": name}),
+    )
+    .await?;
+    Ok((
+        required_string(&data["repository"], "id")?,
+        required_string(&data["repository"]["owner"], "id")?,
+    ))
+}
+
+fn required_string(value: &Value, key: &str) -> Result<String, String> {
+    value[key]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("GitHub response missing {key}; check repository/Project access"))
+}
+
+fn parse_project(value: &Value, repository: &str) -> Result<RoomProject, String> {
+    let (owner, _) = repository_parts(repository)?;
+    Ok(RoomProject {
+        id: required_string(value, "id")?,
+        number: value["number"]
+            .as_u64()
+            .ok_or("GitHub project number missing")?,
+        title: required_string(value, "title")?,
+        url: required_string(value, "url")?,
+        owner: owner.into(),
+        repository: repository.into(),
+    })
+}
+
+pub async fn find_project(
+    owner_id: &str,
+    repository: &str,
+    title: &str,
+) -> Result<Option<RoomProject>, String> {
+    let mut after: Option<String> = None;
+    for _ in 0..100 {
+        let data = graphql(
+            "query($id:ID!,$after:String){node(id:$id){... on User{projectsV2(first:100,after:$after){nodes{id number title url} pageInfo{hasNextPage endCursor}}} ... on Organization{projectsV2(first:100,after:$after){nodes{id number title url} pageInfo{hasNextPage endCursor}}}}}",
+            json!({"id": owner_id, "after": after}),
+        ).await?;
+        let projects = &data["node"]["projectsV2"];
+        let nodes = projects["nodes"]
+            .as_array()
+            .ok_or("GitHub Projects unavailable; check Project permissions")?;
+        for node in nodes {
+            if node["title"].as_str() == Some(title) {
+                return parse_project(node, repository).map(Some);
+            }
+        }
+        if !next_cursor(&projects["pageInfo"], &mut after)? {
+            return Ok(None);
+        }
+    }
+    Err("Project lookup exceeded its pagination limit; no new Project was created".into())
+}
+
+pub async fn create_project(
+    repository: &str,
+    repo_id: &str,
+    owner_id: &str,
+    title: &str,
+) -> Result<RoomProject, String> {
+    let data = graphql(
+        "mutation($owner:ID!,$repo:ID!,$title:String!){createProjectV2(input:{ownerId:$owner,repositoryId:$repo,title:$title}){projectV2{id number title url}}}",
+        json!({"owner": owner_id, "repo": repo_id, "title": title}),
+    ).await?;
+    parse_project(&data["createProjectV2"]["projectV2"], repository)
+}
+
+fn next_cursor(page: &Value, cursor: &mut Option<String>) -> Result<bool, String> {
+    if page["hasNextPage"].as_bool() != Some(true) {
+        return Ok(false);
+    }
+    let next = required_string(page, "endCursor")?;
+    if cursor.as_deref() == Some(&next) {
+        return Err("GitHub pagination did not advance".into());
+    }
+    *cursor = Some(next);
+    Ok(true)
+}
+
+pub async fn read_board(project_id: &str) -> Result<Board, String> {
+    let mut after: Option<String> = None;
+    let mut items = vec![];
+    let mut total_count = 0;
+    for _ in 0..100 {
+        let data = graphql(
+            "query($id:ID!,$after:String){node(id:$id){... on ProjectV2{items(first:100,after:$after){totalCount pageInfo{hasNextPage endCursor} nodes{id content{__typename ... on Issue{title url} ... on PullRequest{title url} ... on DraftIssue{title}} fieldValues(first:100){nodes{... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}} ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2FieldCommon{name}}}}}}}}}}",
+            json!({"id": project_id, "after": after}),
+        ).await?;
+        let connection = &data["node"]["items"];
+        let nodes = connection["nodes"]
+            .as_array()
+            .ok_or("GitHub Project inaccessible; previous board retained")?;
+        total_count = connection["totalCount"].as_u64().unwrap_or(total_count);
+        for node in nodes {
+            items.push(parse_board_item(node)?);
+        }
+        if !next_cursor(&connection["pageInfo"], &mut after)? {
+            return Ok(Board {
+                items,
+                synced_at: Some(crate::models::now_iso()),
+                error: None,
+                total_count,
+            });
+        }
+    }
+    Err("GitHub board pagination limit reached; previous complete board retained".into())
+}
+
+fn parse_board_item(node: &Value) -> Result<BoardItem, String> {
+    let content = &node["content"];
+    let kind = match content["__typename"].as_str() {
+        Some("Issue") => "issue",
+        Some("PullRequest") => "pull_request",
+        Some("DraftIssue") => "draft",
+        _ => "redacted",
+    };
+    let mut status = "Backlog".to_string();
+    let mut priority = None;
+    let mut agent = None;
+    if let Some(fields) = node["fieldValues"]["nodes"].as_array() {
+        for field in fields {
+            let value = field["name"]
+                .as_str()
+                .or_else(|| field["text"].as_str())
+                .map(str::to_owned);
+            match field["field"]["name"]
+                .as_str()
+                .map(str::to_ascii_lowercase)
+                .as_deref()
+            {
+                Some("status") => {
+                    if let Some(v) = value {
+                        status = v;
+                    }
+                }
+                Some("priority") => priority = value,
+                Some("agent") | Some("agent owner") => agent = value,
+                _ => {}
+            }
+        }
+    }
+    Ok(BoardItem {
+        id: required_string(node, "id")?,
+        title: if kind == "redacted" {
+            "Restricted item".into()
+        } else {
+            required_string(content, "title")?
+        },
+        url: if kind == "redacted" {
+            None
+        } else {
+            content["url"].as_str().map(str::to_owned)
+        },
+        status,
+        priority,
+        agent,
+        kind: kind.into(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_urls_and_extra_path_segments_without_shell_interpolation() {
+        assert!(repository_parts("owner/repo").is_ok());
+        for bad in [
+            "https://github.com/owner/repo",
+            "owner/repo/issues",
+            "owner/..",
+            "a;bad/repo",
+            "owner/",
+        ] {
+            assert!(repository_parts(bad).is_err());
+        }
+    }
+
+    #[test]
+    fn reads_custom_status_priority_and_agent_fields() {
+        let item = parse_board_item(&json!({"id":"item", "content":{"__typename":"Issue","title":"Do work","url":"https://github.com/o/r/issues/1"},"fieldValues":{"nodes":[{"name":"Ready","field":{"name":"Status"}},{"name":"P1","field":{"name":"Priority"}},{"text":"Claude review","field":{"name":"Agent"}}]}})).unwrap();
+        assert_eq!(item.status, "Ready");
+        assert_eq!(item.priority.as_deref(), Some("P1"));
+        assert_eq!(item.agent.as_deref(), Some("Claude review"));
+    }
+
+    #[test]
+    fn inaccessible_items_are_never_presented_as_actionable_content() {
+        let item = parse_board_item(&json!({"id":"hidden", "content":null})).unwrap();
+        assert_eq!(item.kind, "redacted");
+        assert_eq!(item.title, "Restricted item");
+        assert!(item.url.is_none());
+    }
+
+    #[test]
+    fn pagination_rejects_nonadvancing_or_missing_cursors() {
+        let mut cursor = Some("same".into());
+        assert!(next_cursor(&json!({"hasNextPage":true,"endCursor":"same"}), &mut cursor).is_err());
+        assert!(next_cursor(&json!({"hasNextPage":true}), &mut cursor).is_err());
+    }
+}

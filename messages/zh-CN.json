@@ -1,14 +1,12 @@
 {
   "auth_awsCredentials": "AWS 凭证",
   "settings_title": "设置",
-
   "settings_tab_general": "通用",
   "settings_tab_connection": "连接",
   "settings_tab_cliConfig": "CLI 配置",
   "settings_tab_shortcuts": "快捷键",
   "settings_tab_remote": "远程",
   "settings_tab_debug": "调试",
-
   "settings_general_saved": "已保存",
   "settings_general_connectionMode": "连接方式",
   "settings_general_modeCli": "CLI",
@@ -62,7 +60,6 @@
   "settings_local_setupHint_ccswitch": "打开 CC Switch → 设置 → 启用「Proxy Enabled」开关，然后选择一个 Provider",
   "settings_local_setupHint_ccr": "运行 \"ccr start\" 仅启动路由服务（请勿使用 \"ccr code\"）。安装：npm i -g @musistudio/claude-code-router",
   "settings_local_setupHint_ollama": "运行 \"ollama serve\" 启动 Ollama 服务",
-
   "settings_apiTest": "测试",
   "settings_apiTest_testing": "测试中...",
   "settings_apiTest_success": "已连通 ({latency}ms)",
@@ -70,7 +67,6 @@
   "settings_apiTest_failed": "连接失败",
   "settings_apiTest_noKey": "请先输入 API Key",
   "settings_apiTest_noUrl": "请先填写 Base URL",
-
   "codex_notInstalled": "未找到 Codex CLI。安装方式：npm i -g @openai/codex",
   "codex_notLoggedIn": "Codex 未登录。运行：codex login",
   "settings_codex_title": "Codex",
@@ -114,7 +110,6 @@
   "settings_codexHooks_label": "钩子",
   "settings_codexHooks_count": "已配置 {count} 个",
   "settings_codexHooks_manage": "管理",
-
   "settings_general_setupWizard": "设置向导",
   "settings_general_setupWizardDesc": "重新运行初始设置向导以重新配置 CLI 和认证。",
   "settings_general_runWizard": "运行向导",
@@ -160,7 +155,6 @@
   "settings_general_language": "语言",
   "settings_general_displayLanguage": "界面语言",
   "settings_general_displayLanguageDesc": "选择应用界面的显示语言",
-
   "settings_general_display": "显示",
   "settings_general_appTheme": "应用主题",
   "settings_general_appThemeDesc": "控制 OpenCovibe 界面。Claude 终端主题需在 CLI 配置中单独设置。",
@@ -170,7 +164,6 @@
   "settings_general_appThemeSystem": "跟随系统",
   "settings_general_uiZoom": "界面缩放",
   "settings_general_uiZoomDesc": "调整界面整体大小",
-
   "settings_cliConfig_loading": "正在加载 CLI 配置...",
   "settings_cliConfig_loadFailed": "加载 CLI 配置失败：{error}",
   "settings_cliConfig_retry": "重试",
@@ -186,7 +179,6 @@
   "settings_cliConfig_advanced": "高级",
   "settings_cliConfig_projectOverride": "项目级覆盖",
   "settings_cliConfig_footer": "更改已保存到 ~/.claude/settings.json。项目级配置（.claude/settings.json）优先级更高。",
-
   "settings_cliConfig_thinkingModeLabel": "思考模式",
   "settings_cliConfig_thinkingModeDesc": "为复杂问题启用扩展思考",
   "settings_cliConfig_fastModeLabel": "快速模式",
@@ -225,7 +217,6 @@
   "settings_cliConfig_updateChannelDesc": "自动更新的发布通道",
   "settings_cliConfig_notifChannelLabel": "通知方式",
   "settings_cliConfig_notifChannelDesc": "桌面通知的推送方式",
-
   "settings_cliConfig_optDefault": "默认",
   "settings_cliConfig_optPlan": "计划",
   "settings_cliConfig_optAutoEdit": "自动编辑",
@@ -240,7 +231,6 @@
   "settings_cliConfig_optStable": "稳定",
   "settings_cliConfig_optIterm2": "iTerm2",
   "settings_cliConfig_optTerminalBell": "终端铃声",
-
   "settings_codexConfig_title": "Codex",
   "settings_codexConfig_warning": "Codex 配置不可用：{warning}",
   "settings_codexConfig_warningDisabled": "问题解决前编辑功能已禁用。",
@@ -302,7 +292,6 @@
   "settings_codexFlags_ignoreRulesDesc": "--ignore-rules：跳过 user/project 的 .rules execpolicy 文件。危险 — 绕过本地命令策略。",
   "settings_codexFlags_webSearchLabel": "网络搜索",
   "settings_codexFlags_webSearchDesc": "--search：启用原生 web_search 工具。仅新会话生效（续接的轮次不带）。",
-
   "settings_shortcuts_appShortcuts": "应用快捷键",
   "settings_shortcuts_inputFixed": "输入（固定）",
   "settings_shortcuts_cliShortcuts": "Claude CLI 快捷键",
@@ -310,7 +299,6 @@
   "settings_shortcuts_readOnly": "（只读）",
   "settings_shortcuts_source": "来源：{source}",
   "settings_shortcuts_resetAll": "恢复所有默认值",
-
   "settings_remote_title": "远程主机",
   "settings_remote_desc": "通过 SSH 在远程机器上运行 Claude Code。需要基于密钥的身份验证。",
   "settings_remote_noHosts": "未配置远程主机。",
@@ -362,7 +350,6 @@
   "settings_remote_sshKeyAlreadyExists": "密钥已存在，跳过生成。",
   "settings_remote_cliNotFoundHint": "SSH 已连接，但未找到 CLI。在远程机器上运行以下命令获取路径：",
   "settings_remote_cliNotFoundHint2": "然后将完整路径粘贴到上方的「Claude CLI 路径（远程）」字段，再次测试。",
-
   "settings_debug_title": "调试日志",
   "settings_debug_desc": "启用详细的前端日志记录。",
   "settings_debug_rustHint": "Rust 日志：",
@@ -377,16 +364,13 @@
   "settings_debug_rustBackendLogs": "Rust 后端日志（终端）：",
   "settings_debug_copy": "复制",
   "settings_debug_maxEntries": "日志缓冲在内存中（最多 2000 条）。打开开发者工具控制台查看实时输出。",
-
   "common_required": "必填",
-
   "nav_chat": "聊天",
   "nav_explorer": "文件浏览",
   "nav_extend": "扩展",
   "nav_memory": "记忆",
   "nav_usage": "用量",
   "nav_settings": "设置",
-
   "layout_appName": "OpenCovibe",
   "layout_newConversation": "新对话",
   "layout_selectProjectFolder": "选择项目文件夹",
@@ -413,7 +397,6 @@
   "layout_themeTitle_system": "应用主题：跟随系统（点击切换为深色）",
   "layout_schemeTitle_warm": "配色：暖色（点击切换为中性灰）",
   "layout_schemeTitle_neutral": "配色：中性灰（点击切换为暖色）",
-
   "sidebar_skills": "技能",
   "sidebar_mcpServers": "MCP 服务器",
   "sidebar_plugins": "插件",
@@ -448,8 +431,7 @@
   "sidebar_deleteOk": "删除",
   "sidebar_removeProject": "移除项目",
   "sidebar_removeProjectConfirm": "移除项目文件夹",
-  "sidebar_removeProjectDesc": "该项目将从侧边栏移除，数据保留在磁盘上。通过\u201c打开文件夹\u201d可重新添加。",
-
+  "sidebar_removeProjectDesc": "该项目将从侧边栏移除，数据保留在磁盘上。通过“打开文件夹”可重新添加。",
   "statusbar_toggleSidebar": "切换侧边栏 (Ctrl+B)",
   "statusbar_contextTitle": "最新轮次的上下文使用量（{pct}%，共 {tokens} 个 token）。接近限制时 CLI 会自动压缩上下文。",
   "statusbar_ctx": "上下文 {pct}%",
@@ -491,7 +473,6 @@
   "statusbar_sshTitle": "在远程主机上运行：{name}",
   "statusbar_sessionTitle": "点击重命名",
   "statusbar_cliVersionTitle": "Claude CLI v{version} — 点击查看发布说明",
-
   "prompt_permAskLabel": "询问",
   "prompt_permAskShort": "询问",
   "prompt_permAskDesc": "标准模式，操作前询问确认",
@@ -532,7 +513,6 @@
   "prompt_unsupportedFile": "不支持的文件类型：.{ext}",
   "prompt_clipboardUnsupported": "当前平台暂不支持粘贴文件",
   "prompt_conversionFailed": "转换 {name} 失败",
-
   "common_cancel": "取消",
   "common_retry": "重试",
   "common_copy": "复制",
@@ -542,7 +522,6 @@
   "common_showAllItems": "显示全部（{count} 项）",
   "common_showAll": "显示全部",
   "common_dismiss": "关闭",
-
   "chat_examplePrompt1": "构建一个包含邮箱和密码的登录页面",
   "chat_examplePrompt2": "将此组件重构为 TypeScript",
   "chat_examplePrompt3": "为认证模块编写单元测试",
@@ -655,7 +634,6 @@
   "chat_roleClaude": "Claude",
   "chat_copyMessage": "复制消息",
   "chat_thoughtProcess": "思考过程",
-
   "tool_interrupted": "已中断",
   "tool_result": "结果",
   "tool_file": "{count} 个文件",
@@ -693,11 +671,9 @@
   "tool_taskListStatus": "状态",
   "tool_taskListOwner": "负责人",
   "tool_taskListBlocked": "阻塞",
-
   "project_allProjects": "所有项目",
   "project_openFolder": "打开文件夹...",
   "sidebar_currentProject": "项目:",
-
   "plugin_title": "技能",
   "plugin_desc": "为你的 agent 扩展专业知识和行为",
   "plugin_discover": "发现",
@@ -815,7 +791,6 @@
   "plugin_badgeHooks": "钩子",
   "plugin_badgeMcp": "MCP",
   "plugin_badgeLsp": "LSP",
-
   "team_noActiveTeams": "暂无活跃团队",
   "team_emptyDesc": "在 Claude Code 中启动团队会话以在此查看。团队数据从 ~/.claude/teams/ 读取。",
   "team_membersCount": "{count} 个成员",
@@ -863,7 +838,6 @@
   "team_minutesAgo": "{count} 分钟前",
   "team_hoursAgo": "{count} 小时前",
   "team_daysAgo": "{count} 天前",
-
   "usage_title": "用量",
   "usage_subtitle": "Token 消耗和运行统计",
   "usage_globalCodexNote": "全局用量涵盖 Claude Code 和 Codex 会话。Codex 成本按 token 用量估算（Codex CLI 不上报成本）。",
@@ -907,7 +881,6 @@
   "usage_longestStreak": "最长 {count} 天",
   "usage_heatmapLess": "少",
   "usage_heatmapMore": "多",
-
   "nav_history": "历史",
   "history_title": "历史",
   "history_subtitle": "浏览和搜索你的 AI 编码会话",
@@ -948,7 +921,6 @@
   "history_agent": "代理",
   "history_allProjects": "所有项目",
   "history_allAgents": "所有代理",
-
   "common_allow": "允许",
   "common_deny": "拒绝",
   "common_denied": "已拒绝",
@@ -958,7 +930,6 @@
   "common_redirecting": "正在跳转到聊天...",
   "common_edit": "编辑",
   "common_preview": "预览",
-
   "explorer_closeDiff": "关闭差异",
   "explorer_noChanges": "无更改",
   "explorer_selectFile": "选择文件以预览",
@@ -968,7 +939,6 @@
   "explorer_emptyFile": "空文件",
   "explorer_discardConfirm": "有未保存的更改，确定要丢弃吗？",
   "explorer_saveDisabledInPreview": "切换到编辑模式后可保存",
-
   "release_goBack": "返回",
   "release_title": "发布说明",
   "release_cliChangelog": "Claude Code 更新日志",
@@ -978,7 +948,6 @@
   "release_noMatching": "没有匹配的版本",
   "release_clearSearch": "清除搜索",
   "release_current": "当前",
-
   "runs_title": "运行历史",
   "runs_searchPlaceholder": "搜索运行...",
   "runs_filterAll": "全部",
@@ -991,7 +960,6 @@
   "runs_goToChat": "前往聊天",
   "runs_noMatching": "没有匹配的运行",
   "runs_adjustSearch": "尝试调整搜索或筛选条件",
-
   "runs_tabHistory": "历史",
   "runs_tabSearch": "搜索",
   "runs_tabFavorites": "收藏",
@@ -1014,9 +982,7 @@
   "runs_tagReview": "review",
   "runs_tagDesign": "design",
   "runs_tagFix": "fix",
-
   "sidebar_favorites": "收藏",
-
   "memory_saved": "已保存",
   "memory_unsavedChanges": "有未保存的更改",
   "memory_setProjectFirst": "请先设置项目工作目录",
@@ -1029,17 +995,13 @@
   "memory_noContent": "暂无内容可预览。",
   "memory_reload": "重新加载",
   "memory_discardConfirm": "你有未保存的更改。确定丢弃吗？",
-
   "error_title": "出错了",
   "error_defaultMessage": "发生了意外错误",
   "error_backToChat": "返回聊天",
-
   "hook_reviewTitle": "钩子审核：{type}",
   "hook_tool": "工具：{name}",
-
   "context_title": "上下文用量",
   "context_estimatedUsage": "按类别估算的用量",
-
   "cost_sessionCost": "会话费用",
   "cost_totalCost": "总费用：",
   "cost_durationApi": "时长（API）：",
@@ -1050,14 +1012,12 @@
   "cost_tokenLabels": "入 · 出 · 缓存读 · 缓存写",
   "cost_web": "网络",
   "cost_viewDetailed": "查看详细用量",
-
   "keybinding_pressCombo": "按下组合键...",
   "keybinding_reservedBySystem": "被系统保留",
   "keybinding_useAnyway": "仍然使用",
   "keybinding_confirm": "确认",
   "keybinding_resetDefault": "恢复默认",
   "keybinding_editShortcut": "编辑快捷键",
-
   "mcp_searchPlaceholder": "搜索 MCP 服务器...",
   "mcp_refreshTitle": "刷新",
   "mcp_scopeUser": "用户",
@@ -1103,7 +1063,6 @@
   "mcp_enable": "启用",
   "mcp_disable": "禁用",
   "mcp_sessionInactive": "会话未激活 — 操作已禁用",
-
   "features_title": "Codex 功能",
   "features_refresh": "刷新功能列表",
   "features_nextSessionHint": "更改会保存到配置，下次会话生效。",
@@ -1121,16 +1080,13 @@
   "features_stageStable": "稳定版",
   "features_stageDev": "开发中",
   "features_stageDeprecated": "已弃用",
-
   "notes_title": "发布说明",
   "notes_cliTitle": "CLI 更新日志",
   "notes_latest": "最新",
   "notes_viewAll": "查看全部 {count} 个版本",
-
   "model_customModel": "自定义模型...",
   "model_placeholder": "模型 ID...",
   "model_set": "设置",
-
   "toolActivity_title": "工具活动",
   "toolActivity_collapse": "折叠侧边栏",
   "toolActivity_show": "显示工具活动",
@@ -1138,7 +1094,6 @@
   "toolActivity_turn": "轮次 {index}：",
   "toolActivity_systemResume": "系统 / 恢复",
   "toolActivity_scrollToTurn": "定位到此轮次",
-
   "cmd_placeholder": "输入命令...",
   "cmd_esc": "ESC",
   "cmd_noCommandsFound": "未找到命令",
@@ -1153,17 +1108,14 @@
   "cmd_workingTreeClean": "工作区干净",
   "cmd_cliInstalled": "已安装",
   "cmd_cliNotFound": "未找到",
-
   "perm_title": "工具权限",
   "perm_agentWantsToUse": "智能体想要使用",
   "perm_shellWarning": "这将在你的系统上执行一个 shell 命令。",
-
   "diff_unstaged": "未暂存",
   "diff_staged": "已暂存",
   "diff_noChanges": "未发现更改",
   "diff_noCwd": "未设置工作目录，请先打开一个项目。",
   "diff_failed": "Git diff 失败",
-
   "inline_question": "问题",
   "inline_questionsCount": "问题（{answered}/{total}）",
   "inline_submit": "提交",
@@ -1196,11 +1148,9 @@
   "inline_subagent": "子智能体",
   "batch_status": "{completed}/{total} 已完成 · {running} 执行中",
   "batch_failed": "{failed} 失败",
-
   "toolBurst_calls": "{total} 个工具调用",
   "toolBurst_completed": "{completed}/{total} 已完成",
   "toolBurst_failed": "{failed} 失败",
-
   "toolbar_planModeTitle": "计划模式：智能体只读不编辑文件",
   "toolbar_planOn": "计划 开",
   "toolbar_planOff": "计划 关",
@@ -1213,21 +1163,16 @@
   "toolbar_exportTitle": "导出对话为 Markdown",
   "toolbar_export": "导出",
   "toolbar_paletteTitle": "命令面板 (Cmd+K)",
-
   "runItem_resumeTitle": "恢复会话",
-
   "terminal_title": "终端",
   "terminal_newOutput": "新输出",
-
   "common_removeAttachment": "移除附件",
-
   "toolActivity_scrollToTool": "滚动到时间线中的工具",
   "toolActivity_tabTools": "工具",
   "toolActivity_tabContext": "上下文",
   "toolActivity_tabFiles": "文件",
   "toolActivity_tabInfo": "信息",
   "toolActivity_tabTasks": "任务",
-
   "bgTask_empty": "暂无后台任务",
   "filesPanel_noFiles": "暂无文件操作",
   "filesPanel_notLocatable": "无法定位到对应工具调用",
@@ -1235,7 +1180,6 @@
   "preview_remoteUnsupported": "远程会话暂不支持文件预览",
   "preview_tooLarge": "文件太大，请用 Explorer 打开预览",
   "toolDetail_previewFile": "在预览栏中打开",
-
   "infoPanel_noInfo": "会话启动后将显示会话信息。",
   "infoPanel_session": "会话",
   "infoPanel_sessionId": "会话 ID",
@@ -1269,7 +1213,6 @@
   "contextPanel_history": "历史",
   "contextPanel_turn": "T{index}",
   "contextPanel_noData": "首轮对话后将显示上下文数据。",
-
   "toolSelector_addCustomPlaceholder": "添加自定义工具...",
   "toolSelector_add": "添加",
   "toolSelector_readDesc": "读取文件",
@@ -1280,7 +1223,6 @@
   "toolSelector_grepDesc": "搜索内容",
   "toolSelector_webFetchDesc": "抓取 URL",
   "toolSelector_webSearchDesc": "搜索网页",
-
   "slashMenu_backToCommands": "返回命令列表",
   "slashMenu_catSession": "会话",
   "slashMenu_catCoding": "编码",
@@ -1298,10 +1240,8 @@
   "fast_alreadyOn": "快速模式已经是开启状态",
   "fast_alreadyOff": "快速模式已经是关闭状态",
   "fast_usage": "用法：/fast [on|off]",
-
   "settings_shortcuts_conflictsWith": "冲突于：{label}",
   "settings_shortcuts_cliDefaults": "CLI 默认值",
-
   "setup_agentChoiceTitle": "你想配置哪个 CLI？",
   "setup_agentChoiceDesc": "先选一个开始。完成后可以在设置里继续安装另一个。",
   "setup_agentClaudeName": "Claude Code",
@@ -1343,23 +1283,19 @@
   "setup_allSet": "配置完成！",
   "setup_allSetDesc": "一切就绪，开始编码吧。",
   "setup_start": "开始",
-
   "chat_checkSettings": "检查设置",
   "prompt_platformTitle": "API 平台",
   "prompt_noPlatformKey": "未保存 API Key — 前往设置配置",
-
   "chat_runningLocally": "在本地运行",
   "chat_addRemoteMachine": "添加远程机器",
   "chat_cliVersion": "v{version}",
   "chat_cliChannelSwitched": "已切换到 {channel} 更新通道，CLI 将在下次重启时更新。",
   "chat_cliChannelDisabledHint": "仅对新会话生效",
   "chat_cliUpdateAvailable": "{version} 可用",
-
   "chat_initHintAction": "/init",
   "chat_initHintDismiss": "忽略",
   "chat_initHintTargetClaude": "以创建 CLAUDE.md",
   "chat_initHintTargetAgents": "以创建 AGENTS.md",
-
   "settings_general_customEndpoints": "自定义端点",
   "settings_general_addCustom": "添加自定义",
   "settings_general_customName": "名称",
@@ -1368,7 +1304,6 @@
   "settings_general_customNamePlaceholder": "我的端点",
   "settings_general_customNameLabel": "名称",
   "settings_general_authType": "认证方式",
-
   "inline_applyHookContext": "应用 Hook 上下文",
   "inline_permissionPending": "等待授权…",
   "perm_nPermissions": "{count} 项权限待授权",
@@ -1378,9 +1313,7 @@
   "inline_otherPlaceholder": "输入内容...",
   "inline_submitOther": "提交",
   "inline_planLabel": "计划：{name}",
-
   "common_denyAndStop": "拒绝并停止",
-
   "plan_readyToCode": "准备开始编码？",
   "plan_approvalDesc": "Claude 已完成计划，准备执行。你希望如何继续？",
   "plan_requestedPermissions": "请求的权限：",
@@ -1390,7 +1323,6 @@
   "plan_keepPlanning": "继续规划",
   "plan_feedbackPlaceholder": "告诉 Claude 要修改什么...",
   "plan_cannotRebuild": "无法重建完整计划，请向上查看相关变更。",
-
   "auth_sourceLabel": "认证来源",
   "auth_cliAuth": "CLI 认证",
   "auth_appApiKey": "App API Key",
@@ -1437,7 +1369,6 @@
   "settings_auth_cliApiKeySourceShell": "来源：shell 配置文件（{path}）",
   "settings_auth_appApiKeyTitle": "App API Key",
   "settings_auth_appApiKeyDesc": "由 App 管理，启动 CLI 时注入为环境变量。",
-
   "error_category_context_limit": "上下文超限",
   "error_category_budget_limit": "预算超限",
   "error_category_auth_issue": "认证问题",
@@ -1445,7 +1376,6 @@
   "error_category_session_timeout": "会话超时",
   "error_category_tool_issue": "工具问题",
   "error_category_unknown": "错误",
-
   "error_guidance_context_limit": "对话上下文过大。尝试分叉以使用摘要重新开始。",
   "error_guidance_budget_limit": "已达预算限制。在设置中调整 max_budget_usd 以继续。",
   "error_guidance_auth_issue": "认证失败。请在设置中检查 API 密钥或登录状态。",
@@ -1453,20 +1383,15 @@
   "error_guidance_session_timeout": "会话等待响应超时。可能原因：未处理的权限请求、API 响应慢、MCP 服务器无响应。尝试恢复会话或新建对话。",
   "error_guidance_tool_issue": "工具遇到错误。查看工具输出了解详情。",
   "error_guidance_unknown": "发生意外错误。你可以重试或关闭。",
-
   "statusbar_compactDetail": "{full} 次完整压缩，{micro} 次微压缩",
   "statusbar_durationPerTurn": "每轮",
-
   "plan_openRemote": "在 Claude 中打开",
-
   "bgTask_title": "后台任务（{count}）",
   "bgTask_active": "{count} 个运行中",
   "bgTask_activeTitle": "{count} 个后台任务运行中",
-
   "screenshot_notSupported": "截图功能仅支持 macOS",
   "screenshot_captured": "截图已捕获",
   "prompt_screenshot": "截取屏幕",
-
   "prompt_slashCommands": "斜杠命令 (/)",
   "quickAction_compact": "压缩上下文",
   "quickAction_copy": "复制回复",
@@ -1479,7 +1404,6 @@
   "quickAction_clear": "清除历史",
   "quickAction_more": "更多…",
   "quickAction_moreTitle": "显示所有斜杠命令",
-
   "cliImport_agent_claude": "Claude",
   "cliImport_agent_codex": "Codex",
   "cliSync_turns": "{count} 轮对话",
@@ -1514,7 +1438,6 @@
   "cliSync_reconciling": "正在核对...",
   "cliSync_usageIncomplete": "部分用量数据无法重建",
   "cliSync_usageIncompleteHint": "用量数据不完整 — 从 CLI 导入",
-
   "shortcutHelp_title": "键盘快捷键",
   "shortcutHelp_global": "全局",
   "shortcutHelp_chat": "聊天",
@@ -1542,7 +1465,6 @@
   "toast_rewindSuccess": "文件已回退",
   "error_rewindNoCheckpoint": "没有可回退的文件检查点",
   "error_rewindFailed": "文件回退失败",
-
   "rewind_modalTitle": "回退到检查点",
   "rewind_selectCheckpoint": "选择要回退到的检查点：",
   "rewind_noCheckpoints": "此会话中没有可用的检查点。",
@@ -1572,7 +1494,6 @@
   "statusbar_verboseTitle": "详细输出已启用",
   "prompt_stashBadge": "已暂存",
   "prompt_stashRestore": "点击恢复暂存的输入",
-
   "infoPanel_auth": "认证",
   "infoPanel_authSource": "认证来源",
   "infoPanel_platformName": "平台",
@@ -1582,7 +1503,6 @@
   "infoPanel_goConfig": "配置",
   "infoPanel_goUsage": "用量",
   "statusPanel_noSession": "无活跃会话",
-
   "doctor_title": "诊断报告",
   "doctor_sectionInstallation": "安装",
   "doctor_sectionAuth": "认证",
@@ -1631,9 +1551,7 @@
   "doctor_codexLoggedIn": "Codex CLI：已登录（{method}）",
   "doctor_codexNotLoggedIn": "Codex CLI：未登录",
   "doctor_failed": "诊断失败",
-
   "sidebar_hooks": "钩子",
-
   "hooks_title": "钩子",
   "hooks_desc": "在特定生命周期事件中运行的 Shell 命令和提示",
   "hooks_loading": "正在加载钩子配置...",
@@ -1687,17 +1605,14 @@
   "hooks_agentLabel": "代理",
   "hooks_claudeWarning": "Claude hooks 警告：{detail}",
   "hooks_codexWarning": "Codex hooks 警告：{detail}",
-
   "todos_empty": "当前没有待办事项。",
   "todos_panelHeader": "任务",
   "todos_panelSummary": "{done}/{total} 完成",
-
   "slashTasks_empty": "当前会话没有后台任务。",
   "slashTasks_notFound": "未找到任务：{id}",
   "slashTasks_ambiguous": "多个任务匹配 \"{id}\"：",
   "slashTasks_hint": "使用 `/tasks <task_id>` 查看任务输出。",
   "slashTasks_outputError": "无法读取任务输出：{error}",
-
   "chat_addDirSaved": "目录已添加：{path}\n（将在下次启动时生效）",
   "chat_addDirDuplicate": "目录已存在：{path}",
   "chat_addDirFailed": "添加目录失败：{error}",
@@ -1705,10 +1620,8 @@
   "chat_addDirUnsupported": "add-dir 仅支持 Claude agent",
   "chat_addDirNextSession": "已添加 {path} — 将在下个会话 / 新线程中生效（仅限可写模式）",
   "chat_addDirInvalidPath": "路径包含无效字符",
-
   "skillSelector_label": "技能",
   "skillSelector_empty": "未找到技能，请在 .claude/skills/ 中添加。",
-
   "sidebar_agents": "Agent",
   "agent_title": "Agent",
   "agent_desc": "管理 Claude 用于委派特定任务的 Agent 定义。",
@@ -1760,7 +1673,6 @@
   "agent_inherit": "继承",
   "agent_noTools": "未指定工具",
   "agent_allTools": "全部工具（继承）",
-
   "appUpdate_available": "发现新版本（{version}）。",
   "appUpdate_download": "下载",
   "appUpdate_dismiss": "忽略",
@@ -1768,12 +1680,10 @@
   "appUpdate_checking": "检查中...",
   "appUpdate_upToDate": "当前已为最新版本（v{version}）。",
   "appUpdate_checkFailed": "检查更新失败，请稍后重试。",
-
   "drag_foldersInserted": "已添加 {count} 个文件夹路径引用",
   "drag_filesAsPathRef": "{count} 个文件已添加为路径引用",
   "drag_processing": "正在处理文件…",
   "common_listSeparator": "；",
-
   "permissions_title": "权限管理",
   "permissions_rules": "规则",
   "permissions_allow": "允许",
@@ -1787,13 +1697,11 @@
   "permissions_addPlaceholder": "例如 Bash(npm test)",
   "permissions_deleteConfirm": "移除规则",
   "permissions_projectUnavailable": "项目权限不可用：{reason}",
-
   "elicitation_title": "MCP 需要输入",
   "elicitation_pending": "{count} 项待处理",
   "elicitation_open_url": "打开认证链接",
   "elicitation_accept": "提交",
   "elicitation_decline": "拒绝",
-
   "preview_label": "预览",
   "preview_opened": "预览窗口已打开",
   "preview_closed": "预览窗口已关闭",
@@ -1817,12 +1725,10 @@
   "extend_skills_sourceKind_legacy": "旧版",
   "extend_skills_sourceKind_projectAgents": "项目技能",
   "extend_skills_sourceKind_projectCodex": "配置层技能",
-
   "export_noConversation": "没有可导出的对话",
   "export_htmlSuccess": "已导出 HTML",
   "export_htmlFailed": "导出失败",
   "export_htmlButton": "导出为 HTML",
-
   "scheduled_tasks_count": "{count} 个定时任务",
   "scheduled_tasks_listButton": "请 Claude 列出",
   "scheduled_tasks_listTooltip": "请 Claude 列出当前定时任务",
@@ -1846,5 +1752,62 @@
   "historyContent_toolOutput": "完整工具输出",
   "historyContent_toolResult": "完整工具结果",
   "historyContent_unavailable": "旧版工具详情无法完整加载",
-  "historySub_loadEarlier": "加载更早的子代理历史"
+  "historySub_loadEarlier": "加载更早的子代理历史",
+  "palette_title": "自定义调色板",
+  "palette_description": "为应用选择颜色。输入六位 HEX 色值，或使用颜色选择器。",
+  "palette_primary": "主题色",
+  "palette_background": "背景",
+  "palette_sidebar": "侧边栏",
+  "palette_foreground": "前景文字",
+  "palette_border": "边框",
+  "palette_invalidHex": "请使用 #RRGGBB 格式",
+  "palette_contrast": "前景对比度：{ratio}:1",
+  "palette_contrastPass": "可读性良好",
+  "palette_contrastLow": "对比度较低",
+  "palette_storageUnavailable": "调色板仅在本次会话中生效，无法保存。",
+  "palette_reset": "重置颜色",
+  "room_pageTitle": "协作空间",
+  "room_pageDescription": "围绕共同目标协作，并使用本地 GitHub Project 看板。",
+  "room_desktopOnly": "本地协作空间仅在 OpenCovibe 桌面应用中可用。",
+  "room_reloadRooms": "重新加载",
+  "room_newRoom": "新建协作空间",
+  "room_createTitle": "创建协作空间",
+  "room_titleLabel": "空间名称",
+  "room_objectiveLabel": "共同目标",
+  "room_repoPathLabel": "本地仓库路径",
+  "room_repositoryLabel": "GitHub 仓库（OWNER/REPO）",
+  "room_createProject": "为此空间创建 GitHub Project",
+  "room_createRoom": "创建空间",
+  "room_formValidation": "请填写名称、目标、仓库路径和 OWNER/REPO 格式的仓库。",
+  "room_savedRooms": "已保存的空间",
+  "room_noRooms": "还没有协作空间。创建一个以开始使用。",
+  "room_created": "协作空间已创建。",
+  "room_projectRecoverable": "Project 尚未完成设置。可以在此重试。",
+  "room_retryProject": "重试 Project 设置",
+  "room_openProject": "打开 Project #{number}",
+  "room_pause": "暂停空间",
+  "room_resume": "恢复空间",
+  "room_noPeers": "尚未连接协作者。",
+  "room_loading": "正在加载空间…",
+  "room_selectOrCreate": "选择一个已保存的空间，或创建新空间。",
+  "room_boardTitle": "GitHub Project 看板",
+  "room_lastSynced": "上次同步：{time}",
+  "room_boardNeverSynced": "从未同步",
+  "room_refreshBoard": "刷新看板",
+  "room_boardSyncError": "看板同步失败：{error}",
+  "room_boardStale": "看板可能已过期。请刷新以获取最新项目。",
+  "room_filterTitle": "按标题筛选",
+  "room_filterPriority": "按优先级筛选",
+  "room_filterAgent": "按代理筛选",
+  "room_boardEmpty": "没有符合筛选条件的项目。",
+  "room_hiddenItems": "隐藏项目",
+  "room_hiddenItem": "私密项目",
+  "room_issue": "议题",
+  "room_pullRequest": "拉取请求",
+  "room_draft": "草稿",
+  "room_agent": "代理：{name}",
+  "room_humanNotes": "空间留言",
+  "room_noNotes": "暂时没有留言。",
+  "room_notePlaceholder": "给空间中的所有人留言…",
+  "room_postNote": "发布留言"
 }

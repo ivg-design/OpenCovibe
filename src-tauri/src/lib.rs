@@ -4,6 +4,7 @@ pub mod hooks;
 pub mod models;
 pub mod pricing;
 pub mod process_ext;
+pub mod rooms;
 pub mod storage;
 pub mod web_server;
 
@@ -95,7 +96,9 @@ pub fn run() {
     storage::runs::reconcile_orphaned_runs();
 
     // Clean up legacy hook-bridge (removed: was redundant with stream-json mode)
-    hooks::setup::cleanup_hook_bridge();
+    if std::env::var_os("OPENCOVIBE_DATA_DIR").is_none() {
+        hooks::setup::cleanup_hook_bridge();
+    }
 
     // Global cancellation token — shared with all session actors for graceful shutdown
     let cancel_token = CancellationToken::new();
@@ -140,6 +143,10 @@ pub fn run() {
         .manage(SpawnLocks::new())
         .manage(ShutdownGate::new())
         .manage(data_dir_lock)
+        .manage(
+            rooms::store::RoomStore::open(&storage::data_dir().join("rooms.sqlite3"))
+                .expect("could not open local room database"),
+        )
         .manage(cancel_token)
         .manage(ws_shutdown_sender)
         .manage(shared_token_version)
@@ -154,6 +161,13 @@ pub fn run() {
         // NOTE: Currently ~60 IPC commands. If approaching 80+, consider grouping
         // into Tauri command modules or using a single dispatch command with typed payloads.
         .invoke_handler(tauri::generate_handler![
+            commands::rooms::list_rooms,
+            commands::rooms::get_room,
+            commands::rooms::create_room,
+            commands::rooms::ensure_room_project,
+            commands::rooms::refresh_room_board,
+            commands::rooms::set_room_paused,
+            commands::rooms::post_room_message,
             commands::runs::list_runs,
             commands::runs::get_run,
             commands::runs::start_run,

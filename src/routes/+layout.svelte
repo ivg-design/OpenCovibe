@@ -72,6 +72,13 @@
     type ThemeMode,
   } from "$lib/utils/theme";
   import {
+    hexToHslChannels,
+    primaryForeground,
+    readCustomPalette,
+    saveCustomPalette,
+    type CustomPalette,
+  } from "$lib/utils/custom-palette";
+  import {
     t,
     LOCALE_REGISTRY,
     getEntry,
@@ -156,6 +163,21 @@
 
   let themeMode = $state<ThemeMode>(getInitialTheme());
   let colorScheme = $state<ColorScheme>(getInitialScheme());
+  function getInitialPalette(): CustomPalette {
+    if (typeof window === "undefined") return {};
+    return readCustomPalette(getThemeStorage());
+  }
+  let customPalette = $state<CustomPalette>(getInitialPalette());
+  const paletteController = {
+    get palette() {
+      return customPalette;
+    },
+    setPalette(palette: CustomPalette) {
+      customPalette = palette;
+      return saveCustomPalette(getThemeStorage(), palette);
+    },
+  };
+  setContext("customPalette", paletteController);
   let systemDark = $state(
     getSystemThemeQuery(typeof window === "undefined" ? null : window)?.matches ?? true,
   );
@@ -489,6 +511,7 @@
 
   // Navigation items (declared before pageName derivation)
   const navItems = [
+    { path: "/rooms", label: () => t("room_pageTitle"), icon: "message" },
     { path: "/chat", label: () => t("nav_chat"), icon: "message" },
     { path: "/explorer", label: () => t("nav_explorer"), icon: "folder" },
     { path: "/plugins", label: () => t("nav_extend"), icon: "zap" },
@@ -1204,6 +1227,37 @@
     if (!persistColorScheme(getThemeStorage(), colorScheme)) {
       // Keep the selected scheme in memory when persistence is unavailable.
       dbgWarn("layout", "color scheme storage write failed");
+    }
+  });
+
+  // Apply only validated values to a fixed set of existing theme variables.
+  $effect(() => {
+    const root = document.documentElement;
+    const tokens: Record<keyof CustomPalette, string[]> = {
+      primary: ["--primary", "--ring", "--sidebar-primary", "--sidebar-ring"],
+      background: ["--background"],
+      sidebar: ["--sidebar-background"],
+      foreground: ["--foreground", "--sidebar-foreground"],
+      border: ["--border", "--input", "--sidebar-border"],
+    };
+    for (const [field, variables] of Object.entries(tokens) as [keyof CustomPalette, string[]][]) {
+      const value = customPalette[field];
+      const channels = value ? hexToHslChannels(value) : null;
+      for (const variable of variables) {
+        if (channels) root.style.setProperty(variable, channels);
+        else root.style.removeProperty(variable);
+      }
+      if (field === "primary") {
+        const textColor = value ? primaryForeground(value) : null;
+        if (textColor) {
+          const channels = hexToHslChannels(textColor)!;
+          root.style.setProperty("--primary-foreground", channels);
+          root.style.setProperty("--sidebar-primary-foreground", channels);
+        } else {
+          root.style.removeProperty("--primary-foreground");
+          root.style.removeProperty("--sidebar-primary-foreground");
+        }
+      }
     }
   });
 

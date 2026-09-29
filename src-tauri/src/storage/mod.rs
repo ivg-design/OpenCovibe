@@ -91,6 +91,14 @@ impl DataDirLock {
 }
 
 pub fn data_dir() -> PathBuf {
+    if let Some(override_path) = std::env::var_os("OPENCOVIBE_DATA_DIR") {
+        let path = PathBuf::from(override_path);
+        assert!(
+            path.is_absolute(),
+            "OPENCOVIBE_DATA_DIR must be an absolute path"
+        );
+        return path;
+    }
     let home = dirs_next().expect("Could not determine home directory");
     home.join(".opencovibe")
 }
