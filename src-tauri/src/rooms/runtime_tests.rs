@@ -523,3 +523,39 @@ fn reservation_captures_current_recipient_history_without_acknowledging_future_m
         "AFTER_RESERVATION"
     );
 }
+
+#[test]
+fn delayed_board_refresh_cannot_erase_a_confirmed_task_or_completion() {
+    let fixture = Fixture::new();
+    let before = fixture.room.board.clone();
+    // Model a separate MCP process confirming a new task while the host's read is pending.
+    let second = RoomStore::open(&fixture._temp.path().join("rooms.sqlite3")).unwrap();
+    let confirmed = second
+        .update(&fixture.room.id, |r| {
+            r.board.items.push(item("created-task"));
+            r.board.items[0].status = "Done".into();
+            Ok(())
+        })
+        .unwrap();
+    let mut delayed = before.clone();
+    delayed.synced_at = Some("2099-01-01T00:00:00Z".into());
+    let retained = fixture
+        .store
+        .apply_board_snapshot(&fixture.room.id, &before, delayed)
+        .unwrap();
+    assert_eq!(retained.board, confirmed.board);
+    let retained = fixture
+        .store
+        .apply_board_error(&fixture.room.id, &before, "old request failed".into())
+        .unwrap();
+    assert_eq!(retained.board, confirmed.board);
+
+    // A read started from the current board can still replace it, including actual removals.
+    let mut fresh = confirmed.board.clone();
+    fresh.items.retain(|item| item.id != "created-task");
+    let applied = fixture
+        .store
+        .apply_board_snapshot(&fixture.room.id, &confirmed.board, fresh.clone())
+        .unwrap();
+    assert_eq!(applied.board, fresh);
+}

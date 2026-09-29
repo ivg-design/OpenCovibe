@@ -10,7 +10,7 @@ pub struct RoomProject {
     pub repository: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BoardItem {
     pub id: String,
     pub title: String,
@@ -21,7 +21,7 @@ pub struct BoardItem {
     pub kind: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Board {
     pub items: Vec<BoardItem>,
     pub synced_at: Option<String>,

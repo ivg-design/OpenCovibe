@@ -152,6 +152,37 @@ impl RoomStore {
         self.append_message(id, "Human", body, None, None, None)
     }
 
+    // A network read must not overwrite a task write or a newer refresh that completed
+    // while that read was in flight. This comparison also works across MCP processes.
+    pub fn apply_board_snapshot(
+        &self,
+        id: &str,
+        expected: &Board,
+        board: Board,
+    ) -> Result<Room, String> {
+        self.update(id, |room| {
+            if room.board == *expected {
+                room.board = board;
+                room.runtime_error = None;
+            }
+            Ok(())
+        })
+    }
+
+    pub fn apply_board_error(
+        &self,
+        id: &str,
+        expected: &Board,
+        error: String,
+    ) -> Result<Room, String> {
+        self.update(id, |room| {
+            if room.board == *expected {
+                room.board.error = Some(error);
+            }
+            Ok(())
+        })
+    }
+
     pub fn append_message(
         &self,
         id: &str,

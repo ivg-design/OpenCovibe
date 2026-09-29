@@ -243,22 +243,33 @@ async fn call_tool(
             let task_id = if let Some(id) = existing_id {
                 github_tasks::read_task(project, &id).await?;
                 id
-            } else {
-                if !first_attempt {
-                    let board = github::read_board(&project.id).await?;
-                    if !board.items.iter().any(|item| item.title == title) {
-                        return Err("Previous task creation is unconfirmed. No duplicate was created. Reconcile the GitHub Project before trying a different task title.".into());
-                    }
+            } else if !first_attempt {
+                let board = github::read_board(&project.id).await?;
+                let matching = board
+                    .items
+                    .iter()
+                    .filter(|item| item.title == title)
+                    .collect::<Vec<_>>();
+                if matching.len() != 1 {
+                    return Err("Previous task creation is unconfirmed or its title is ambiguous. No duplicate was created. Reconcile the GitHub Project before trying a different task title.".into());
                 }
+                let id = &matching[0].id;
+                let existing = github_tasks::read_task(project, id).await?;
+                if existing["body"].as_str() != Some(body) {
+                    return Err("The unconfirmed task's body changed. Inspect the existing task before resolving its creation intent; no replacement was created.".into());
+                }
+                id.clone()
+            } else {
                 github_tasks::create_task(project, title, body).await?
             };
             store.complete_task_creation(room_id, title, &task_id)?;
-            match github::read_board(&project.id).await {
+            let before = store.get(room_id)?.board;
+            match github::read_board_containing(&project.id, &task_id).await {
                 Ok(board) => {
-                    store.update(room_id, |stored| {
-                        stored.board = board;
-                        Ok(())
-                    })?;
+                    let updated = store.apply_board_snapshot(room_id, &before, board)?;
+                    if !updated.board.items.iter().any(|item| item.id == task_id) {
+                        return Err(format!("task {task_id} was created, but a concurrent board update won. Retry create_task with the identical title/body to reconcile; no duplicate will be created."));
+                    }
                 }
                 Err(error) => {
                     return Err(format!(

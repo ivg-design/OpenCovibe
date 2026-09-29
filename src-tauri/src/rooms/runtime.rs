@@ -64,23 +64,16 @@ pub fn start(app: tauri::AppHandle) {
                 {
                     refreshed.insert(room.id.clone(), now);
                     if let Some(project) = &room.project {
+                        let before = match store.get(&room.id) {
+                            Ok(r) => r.board,
+                            Err(_) => continue,
+                        };
                         match super::github::read_board(&project.id).await {
                             Ok(board) => {
-                                store
-                                    .update(&room.id, |r| {
-                                        r.board = board;
-                                        r.runtime_error = None;
-                                        Ok(())
-                                    })
-                                    .ok();
+                                store.apply_board_snapshot(&room.id, &before, board).ok();
                             }
                             Err(e) => {
-                                store
-                                    .update(&room.id, |r| {
-                                        r.board.error = Some(e);
-                                        Ok(())
-                                    })
-                                    .ok();
+                                store.apply_board_error(&room.id, &before, e).ok();
                             }
                         }
                     }

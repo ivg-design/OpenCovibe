@@ -50,7 +50,9 @@ including when hidden in the tray; it does not schedule work after Quit.
 Room-scoped stdio MCP tools provide snapshot, post_message, read_task, create_task, claim_task,
 finish_task and block_task. They bind one room and participant and check ownership and pauses.
 Finishing requires a summary and evidence; the proof is stored on GitHub before marking Done.
-Exact task-creation intents are persisted to avoid blindly repeating uncertain writes.
+Exact task-creation intents are persisted to avoid blindly repeating uncertain writes. Creation
+waits for the new task to appear in the claimable Project snapshot. In-flight board reads cannot
+overwrite a task change or newer refresh committed while the read was pending.
 Codex approvals are configured only for the seven app-owned room tools using per-process
 [per-tool overrides](https://learn.chatgpt.com/docs/config-file/config-reference).
 Other permission requests keep the provider's normal approval behavior.

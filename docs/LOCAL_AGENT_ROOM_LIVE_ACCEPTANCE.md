@@ -66,6 +66,12 @@ selected and claimed it themselves. No host-appointed manager was used.
   the seven app-owned room tools. The mixed-provider task run then completed without those
   prompts; general provider permission behavior was not changed.
 
+- The first agent-created task returned the same ID on both creation calls, but an old/missing
+  board snapshot prevented immediate read/claim. Creation now waits for canonical item-list
+  visibility, and transactional snapshot comparisons prevent an in-flight refresh erasing a
+  confirmed task write. An unconfirmed creation reconciles a unique matching task directly;
+  it never invokes a new create mutation during recovery.
+
 These failed attempts were retained as recovery evidence, rather than counted as successful runs.
 
 ## Timed wakeups
@@ -90,6 +96,22 @@ rebuilt bundle then produced `ROOM_FINAL_BUILD_OK` through the actual room post_
 The room was paused after that turn, and another relaunch retained its 28-message feed without
 starting any provider work.
 
+## Agent-created tasks and synchronization repair
+
+On the repaired bundle, Claude reused D's original task ID, then claimed/read/finished it with
+`ROOM_TASK_D_OK` and `RESULT_D=7`. In the same bounded acceptance turn it created the fresh
+E draft (`PVTI_lAHOAqBX8s4BlIHIzg9iwWA`). An in-flight refresh won the first creation snapshot
+comparison, so the tool returned a safe reconciliation error containing the created ID. Claude
+retried with the identical title/body; two calls returned that same ID, and immediate claim/read
+then succeeded. It posted `ROOM_TASK_E_OK` and finished with `RESULT_E=11` plus identical-ID
+proof. It held at most one unfinished claim and created no other tasks.
+
+Both new drafts have canonical Done status, Claude Agent ownership and completion evidence.
+The native board and an independent `gh project item-list` read showed all six fixture drafts
+Done. Claude stopped at 3/3 reserved turns; the room was then paused. The final shared feed has
+39 messages, including failed attempts and successful recovery. The saved Project #9 and the
+archived creation fixture Project #10 remain for review.
+
 ## Custom colors
 
 Native Settings accepted Primary `#66AAEE`, Background `#161A20`, and Sidebar `#1D222B`.
@@ -107,10 +129,11 @@ Forced process-crash recovery was not exercised; the restart scenario used a nor
 Quit during a provider turn. Automated tests separately cover durable delivery reservation and
 restart recovery, atomic competing claims, stale/failed boards, paused/waiting/blocked peers,
 timer limits, task-creation intents, scoped MCP approvals, recipient history filtering, atomic
-message acknowledgement and timer edits between planning and reservation, and clean/conflicting Git merges in temporary repositories.
+message acknowledgement, timer edits between planning and reservation, and delayed
+board reads racing confirmed task writes across independent SQLite connections, and clean/conflicting Git merges in temporary repositories.
 
 `npm run verify` passed: 1,540 frontend tests, lint, formatting, type checks, locale checks,
-frontend build, Rust formatting and Clippy. The full Rust suite passed 862 tests with two existing
+frontend build, Rust formatting and Clippy. The full Rust suite passed 863 tests with two existing
 ignored tests. Svelte/locale checks retain existing warnings. The room MCP subprocess also passed
 a real initialize/tools-list/snapshot/paused-write-rejection handshake using newline JSON-RPC.
 

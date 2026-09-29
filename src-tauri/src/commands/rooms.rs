@@ -147,14 +147,8 @@ pub async fn refresh_room_board(
     let room = store.get(&id)?;
     let project = room.project.ok_or("This room has no GitHub Project yet")?;
     match github::read_board(&project.id).await {
-        Ok(board) => store.update(&id, |r| {
-            r.board = board;
-            Ok(())
-        }),
-        Err(error) => store.update(&id, |r| {
-            r.board.error = Some(error);
-            Ok(())
-        }),
+        Ok(board) => store.apply_board_snapshot(&id, &room.board, board),
+        Err(error) => store.apply_board_error(&id, &room.board, error),
     }
 }
 

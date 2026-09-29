@@ -192,6 +192,20 @@ pub async fn read_board(project_id: &str) -> Result<Board, String> {
     Err("GitHub board pagination limit reached; previous complete board retained".into())
 }
 
+// Project item connections can lag a successful draft mutation. Do not report the
+// new task as usable until it is visible in the same snapshot used for claiming.
+pub async fn read_board_containing(project_id: &str, task_id: &str) -> Result<Board, String> {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let board = read_board(project_id).await?;
+            if board.items.iter().any(|item| item.id == task_id) {
+                return Ok(board);
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+    }).await.map_err(|_| "GitHub's Project item list has not caught up with task creation. Retry create_task with the identical title/body to reconcile; do not create a replacement task.".to_string())?
+}
+
 fn parse_board_item(node: &Value) -> Result<BoardItem, String> {
     let content = &node["content"];
     let kind = match content["__typename"].as_str() {
