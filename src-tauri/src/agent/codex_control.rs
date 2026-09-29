@@ -6,7 +6,7 @@
 //! `model/list` request, read the response, then kill the process. Same spawn→write→
 //! read→kill→TTL-cache shape as `control::get_cli_info`.
 
-use crate::agent::claude_stream::{augmented_path, which_binary};
+use crate::agent::claude_stream::{augmented_path, resolve_codex_path};
 use crate::models::{CliInfoError, CliModelInfo, CodexModelList};
 use crate::process_ext::HideConsole;
 use serde_json::Value;
@@ -76,7 +76,8 @@ pub async fn get_codex_models(
         }
     }
 
-    if which_binary("codex").is_none() {
+    let codex_path = resolve_codex_path();
+    if codex_path == "codex" {
         return Err(CliInfoError {
             code: "cli_not_found".to_string(),
             message: "Codex CLI binary not found".to_string(),
@@ -84,7 +85,7 @@ pub async fn get_codex_models(
     }
 
     let path_env = augmented_path();
-    let mut cmd = tokio::process::Command::new("codex");
+    let mut cmd = tokio::process::Command::new(&codex_path);
     cmd.arg("app-server")
         .env("PATH", &path_env)
         .stdin(std::process::Stdio::piped())

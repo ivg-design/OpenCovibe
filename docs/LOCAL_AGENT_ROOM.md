@@ -25,6 +25,9 @@ mixed-provider acceptance require runtime wiring and must not be called complete
 
 ## Checkpoint acceptance: 2026-09-29
 
+The later [live acceptance record](LOCAL_AGENT_ROOM_LIVE_ACCEPTANCE.md) covers actual
+Project creation, board changes and restart reuse, and native provider connection checks.
+
 - Frontend lint, formatting, type check, locale check, 1,540 tests and production build passed.
 - Rust formatting and Clippy passed; 11 focused room tests passed. The full verification command
   reached Rust formatting before finding a new formatting difference, which was corrected and

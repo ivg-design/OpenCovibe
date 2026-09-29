@@ -4170,7 +4170,7 @@ mod tests {
             let tmp = std::env::temp_dir().join("ocv_codex_approval_test");
             std::fs::create_dir_all(&tmp).unwrap();
 
-            let mut child = tokio::process::Command::new("codex")
+            let mut child = tokio::process::Command::new(crate::agent::claude_stream::resolve_codex_path())
                 .arg("app-server")
                 .arg("-c")
                 .arg("suppress_unstable_features_warning=true")
@@ -4270,7 +4270,7 @@ mod tests {
             let tmp = std::env::temp_dir().join("ocv_codex_live_test");
             std::fs::create_dir_all(&tmp).unwrap();
 
-            let mut child = tokio::process::Command::new("codex")
+            let mut child = tokio::process::Command::new(crate::agent::claude_stream::resolve_codex_path())
                 .arg("app-server")
                 .arg("--enable")
                 .arg("default_mode_request_user_input")

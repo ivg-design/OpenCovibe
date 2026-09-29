@@ -17,7 +17,7 @@ pub async fn check_agent_cli(agent: String) -> Result<CliCheckResult, String> {
     // `claude` (or isn't on PATH) would falsely report "not installed" while sessions work.
     let resolved = match agent.as_str() {
         "claude" => crate::agent::claude_stream::resolve_claude_path(),
-        "codex" => "codex".to_string(),
+        "codex" => crate::agent::claude_stream::resolve_codex_path(),
         _ => return Err(format!("Unknown agent: {}", agent)),
     };
 
@@ -48,13 +48,18 @@ pub async fn check_agent_cli(agent: String) -> Result<CliCheckResult, String> {
     // so a bare-name spawn ENOENTs and version/auth would falsely report "not installed".
     let version = if found {
         let exe = path.as_deref().unwrap_or(resolved.as_str());
-        let ver_output = Command::new(exe)
-            .arg("--version")
-            .env("PATH", &aug_path)
-            .hide_console()
-            .output();
+        let ver_output = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            tokio::process::Command::new(exe)
+                .arg("--version")
+                .env("PATH", &aug_path)
+                .hide_console()
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await;
         match ver_output {
-            Ok(output) if output.status.success() => {
+            Ok(Ok(output)) if output.status.success() => {
                 let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 // Strip trailing suffix like " (Claude Code)" to get bare semver
                 Some(raw.find(" (").map(|i| raw[..i].to_string()).unwrap_or(raw))

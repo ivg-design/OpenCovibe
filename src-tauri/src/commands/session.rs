@@ -1985,10 +1985,11 @@ pub(crate) fn codex_appserver_supported() -> bool {
     use std::sync::OnceLock;
     static CACHE: OnceLock<bool> = OnceLock::new();
     *CACHE.get_or_init(|| {
-        let Some(bin) = claude_stream::which_binary("codex") else {
+        let bin = claude_stream::resolve_codex_path();
+        if bin == "codex" {
             log::warn!("[codex] app-server probe: codex binary not found → exec fallback");
             return false;
-        };
+        }
         let out = std::process::Command::new(&bin)
             .arg("app-server")
             .arg("--help")
@@ -2041,8 +2042,10 @@ async fn spawn_codex_appserver_process(
 > {
     use tokio::process::Command;
 
-    let codex_bin = claude_stream::which_binary("codex")
-        .ok_or_else(|| "Codex CLI not found in PATH".to_string())?;
+    let codex_bin = claude_stream::resolve_codex_path();
+    if codex_bin == "codex" {
+        return Err("Codex CLI not found in PATH".to_string());
+    }
 
     let mut args: Vec<String> = vec![
         "app-server".into(),
@@ -2687,8 +2690,10 @@ async fn codex_side_question(
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::process::Command;
 
-    let codex_bin = claude_stream::which_binary("codex")
-        .ok_or_else(|| "Codex CLI not found in PATH".to_string())?;
+    let codex_bin = claude_stream::resolve_codex_path();
+    if codex_bin == "codex" {
+        return Err("Codex CLI not found in PATH".to_string());
+    }
 
     let wrapped_question = format!(
         "The user is asking a side question. Answer it concisely. \

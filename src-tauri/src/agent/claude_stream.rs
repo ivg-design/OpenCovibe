@@ -715,23 +715,107 @@ pub(crate) fn resolve_codex_path() -> String {
         cands
     };
 
-    for c in &candidates {
-        if c.exists() {
-            let path_str = c.to_string_lossy().to_string();
-            log::debug!(
-                "[claude_stream] resolved codex binary (cached): {}",
-                path_str
-            );
-            *cached = Some(path_str.clone());
-            return path_str;
-        }
+    // Keep the inherited/augmented PATH order ahead of fallback locations. A GUI
+    // app may inherit a stale shim first, so validate each candidate before caching it.
+    let mut ordered = Vec::new();
+    let probe_path = augmented_path();
+    if let Some(path) = codex_path_candidates_from_path(&probe_path) {
+        ordered.extend(path);
+    }
+    ordered.extend(candidates);
+    if let Some(c) = select_healthy_codex(ordered, &probe_path) {
+        let path_str = c.to_string_lossy().to_string();
+        log::debug!(
+            "[claude_stream] resolved codex binary (cached): {}",
+            path_str
+        );
+        *cached = Some(path_str.clone());
+        return path_str;
     }
     log::debug!(
         "[claude_stream] codex binary not found in candidates, falling back to PATH lookup"
     );
-    let fallback = which_binary("codex").unwrap_or_else(|| "codex".to_string());
+    let fallback = "codex".to_string();
     *cached = Some(fallback.clone());
     fallback
+}
+
+fn select_healthy_codex(candidates: Vec<PathBuf>, path: &str) -> Option<PathBuf> {
+    let mut seen = std::collections::HashSet::new();
+    candidates
+        .into_iter()
+        .filter(|c| seen.insert(c.clone()))
+        .find(|c| is_healthy_codex(c, path))
+}
+
+fn codex_path_candidates_from_path(path: &str) -> Option<Vec<PathBuf>> {
+    #[cfg(windows)]
+    {
+        let output = std::process::Command::new("where")
+            .arg("codex")
+            .env("PATH", path)
+            .hide_console()
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return Some(Vec::new());
+        }
+        return Some(
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from)
+                .collect(),
+        );
+    }
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut paths = Vec::new();
+        for dir in std::env::split_paths(std::ffi::OsStr::new(path)) {
+            let candidate = dir.join("codex");
+            if candidate.is_file()
+                && std::fs::metadata(&candidate)
+                    .map(|m| m.permissions().mode() & 0o111 != 0)
+                    .unwrap_or(false)
+            {
+                paths.push(candidate);
+            }
+        }
+        Some(paths)
+    }
+}
+
+/// Accept only executables whose bounded version check succeeds. Output is discarded so
+/// wrappers cannot flood logs or leak arbitrary command output into diagnostics.
+fn is_healthy_codex(executable: &std::path::Path, path: &str) -> bool {
+    use std::process::{Command, Stdio};
+    let Ok(mut child) = Command::new(executable)
+        .arg("--version")
+        .env("PATH", path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .hide_console()
+        .spawn()
+    else {
+        return false;
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
 }
 
 /// Clear the cached codex binary path so the next `resolve_codex_path()` re-scans.
@@ -744,6 +828,44 @@ pub fn invalidate_codex_path_cache() {
 mod tests {
     #[cfg(not(windows))]
     use super::extract_delimited;
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_resolver_skips_broken_candidate_for_next_healthy_binary() {
+        use super::select_healthy_codex;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path();
+        let broken = dir.join("broken-codex");
+        let healthy = dir.join("healthy-codex");
+        std::fs::write(&broken, "#!/bin/sh\nexit 127\n").unwrap();
+        std::fs::write(&healthy, "#!/bin/sh\necho 'codex 1.2.3'\nexit 0\n").unwrap();
+        for path in [&broken, &healthy] {
+            let mut permissions = std::fs::metadata(path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(path, permissions).unwrap();
+        }
+        assert_eq!(
+            select_healthy_codex(vec![broken, healthy.clone()], "/usr/bin"),
+            Some(healthy)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_version_probe_kills_and_reaps_hung_candidate() {
+        use super::is_healthy_codex;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let slow = dir.path().join("slow-codex");
+        std::fs::write(&slow, "#!/bin/sh\nexec /bin/sleep 10\n").unwrap();
+        let mut permissions = std::fs::metadata(&slow).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&slow, permissions).unwrap();
+        let start = std::time::Instant::now();
+        assert!(!is_healthy_codex(&slow, "/usr/bin"));
+        assert!(start.elapsed() < std::time::Duration::from_secs(4));
+    }
 
     #[cfg(not(windows))]
     #[test]
