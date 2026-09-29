@@ -580,9 +580,33 @@ pub(crate) async fn start_session_impl(
 
     // 2. Read settings and build unified adapter settings
     let agent_settings = storage::settings::get_agent_settings(&meta.agent);
-    let user_settings = storage::settings::get_user_settings();
+    let mut user_settings = storage::settings::get_user_settings();
+    let room_binding = crate::rooms::mcp::binding_for_run(&run_id)?;
+    if room_binding.is_some() {
+        user_settings.auth_mode = "cli".into();
+    }
     let mut adapter_settings =
         adapter::build_adapter_settings(&agent_settings, &user_settings, meta.model.clone());
+    // Room settings are scoped to this provider process; no global CLI config is changed.
+    if let Some((_room, peer)) = &room_binding {
+        adapter_settings.effort = peer.effort.clone();
+        adapter_settings.codex_provider = None;
+        adapter_settings.no_session_persistence = false;
+        adapter_settings.ephemeral = false;
+        for tool in [
+            "snapshot",
+            "post_message",
+            "read_task",
+            "create_task",
+            "claim_task",
+            "finish_task",
+            "block_task",
+        ] {
+            adapter_settings
+                .allowed_tools
+                .push(format!("mcp__room__{tool}"));
+        }
+    }
 
     // 2a. Apply per-session permission_mode override (e.g. ExitPlanMode → acceptEdits).
     //     Session-scoped: does not touch persisted user settings. Must run BEFORE spawn
@@ -612,12 +636,22 @@ pub(crate) async fn start_session_impl(
         &agent_settings.model,
         &resolved.models,
     );
-    let resolved = augment_with_shell_auth(
-        resolved,
-        &user_settings.auth_mode,
-        remote.is_some(),
-        &meta.cwd,
-    );
+    let resolved = if room_binding.is_some() {
+        ResolvedAuth {
+            api_key: None,
+            auth_token: None,
+            base_url: None,
+            models: None,
+            extra_env: None,
+        }
+    } else {
+        augment_with_shell_auth(
+            resolved,
+            &user_settings.auth_mode,
+            remote.is_some(),
+            &meta.cwd,
+        )
+    };
     if remote.is_some() {
         log::debug!(
             "[session] remote mode: host={:?}, remote_cwd={:?}, has_key={}",
@@ -632,6 +666,10 @@ pub(crate) async fn start_session_impl(
         SessionMode::Resume | SessionMode::Continue => {
             let sid = session_id
                 .or_else(|| meta.session_id.clone())
+                .or_else(|| match meta.resolved_conversation_ref() {
+                    Some(ConversationRef::CodexThread(thread_id)) => Some(thread_id),
+                    _ => None,
+                })
                 .ok_or_else(|| {
                     format!(
                         "session_id required for {:?} but not found in params or run metadata",
@@ -700,6 +738,7 @@ pub(crate) async fn start_session_impl(
             effective_cwd,
             &adapter_settings,
             resolved.extra_env.as_ref(),
+            &run_id,
         )
         .await?;
         let resume_tid = meta.resolved_conversation_ref().and_then(|r| match r {
@@ -2031,6 +2070,7 @@ async fn spawn_codex_appserver_process(
     cwd: &str,
     settings: &adapter::AdapterSettings,
     extra_env: Option<&std::collections::HashMap<String, String>>,
+    run_id: &str,
 ) -> Result<
     (
         tokio::process::Child,
@@ -2055,6 +2095,12 @@ async fn spawn_codex_appserver_process(
         "suppress_unstable_features_warning=true".into(),
     ];
 
+    let room_args = crate::rooms::mcp::codex_args_for_run(run_id)?;
+    let is_room = room_args.is_some();
+    if let Some(room_args) = room_args {
+        args.extend(room_args);
+    }
+
     // Third-party provider overrides (shared with the exec + side-question paths). The provider
     // API key is injected as an env var (env_key=api_key) below, mirroring chat.rs's run_agent.
     if let Some(p) = &settings.codex_provider {
@@ -2076,6 +2122,9 @@ async fn spawn_codex_appserver_process(
         .stderr(std::process::Stdio::piped())
         .hide_console()
         .kill_on_drop(true);
+    if is_room {
+        cmd.env_remove("OPENAI_API_KEY");
+    }
     if let Some(env) = extra_env {
         for (k, v) in env {
             cmd.env(k, v);
@@ -2134,6 +2183,15 @@ async fn spawn_cli_process(
         "--permission-prompt-tool".into(),
         "stdio".into(),
     ];
+
+    let room_config = crate::rooms::mcp::config_for_run(_run_id)?;
+    let is_room = room_config.is_some();
+    if let Some(config) = room_config {
+        if remote_host.is_some() {
+            return Err("Room participants must use local providers".into());
+        }
+        claude_args.extend(["--mcp-config".into(), config.to_string_lossy().into_owned()]);
+    }
 
     // Session mode args
     match session_mode {
@@ -2221,6 +2279,19 @@ async fn spawn_cli_process(
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+
+        if is_room {
+            for key in [
+                "ANTHROPIC_API_KEY",
+                "ANTHROPIC_AUTH_TOKEN",
+                "ANTHROPIC_BASE_URL",
+                "CLAUDE_CODE_USE_BEDROCK",
+                "CLAUDE_CODE_USE_VERTEX",
+                "CLAUDE_CODE_USE_FOUNDRY",
+            ] {
+                cmd.env_remove(key);
+            }
+        }
 
         // Pass API key to CLI when using API Key authentication mode (x-api-key header).
         // MUST remove AUTH_TOKEN to avoid inherited shell env vars taking priority.

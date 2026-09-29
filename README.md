@@ -21,6 +21,12 @@
 
 ---
 
+This fork adds **Local Agent Rooms**: independent Codex and Claude peers, one shared
+conversation and GitHub Project per room, automatic continuation, bounded timed wakeups,
+optional Git worktrees, and custom app colors. See the [local build and usage guide](docs/LOCAL_AGENT_ROOM.md)
+and [native acceptance results](docs/LOCAL_AGENT_ROOM_LIVE_ACCEPTANCE.md).
+The upstream release downloads below do not include these fork features.
+
 <p align="center">
   <img src="static/screenshot.png" width="800" alt="OpenCovibe Screenshot">
 </p>

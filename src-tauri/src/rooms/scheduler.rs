@@ -16,7 +16,7 @@ pub enum WakeDecision {
     QueueTimer(String),
 }
 
-fn eligible_tasks(board: &Board, peer: &Participant) -> Vec<String> {
+pub(crate) fn eligible_tasks(board: &Board, peer: &Participant) -> Vec<String> {
     board
         .items
         .iter()
@@ -49,6 +49,8 @@ pub fn continuation(
     last_wake_ms: Option<i64>,
 ) -> WakeDecision {
     if room.paused
+        || room.archived
+        || !room.auto_continue
         || peer.paused
         || state != PeerState::Idle
         || room.board.error.is_some()
@@ -134,6 +136,7 @@ mod tests {
             provider: "claude".into(),
             run_id: "run".into(),
             paused: false,
+            ..Default::default()
         };
         (room, peer, now + 100)
     }

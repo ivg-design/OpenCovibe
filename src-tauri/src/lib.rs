@@ -79,6 +79,16 @@ pub fn run() {
     .init();
 
     log::info!("OpenCovibe Desktop starting");
+    let context = tauri::generate_context!();
+    if context.config().identifier == "design.ivg.opencovibe.local"
+        && std::env::var_os("OPENCOVIBE_DATA_DIR").is_none()
+    {
+        // Finder launches the local fork into its own profile as well as a distinct bundle ID.
+        std::env::set_var(
+            "OPENCOVIBE_DATA_DIR",
+            storage::data_dir().with_file_name(".opencovibe-local"),
+        );
+    }
 
     // All storage modules use process-local writer locks. Hold the OS lock before any startup
     // reconciliation touches data so a second backend cannot allocate duplicate event sequences
@@ -143,10 +153,10 @@ pub fn run() {
         .manage(SpawnLocks::new())
         .manage(ShutdownGate::new())
         .manage(data_dir_lock)
-        .manage(
+        .manage(Arc::new(
             rooms::store::RoomStore::open(&storage::data_dir().join("rooms.sqlite3"))
                 .expect("could not open local room database"),
-        )
+        ))
         .manage(cancel_token)
         .manage(ws_shutdown_sender)
         .manage(shared_token_version)
@@ -163,11 +173,23 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::rooms::list_rooms,
             commands::rooms::get_room,
+            commands::rooms::read_room_task,
             commands::rooms::create_room,
             commands::rooms::ensure_room_project,
             commands::rooms::refresh_room_board,
             commands::rooms::set_room_paused,
             commands::rooms::post_room_message,
+            commands::rooms::add_room_participant,
+            commands::rooms::set_room_participant_paused,
+            commands::rooms::wake_room_participant,
+            commands::rooms::remove_room_participant,
+            commands::rooms::save_room_timer,
+            commands::rooms::remove_room_timer,
+            commands::rooms::set_room_auto_continue,
+            commands::rooms::attach_room_project,
+            commands::rooms::archive_room,
+            commands::rooms::release_room_claim,
+            commands::rooms::merge_room_worktree,
             commands::runs::list_runs,
             commands::runs::get_run,
             commands::runs::start_run,
@@ -350,6 +372,7 @@ pub fn run() {
             ));
             app.manage(broadcaster);
             app.manage(emitter);
+            rooms::runtime::start(app.handle().clone());
 
             // Start web server (non-blocking, spawns async task)
             let app_handle = app.handle().clone();
@@ -435,7 +458,7 @@ pub fn run() {
                 _ => {}
             }
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
