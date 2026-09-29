@@ -119,6 +119,9 @@ Its contrast indicator changed to 15.60:1. Quit/relaunch retained those exact va
 Reset colors restored the default values and 16.46:1 contrast in the native controls.
 Only the isolated acceptance profile was changed.
 
+The final board and inline canonical evidence were also visually inspected and captured in
+[the native screenshot](images/local-agent-room-board.png).
+
 ## Verification boundaries
 
 The fixture Project, completed drafts, room, peers, conversation, and worktree remain for review.
