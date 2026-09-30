@@ -114,7 +114,7 @@
               {request.proposal.use_worktree
                 ? t("room_useWorktree")
                 : t("room_requestsSharedWorkspace")} · {t("room_maxTurns")}: {request.proposal
-                .max_turns}
+                .max_turns || t("room_noTurnLimit")}
             </p>
             <p class="mt-2 text-xs text-muted-foreground">{t("room_requestsPausedPeerHelp")}</p>
           </div>{/if}
@@ -327,7 +327,7 @@
                   .proposal.effort ?? t("room_defaultEffort")} · {request.proposal.use_worktree
                   ? t("room_useWorktree")
                   : t("room_requestsSharedWorkspace")} · {t("room_maxTurns")}: {request.proposal
-                  .max_turns}
+                  .max_turns || t("room_noTurnLimit")}
               </p>{/if}
             {#if request.options.length}<div class="mt-2 text-xs">
                 <p class="font-medium">{t("room_requestsOptions")}</p>

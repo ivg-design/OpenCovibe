@@ -37,9 +37,11 @@
     setRoomPaused,
     setRoomParticipantPaused,
     wakeRoomParticipant,
+    updateRoomParticipantSettings,
   } from "$lib/rooms/api";
   import type {
     CreateRoomInput,
+    ParticipantSettings,
     Room,
     RoomParticipant,
     RoomRequest,
@@ -327,6 +329,16 @@
     };
     const op = ops[action];
     if (op) void perform(action, () => op());
+  }
+  async function saveParticipantSettings(
+    participant: RoomParticipant,
+    input: ParticipantSettings,
+    expected: ParticipantSettings,
+  ): Promise<boolean> {
+    await perform(`settings:${participant.id}`, (id) =>
+      updateRoomParticipantSettings(id, participant.id, input, expected),
+    );
+    return !error;
   }
   function addParticipant(input: Parameters<typeof addRoomParticipant>[1]) {
     void perform("add-participant", (id) => addRoomParticipant(id, input));
@@ -705,6 +717,7 @@
               {busyAction}
               onAction={participantAction}
               onAdd={addParticipant}
+              onSave={saveParticipantSettings}
             />
             <RoomRequests
               room={selected}

@@ -138,7 +138,7 @@ fn build_seed_with(
         paused: true,
         state: "paused".into(),
         model: meta.model.clone(),
-        max_turns: super::models::turn_limit(),
+        max_turns: 0,
         event_cursor: seq,
         message_cursor: messages.len(),
         ..Default::default()

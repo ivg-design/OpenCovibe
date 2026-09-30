@@ -92,7 +92,7 @@ pub fn start(app: tauri::AppHandle) {
                     else {
                         continue;
                     };
-                    if p.state == "idle" && !p.paused && p.wake_count >= p.max_turns {
+                    if p.state == "idle" && !p.paused && p.turn_limit_reached() {
                         store.update(&room.id, |r| { if let Some(p) = r.participants.iter_mut().find(|p| p.id == peer.id) { p.paused = true; p.state = "budget_exhausted".into(); p.last_error = Some("Turn budget reached. Resume this participant explicitly to grant another budget.".into()); } Ok(()) }).ok();
                         continue;
                     }
@@ -227,7 +227,7 @@ pub fn plan(room: &Room, p: &Participant, now: i64) -> Option<Delivery> {
         || p.paused
         || p.pending_delivery.is_some()
         || p.state != "idle"
-        || p.wake_count >= p.max_turns
+        || p.turn_limit_reached()
         || busy_slots(room) >= room.max_concurrent.clamp(1, 5) as usize
     {
         return None;
@@ -424,11 +424,7 @@ fn reserve_delivery(
             .iter()
             .find(|p| p.id == peer_id)
             .ok_or("participant not found")?;
-        if p.paused
-            || p.state != "idle"
-            || p.pending_delivery.is_some()
-            || p.wake_count >= p.max_turns
-        {
+        if p.paused || p.state != "idle" || p.pending_delivery.is_some() || p.turn_limit_reached() {
             return Err("participant not ready".into());
         }
         let old_cursor = p.message_cursor;
@@ -454,7 +450,7 @@ fn reserve_delivery(
         delivery.text = prompt(r, p, &delivery);
         let task_signature = (delivery.reason == "task").then(|| work_signature(r));
         let p = r.participants.iter_mut().find(|p| p.id == peer_id).unwrap();
-        p.wake_count += 1;
+        p.wake_count = p.wake_count.saturating_add(1);
         p.last_wake_at = Some(delivery.created_at);
         if let Some(signature) = task_signature {
             p.work_signature = Some(signature);

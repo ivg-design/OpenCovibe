@@ -1816,7 +1816,7 @@
   "room_modelOptional": "模型（可选）",
   "room_modelPlaceholder": "使用提供方默认值",
   "room_effortOptional": "推理强度（可选）",
-  "room_maxTurns": "轮次预算",
+  "room_maxTurns": "暂停前的轮次数",
   "room_useWorktree": "使用隔离工作树",
   "room_addParticipant": "添加参与者",
   "room_noParticipants": "还没有参与者。添加一位以开始协作。",
@@ -1984,5 +1984,16 @@
   "room_branchSidechat": "开始分支聊天",
   "room_branchedFrom": "源自 {name} 的消息",
   "room_stateBudgetExhausted": "已达轮次上限",
-  "room_stateNoProgress": "因无进展已暂停"
+  "room_stateNoProgress": "因无进展已暂停",
+  "room_limitTurns": "限制房间总轮次数（可选）",
+  "room_turnLimitHelp": "统计消息、任务和定时器启动的总轮次数。达到上限后暂停该代理。恢复会重置计数；编辑设置不会。定时器的投递次数和结束日期单独生效。",
+  "room_noTurnLimitHelp": "无轮次上限：有可处理的工作时继续执行。定时器限制、暂停和提供方限制仍然有效。",
+  "room_noTurnLimit": "无限制",
+  "room_budgetUnlimited": "已启动轮次：{used} · 无轮次上限",
+  "room_currentModel": "当前设置",
+  "room_effortAutomatic": "此模型的推理强度为自动设置或不可用。",
+  "room_refreshModels": "刷新模型",
+  "room_editAgentSettings": "编辑代理",
+  "room_agentSettingsHelp": "重命名保留代理的当前活动和原对话。更改模型、推理强度或轮次限制需要暂停，在下次恢复轮次时生效。保留历史、项目、工作树、任务认领和轮次计数。",
+  "room_pauseToEditAgent": "现在可以重命名此代理。更改模型、推理强度或轮次限制前请先暂停。"
 }

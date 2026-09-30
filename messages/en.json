@@ -1816,7 +1816,7 @@
   "room_modelOptional": "Model (optional)",
   "room_modelPlaceholder": "Use provider default",
   "room_effortOptional": "Reasoning effort (optional)",
-  "room_maxTurns": "Turn budget",
+  "room_maxTurns": "Turns before pause",
   "room_useWorktree": "Use isolated worktree",
   "room_addParticipant": "Add participant",
   "room_noParticipants": "No participants yet. Add one to start working in this room.",
@@ -1984,5 +1984,16 @@
   "room_branchSidechat": "Start side chat",
   "room_branchedFrom": "Started from a message by {name}",
   "room_stateBudgetExhausted": "Turn limit reached",
-  "room_stateNoProgress": "Paused after no progress"
+  "room_stateNoProgress": "Paused after no progress",
+  "room_limitTurns": "Limit total room turns (optional)",
+  "room_turnLimitHelp": "Counts starts from messages, tasks and timers together. Pauses this agent at the limit. Resume resets the count; editing settings does not. Timer delivery limits and end dates apply separately.",
+  "room_noTurnLimitHelp": "No turn limit: continue while eligible work remains. Timer limits, pauses and provider limits still apply.",
+  "room_noTurnLimit": "No limit",
+  "room_budgetUnlimited": "Turns started: {used} · No turn limit",
+  "room_currentModel": "current setting",
+  "room_effortAutomatic": "Effort is automatic or unavailable for this model.",
+  "room_refreshModels": "Refresh models",
+  "room_editAgentSettings": "Edit agent",
+  "room_agentSettingsHelp": "Renaming keeps the agent’s current activity and existing conversation. Model, effort and turn limit changes require pausing and apply on the next resumed turn. History, project, worktree, claims and turn count are preserved.",
+  "room_pauseToEditAgent": "You can rename this agent now. Pause it before changing model, effort or turn limit."
 }

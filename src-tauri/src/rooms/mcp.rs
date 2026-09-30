@@ -498,7 +498,7 @@ async fn call_tool(
         }
         "release_task" => {
             operations::active_peer(&room, participant_id)?;
-            if peer.wake_count >= peer.max_turns
+            if peer.turn_limit_reached()
                 && peer
                     .pending_delivery
                     .as_ref()
@@ -586,7 +586,7 @@ fn tool_definitions() -> Value {
         make("claim_task","Atomically claim an eligible room board task and update GitHub.",&["task_id"],json!({"task_id":{"type":"string"}})),
         make("finish_task","Mark a task owned by this participant complete with summary and evidence.",&["task_id","summary","evidence"],json!({"task_id":{"type":"string"},"summary":{"type":"string"},"evidence":{"type":"string"}})),
         make("block_task","Mark a task owned by this participant blocked and pause the participant.",&["task_id","reason"],json!({"task_id":{"type":"string"},"reason":{"type":"string"}})),
-        make("request_agent","Request a new local peer for HUMAN approval. This never creates a peer or runs a model. Exact retries return the same request.",&["title","reason","brief","proposal"],json!({"title":{"type":"string"},"reason":{"type":"string"},"brief":{"type":"string"},"proposal":{"type":"object","properties":{"name":{"type":"string"},"provider":{"enum":["codex","claude"]},"model":{"type":["string","null"]},"effort":{"type":["string","null"]},"use_worktree":{"type":"boolean"},"max_turns":{"type":"integer","minimum":1,"maximum":200}},"required":["name","provider","use_worktree","max_turns"],"additionalProperties":false}})),
+        make("request_agent","Request a new local peer for HUMAN approval. This never creates a peer or runs a model. Exact retries return the same request.",&["title","reason","brief","proposal"],json!({"title":{"type":"string"},"reason":{"type":"string"},"brief":{"type":"string"},"proposal":{"type":"object","properties":{"name":{"type":"string"},"provider":{"enum":["codex","claude"]},"model":{"type":["string","null"]},"effort":{"type":["string","null"]},"use_worktree":{"type":"boolean"},"max_turns":{"type":"integer","minimum":0,"maximum":200,"description":"Optional total room turn limit; 0 disables it. Separate from each timer delivery limit."}},"required":["name","provider","use_worktree","max_turns"],"additionalProperties":false}})),
         make("request_decision","Ask the human a durable question with optional choices and evidence. The answer wakes the requester when eligible.",&["title","question"],json!({"title":{"type":"string"},"question":{"type":"string"},"options":{"type":"array","items":{"type":"string"},"maxItems":5},"evidence":{"type":["string","null"]}})),
         make("request_review","Ask another room peer to review evidence. The requester cannot approve their own review.",&["title","instructions","evidence","reviewer_id"],json!({"title":{"type":"string"},"instructions":{"type":"string"},"evidence":{"type":"string"},"reviewer_id":{"type":"string"},"task_id":{"type":["string","null"]}})),
         make("propose_completion","Propose final room completion for independent peer verification, then human acceptance. The canonical board must be fresh and complete. This does not close the room.",&["title","summary","evidence","reviewer_id"],json!({"title":{"type":"string"},"summary":{"type":"string"},"evidence":{"type":"string"},"reviewer_id":{"type":"string"}})),

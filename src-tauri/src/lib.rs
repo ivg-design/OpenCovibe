@@ -187,6 +187,7 @@ pub fn run() {
             commands::rooms::create_room_sidechat,
             commands::rooms::add_room_participant,
             commands::rooms::set_room_participant_paused,
+            commands::rooms::update_room_participant_settings,
             commands::rooms::wake_room_participant,
             commands::rooms::remove_room_participant,
             commands::rooms::save_room_timer,

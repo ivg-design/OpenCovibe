@@ -143,6 +143,14 @@ export interface RoomSessionSeed {
   project_error: string | null;
 }
 
+export interface ParticipantSettings {
+  name: string;
+  model: string | null;
+  effort: string | null;
+  /** Zero means no optional room turn limit. */
+  max_turns: number;
+}
+
 export interface AddParticipantInput {
   name: string;
   provider: "codex" | "claude";

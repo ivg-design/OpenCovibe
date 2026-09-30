@@ -5,8 +5,8 @@ use crate::{
     rooms::{
         github, github_tasks, governance,
         models::{
-            AddParticipantInput, CreateRoomInput, Participant, ProjectStage, Room, RoomProject,
-            SaveTimerInput, Timer,
+            AddParticipantInput, CreateRoomInput, Participant, ParticipantSettings, ProjectStage,
+            Room, RoomProject, SaveTimerInput, Timer,
         },
         operations,
         store::RoomStore,
@@ -479,8 +479,8 @@ fn validate_participant(input: &AddParticipantInput) -> Result<(), String> {
     if !matches!(input.provider.as_str(), "claude" | "codex") {
         return Err("provider must be claude or codex".into());
     }
-    if !(1..=200).contains(&input.max_turns) {
-        return Err("turn budget must be between 1 and 200".into());
+    if input.max_turns > 200 {
+        return Err("turn limit must be between 1 and 200, or disabled".into());
     }
     if let Some(model) = input.model.as_deref() {
         if model.trim().is_empty() || model.len() > 200 || model.chars().any(char::is_control) {
@@ -489,8 +489,8 @@ fn validate_participant(input: &AddParticipantInput) -> Result<(), String> {
     }
     if let Some(effort) = input.effort.as_deref() {
         let allowed = match input.provider.as_str() {
-            "claude" => ["low", "medium", "high"].as_slice(),
-            _ => ["minimal", "low", "medium", "high", "xhigh"].as_slice(),
+            "claude" => ["low", "medium", "high", "xhigh", "max"].as_slice(),
+            _ => ["none", "minimal", "low", "medium", "high", "xhigh"].as_slice(),
         };
         if !allowed.contains(&effort) {
             return Err(format!("unsupported {} effort: {effort}", input.provider));
@@ -619,6 +619,53 @@ async fn add_participant(
     })?;
     store.get(id)
 }
+/// Editing never grants work; a name-only edit does not stop an active provider.
+#[tauri::command]
+pub async fn update_room_participant_settings(
+    store: State<'_, Arc<RoomStore>>,
+    sessions: State<'_, ActorSessionMap>,
+    spawn_locks: State<'_, SpawnLocks>,
+    id: String,
+    participant_id: String,
+    input: ParticipantSettings,
+    expected: ParticipantSettings,
+) -> Result<Room, String> {
+    let room = store.get(&id)?;
+    let peer = room
+        .participants
+        .iter()
+        .find(|p| p.id == participant_id)
+        .ok_or("participant not found")?;
+    validate_participant(&AddParticipantInput {
+        name: input.name.clone(),
+        provider: peer.provider.clone(),
+        model: input.model.clone(),
+        effort: input.effort.clone(),
+        use_worktree: peer.worktree_path.is_some(),
+        max_turns: input.max_turns,
+    })?;
+    let _guard = spawn_locks.acquire(&peer.run_id).await;
+    // Validate before stopping the idle provider; then recheck inside the store transaction.
+    operations::validate_settings_edit(&store.get(&id)?, &participant_id, &expected, &input)?;
+    let execution_changed = !input.same_execution_settings(&expected);
+    if execution_changed {
+        crate::commands::session::stop_actor(sessions.inner(), &peer.run_id).await?;
+    }
+    store.update(&id, |room| {
+        operations::apply_settings_edit(room, &participant_id, &input, &expected)?;
+        if execution_changed {
+            storage::runs::with_meta(&peer.run_id, |meta| {
+                meta.model = input.model.clone();
+                if meta.status == RunStatus::Running {
+                    meta.status = RunStatus::Stopped;
+                }
+                Ok(())
+            })?;
+        }
+        Ok(())
+    })
+}
+
 #[tauri::command]
 pub async fn set_room_participant_paused(
     store: State<'_, Arc<RoomStore>>,
@@ -708,7 +755,7 @@ pub fn wake_room_participant(
     if p.paused {
         return Err("resume the participant before sending a wake message".into());
     }
-    if p.wake_count >= p.max_turns {
+    if p.turn_limit_reached() {
         return Err(
             "participant turn budget is exhausted; explicitly resume it to reset the budget".into(),
         );

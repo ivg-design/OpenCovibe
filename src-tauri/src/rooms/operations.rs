@@ -309,3 +309,75 @@ pub fn bounded_text(value: &str, limit: usize, label: &str) -> Result<String, St
     }
     Ok(value.into())
 }
+
+/// Names can change during a turn; execution settings require an explicitly paused peer.
+pub fn validate_settings_edit(
+    room: &super::models::Room,
+    peer_id: &str,
+    expected: &super::models::ParticipantSettings,
+    input: &super::models::ParticipantSettings,
+) -> Result<(), String> {
+    if room.archived {
+        return Err("room is archived".into());
+    }
+    let peer = room
+        .participants
+        .iter()
+        .find(|p| p.id == peer_id)
+        .ok_or("participant not found")?;
+    if &peer.settings() != expected {
+        return Err("Agent settings changed elsewhere. Cancel and reopen the editor to load the latest settings.".into());
+    }
+    if !input.same_execution_settings(expected)
+        && (!peer.paused
+            || peer.pending_delivery.is_some()
+            || matches!(
+                peer.state.as_str(),
+                "busy" | "running" | "starting" | "working" | "waiting"
+            ))
+    {
+        return Err("Pause the agent and wait for its current turn to stop before changing model, effort or turn limit.".into());
+    }
+    Ok(())
+}
+
+pub fn apply_settings_edit(
+    room: &mut super::models::Room,
+    peer_id: &str,
+    input: &super::models::ParticipantSettings,
+    expected: &super::models::ParticipantSettings,
+) -> Result<(), String> {
+    validate_settings_edit(room, peer_id, expected, input)?;
+    let name = input.name.trim();
+    if name.is_empty() || name.len() > 80 {
+        return Err("Agent name must contain 1–80 bytes.".into());
+    }
+    if room
+        .participants
+        .iter()
+        .any(|peer| peer.id != peer_id && peer.name.eq_ignore_ascii_case(name))
+    {
+        return Err("Another agent already uses this name in the room.".into());
+    }
+    let peer = room
+        .participants
+        .iter_mut()
+        .find(|p| p.id == peer_id)
+        .unwrap();
+    let had_budget_error = peer.state == "budget_exhausted"
+        || peer
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("Turn budget reached"));
+    peer.name = name.to_owned();
+    peer.model = input.model.clone();
+    peer.effort = input.effort.clone();
+    peer.max_turns = input.max_turns;
+    if had_budget_error && !peer.turn_limit_reached() {
+        if peer.paused {
+            peer.state = "paused".into();
+        }
+        peer.last_error = None;
+    }
+    Ok(())
+}

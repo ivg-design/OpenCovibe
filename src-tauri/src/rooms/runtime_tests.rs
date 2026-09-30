@@ -1233,3 +1233,259 @@ fn last_reserved_turn_can_write_governance_but_cannot_start_an_extra_turn() {
     .contains("budget"));
     assert!(plan(&completed, &completed.participants[0], fixture.now()).is_none());
 }
+
+#[test]
+fn unlimited_turns_keep_dispatching_and_can_claim_after_many_starts() {
+    let fixture = Fixture::new();
+    let room = fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            room.auto_continue = true;
+            room.participants[0].max_turns = 0;
+            room.participants[0].wake_count = 300;
+            Ok(())
+        })
+        .unwrap();
+    let peer = &room.participants[0];
+    assert!(!peer.turn_limit_reached());
+    let next = plan(&room, peer, fixture.now())
+        .expect("eligible work should continue without a turn limit");
+    let reserved =
+        reserve_delivery(&fixture.store, &room.id, &peer.id, next, fixture.now()).unwrap();
+    assert_eq!(reserved.participants[0].wake_count, 301);
+    fixture
+        .store
+        .reserve_claim(&room.id, &peer.id, "task-a")
+        .unwrap();
+}
+
+#[test]
+fn unlimited_turns_do_not_bypass_timer_delivery_limits() {
+    let fixture = Fixture::new();
+    let room = fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            room.auto_continue = false;
+            room.participants[0].max_turns = 0;
+            room.participants[0].wake_count = 300;
+            room.timers.push(Timer {
+                id: "limited-timer".into(),
+                participant_id: "peer-a".into(),
+                message: "Wake".into(),
+                interval_seconds: 30,
+                idle_only: true,
+                enabled: true,
+                next_due_at: 1,
+                max_deliveries: Some(1),
+                ends_at: None,
+                delivered_count: 1,
+                queued_at: None,
+                last_error: None,
+            });
+            Ok(())
+        })
+        .unwrap();
+    queue_due_timers(&fixture.store, &room.id, "peer-a", fixture.now()).unwrap();
+    let current = fixture.store.get(&room.id).unwrap();
+    assert!(current.timers[0].is_exhausted_at(fixture.now()));
+    assert!(current.timers[0].queued_at.is_none());
+    assert!(plan(&current, &current.participants[0], fixture.now()).is_none());
+}
+
+#[test]
+fn editing_paused_peer_preserves_identity_context_claims_and_turn_count() {
+    let fixture = Fixture::new();
+    let room = fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            let peer = &mut room.participants[0];
+            peer.paused = true;
+            peer.state = "budget_exhausted".into();
+            peer.max_turns = 1;
+            peer.wake_count = 1;
+            peer.worktree_path = Some("existing-worktree".into());
+            peer.message_cursor = 7;
+            peer.event_cursor = 42;
+            peer.last_error = Some("Turn budget reached".into());
+            room.claims.push(Claim {
+                task_id: "task-a".into(),
+                participant_id: "peer-a".into(),
+                state: "active".into(),
+                updated_at: crate::models::now_iso(),
+                summary: None,
+                evidence: None,
+            });
+            Ok(())
+        })
+        .unwrap();
+    let original = room.participants[0].clone();
+    let input = crate::rooms::models::ParticipantSettings {
+        name: "Renamed Codex".into(),
+        model: Some("new-account-model".into()),
+        effort: Some("high".into()),
+        max_turns: 0,
+    };
+    fixture
+        .store
+        .update(&room.id, |room| {
+            crate::rooms::operations::apply_settings_edit(
+                room,
+                "peer-a",
+                &input,
+                &original.settings(),
+            )
+        })
+        .unwrap();
+    let reopened = RoomStore::open(&fixture._temp.path().join("rooms.sqlite3")).unwrap();
+    let saved = reopened.get(&room.id).unwrap();
+    let peer = &saved.participants[0];
+    assert_eq!(peer.settings(), input);
+    assert_eq!(peer.id, original.id);
+    assert_eq!(peer.run_id, original.run_id);
+    assert_eq!(peer.worktree_path, original.worktree_path);
+    assert_eq!(peer.message_cursor, 7);
+    assert_eq!(peer.event_cursor, 42);
+    assert_eq!(peer.wake_count, 1);
+    assert!(peer.paused);
+    assert_eq!(peer.state, "paused");
+    assert_eq!(peer.last_error, None);
+    assert_eq!(saved.claims.len(), 1);
+    assert_eq!(saved.claims[0].state, "active");
+    assert_eq!(saved.messages.len(), room.messages.len());
+}
+
+#[test]
+fn editing_rejects_active_pending_archived_and_stale_settings_without_mutation() {
+    let fixture = Fixture::new();
+    let input = crate::rooms::models::ParticipantSettings {
+        name: "Renamed Codex".into(),
+        model: Some("new-model".into()),
+        effort: Some("high".into()),
+        max_turns: 0,
+    };
+    for mode in ["unpaused", "busy", "pending", "archived", "stale"] {
+        let mut room = fixture.room.clone();
+        room.participants[0].paused = true;
+        let expected = room.participants[0].settings();
+        match mode {
+            "unpaused" => room.participants[0].paused = false,
+            "busy" => room.participants[0].state = "busy".into(),
+            "pending" => {
+                room.participants[0].pending_delivery =
+                    Some(delivery("message", None, fixture.now()))
+            }
+            "archived" => room.archived = true,
+            "stale" => room.participants[0].model = Some("changed-elsewhere".into()),
+            _ => unreachable!(),
+        }
+        let before = serde_json::to_value(&room).unwrap();
+        assert!(
+            crate::rooms::operations::apply_settings_edit(&mut room, "peer-a", &input, &expected)
+                .is_err(),
+            "{mode}"
+        );
+        assert_eq!(serde_json::to_value(&room).unwrap(), before, "{mode}");
+    }
+}
+
+#[test]
+fn disabling_turn_limit_clears_stale_budget_error_after_room_pause() {
+    let fixture = Fixture::new();
+    for error in [
+        "Turn budget reached. Resume this participant explicitly to grant another budget.",
+        "Provider authentication failed",
+    ] {
+        let mut room = fixture.room.clone();
+        let peer = &mut room.participants[0];
+        peer.paused = true;
+        peer.state = "paused".into();
+        peer.max_turns = 1;
+        peer.wake_count = 1;
+        peer.last_error = Some(error.into());
+        let expected = peer.settings();
+        let mut input = expected.clone();
+        input.max_turns = 0;
+        crate::rooms::operations::apply_settings_edit(&mut room, "peer-a", &input, &expected)
+            .unwrap();
+        assert_eq!(
+            room.participants[0].last_error,
+            if error.starts_with("Turn budget") {
+                None
+            } else {
+                Some(error.into())
+            }
+        );
+        assert!(room.participants[0].paused);
+        assert_eq!(room.participants[0].wake_count, 1);
+    }
+}
+
+#[test]
+fn rename_during_active_turn_preserves_delivery_ownership_and_state() {
+    let fixture = Fixture::new();
+    fixture
+        .store
+        .reserve_claim(&fixture.room.id, "peer-a", "task-a")
+        .unwrap();
+    let room = fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            room.participants[0].state = "busy".into();
+            room.participants[0].wake_count = 7;
+            room.participants[0].pending_delivery = Some(delivery("message", None, fixture.now()));
+            Ok(())
+        })
+        .unwrap();
+    let expected = room.participants[0].settings();
+    let mut input = expected.clone();
+    input.name = "  Codex builder  ".into();
+    let renamed = fixture
+        .store
+        .update(&room.id, |room| {
+            crate::rooms::operations::apply_settings_edit(room, "peer-a", &input, &expected)
+        })
+        .unwrap();
+    let peer = &renamed.participants[0];
+    assert_eq!(peer.name, "Codex builder");
+    assert!(!peer.paused);
+    assert_eq!(peer.state, "busy");
+    assert_eq!(peer.wake_count, 7);
+    assert_eq!(
+        serde_json::to_value(&peer.pending_delivery).unwrap(),
+        serde_json::to_value(&room.participants[0].pending_delivery).unwrap()
+    );
+    assert_eq!(peer.run_id, room.participants[0].run_id);
+    assert_eq!(renamed.claims[0].participant_id, "peer-a");
+    assert_eq!(
+        serde_json::to_value(&renamed.claims).unwrap(),
+        serde_json::to_value(&room.claims).unwrap()
+    );
+}
+
+#[test]
+fn rename_rejects_duplicate_empty_long_and_stale_names_without_changes() {
+    let fixture = Fixture::new();
+    for name in ["  CLAUDE  ".into(), " ".into(), "x".repeat(81)] {
+        let mut room = fixture.room.clone();
+        let expected = room.participants[0].settings();
+        let mut input = expected.clone();
+        input.name = name;
+        let before = serde_json::to_value(&room).unwrap();
+        assert!(crate::rooms::operations::apply_settings_edit(
+            &mut room, "peer-a", &input, &expected
+        )
+        .is_err());
+        assert_eq!(serde_json::to_value(&room).unwrap(), before);
+    }
+    let mut room = fixture.room.clone();
+    let expected = room.participants[0].settings();
+    let mut input = expected.clone();
+    input.name = "Builder".into();
+    room.participants[0].name = "Renamed elsewhere".into();
+    assert!(
+        crate::rooms::operations::apply_settings_edit(&mut room, "peer-a", &input, &expected)
+            .unwrap_err()
+            .contains("changed elsewhere")
+    );
+    assert_eq!(room.participants[0].name, "Renamed elsewhere");
+}

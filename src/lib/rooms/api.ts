@@ -1,6 +1,7 @@
 import { getTransport } from "$lib/transport";
 import type {
   AddParticipantInput,
+  ParticipantSettings,
   CreateRoomInput,
   Room,
   RoomSessionSeed,
@@ -138,4 +139,18 @@ export function saveRoomInstructions(
   expected: string,
 ): Promise<Room> {
   return getTransport().invoke("save_room_instructions", { id, instructions, expected });
+}
+
+export function updateRoomParticipantSettings(
+  id: string,
+  participantId: string,
+  input: ParticipantSettings,
+  expected: ParticipantSettings,
+): Promise<Room> {
+  return getTransport().invoke("update_room_participant_settings", {
+    id,
+    participantId,
+    input,
+    expected,
+  });
 }

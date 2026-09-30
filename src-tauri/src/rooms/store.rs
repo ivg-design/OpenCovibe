@@ -452,7 +452,7 @@ impl RoomStore {
             if room.paused
                 || room.archived
                 || peer.paused
-                || (peer.wake_count >= peer.max_turns && peer.pending_delivery.is_none())
+                || (peer.turn_limit_reached() && peer.pending_delivery.is_none())
             {
                 return Err("room or participant is paused or its turn budget is exhausted".into());
             }

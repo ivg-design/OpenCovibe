@@ -74,6 +74,40 @@ pub struct Participant {
     pub work_signature: Option<String>,
 }
 
+impl Participant {
+    /// Zero disables the optional room-wide count of this participant's starts.
+    pub fn turn_limit_reached(&self) -> bool {
+        self.max_turns > 0 && self.wake_count >= self.max_turns
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ParticipantSettings {
+    pub name: String,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub max_turns: u32,
+}
+
+impl ParticipantSettings {
+    pub fn same_execution_settings(&self, other: &Self) -> bool {
+        self.model == other.model
+            && self.effort == other.effort
+            && self.max_turns == other.max_turns
+    }
+}
+
+impl Participant {
+    pub fn settings(&self) -> ParticipantSettings {
+        ParticipantSettings {
+            name: self.name.clone(),
+            model: self.model.clone(),
+            effort: self.effort.clone(),
+            max_turns: self.max_turns,
+        }
+    }
+}
+
 fn idle_state() -> String {
     "idle".into()
 }

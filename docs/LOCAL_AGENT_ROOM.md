@@ -9,8 +9,8 @@ GitHub Project, independent peers, and a continuous shared conversation.
 1. Open Rooms for the group chat, Room settings for configuration, and the sidebar Project board for progress. Create a room with an existing local Git repository and owner/repository.
    Project creation is enabled by default. A saved room always reuses its Project. If a network
    write is uncertain, use Retry Project setup to reconcile it, or attach its existing number.
-2. Add named Codex or Claude peers with individual model, effort, turn budget and optional
-   worktree. A newly added peer is paused and does not start a provider turn.
+2. Add named Codex or Claude peers with individual model, effort and optional turn limit and
+   worktree. A newly added peer is paused and does not start a provider turn. Model and effort dropdowns use the provider catalog. Choose **Edit agent** to rename an existing agent without stopping its current activity. Pause it to change model, effort or the optional turn limit, then Save; the next resumed turn uses the saved settings and retains the same provider conversation, worktree, claims and turn count.
 3. Resume the peers and the room. Give the objective or further instructions in the shared
    conversation. Human messages can address everyone or one peer; agent tools can post shared
    updates and directed questions. Agent broadcasts are visible to all and do not automatically
@@ -33,7 +33,7 @@ GitHub Project, independent peers, and a continuous shared conversation.
    claims or other open requests, fresh GitHub data, and independent peer verification. Pause the
    room, refresh the board, and accept with a note to archive the completed room.
 8. Pause the room to stop its provider processes. Resume preserves claims and provider context.
-   A peer that reaches its turn limit needs explicit Resume to grant another budget. Archive
+   The total turn limit is optional and disabled for newly added or imported agents. Existing explicit limits are retained. An enabled limit counts all room starts for that agent (messages, automatic tasks and timers together); it does not count each tool call or subagent separately. It pauses only that agent at the limit. Resume resets the count; editing settings does not. Each timer has its own separate delivery limit or end date. Archive
    keeps the room, Project, conversation and worktrees. Removing a peer requires releasing its
    unfinished claims. Worktrees are retained; Merge is explicit and requires clean checkouts.
 9. Settings → Appearance includes persistent custom colors with reset and contrast handling.
@@ -70,7 +70,7 @@ configuration and brief, answers decisions and accepts final completion. These a
 available through agent MCP tools. Completion approval preserves the peer review evidence and
 checks that the board, claims and peer roster still match the reviewed snapshot.
 
-Every delivery reserves its turn budget in SQLite before sending. Timer delivery counts increase
+Every delivery records its turn start in SQLite before sending and checks any enabled total turn limit. Timer delivery counts increase
 only after the provider accepts dispatch. On an interrupted
 or ambiguous delivery, startup pauses that participant and does not replay the message. Inspect
 its session before explicitly resuming. Network failures preserve uncertain task claims; refresh
@@ -86,7 +86,7 @@ including when hidden in the tray; it does not schedule work after Quit.
 Room-scoped stdio MCP tools provide snapshot, post_message, create_sidechat, read_sidechat, read_task, create_task, claim_task,
 finish_task, block_task, release_task, request_agent, request_decision, request_review,
 respond_request and propose_completion. They bind one room and participant and check ownership,
-pauses and finite turn budgets for governance writes. Repeated identical request creation returns
+pauses and any enabled turn limits for governance writes. Repeated identical request creation returns
 the existing record; conflicting reuse of a request title is rejected.
 Finishing requires a summary and evidence; the proof is stored on GitHub before marking Done.
 Exact task-creation intents are persisted to avoid blindly repeating uncertain writes. Creation

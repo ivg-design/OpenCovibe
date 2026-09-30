@@ -462,8 +462,8 @@ fn validate_proposal(input: &AddParticipantInput) -> Result<(), String> {
     if !matches!(input.provider.as_str(), "claude" | "codex") {
         return Err("provider must be claude or codex".into());
     }
-    if !(1..=200).contains(&input.max_turns) {
-        return Err("turn budget must be between 1 and 200".into());
+    if input.max_turns > 200 {
+        return Err("turn limit must be between 1 and 200, or disabled".into());
     }
     if let Some(model) = input.model.as_deref() {
         let model = bounded(model, 200, "model")?;
@@ -473,9 +473,9 @@ fn validate_proposal(input: &AddParticipantInput) -> Result<(), String> {
     }
     if let Some(effort) = input.effort.as_deref() {
         let allowed: &[&str] = if input.provider == "claude" {
-            &["low", "medium", "high"]
+            &["low", "medium", "high", "xhigh", "max"]
         } else {
-            &["minimal", "low", "medium", "high", "xhigh"]
+            &["none", "minimal", "low", "medium", "high", "xhigh"]
         };
         if !allowed.contains(&effort) {
             return Err(format!("unsupported {} effort: {effort}", input.provider));
@@ -494,7 +494,7 @@ fn reject_present(fields: &[(bool, &str)]) -> Result<(), String> {
 
 fn active_writer(room: &Room, peer_id: &str) -> Result<(), String> {
     let peer = operations::active_peer(room, peer_id)?;
-    if peer.wake_count >= peer.max_turns
+    if peer.turn_limit_reached()
         && !peer
             .pending_delivery
             .as_ref()
