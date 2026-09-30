@@ -77,6 +77,7 @@ impl RoomStore {
             messages: vec![],
             timers: vec![],
             claims: vec![],
+            requests: vec![],
             auto_continue: true,
             max_concurrent: 3,
             archived: false,

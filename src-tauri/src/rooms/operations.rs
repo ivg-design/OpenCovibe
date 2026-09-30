@@ -187,6 +187,27 @@ pub async fn release_claim(
     room_id: &str,
     task_id: &str,
 ) -> Result<Room, String> {
+    release_claim_with_owner(store, room_id, task_id, None, None).await
+}
+
+pub async fn release_own_claim(
+    store: &RoomStore,
+    room_id: &str,
+    participant_id: &str,
+    task_id: &str,
+    reason: &str,
+) -> Result<Room, String> {
+    let reason = bounded_text(reason, 4000, "release reason")?;
+    release_claim_with_owner(store, room_id, task_id, Some(participant_id), Some(&reason)).await
+}
+
+async fn release_claim_with_owner(
+    store: &RoomStore,
+    room_id: &str,
+    task_id: &str,
+    participant_id: Option<&str>,
+    reason: Option<&str>,
+) -> Result<Room, String> {
     let room = store.get(room_id)?;
     let claim = room
         .claims
@@ -201,16 +222,52 @@ pub async fn release_claim(
         .iter()
         .find(|p| p.id == claim.participant_id)
         .ok_or("claim owner not found")?;
-    if !room.paused && (!peer.paused || peer.pending_delivery.is_some()) {
+    if let Some(participant_id) = participant_id {
+        active_peer(&room, participant_id)?;
+        if peer.id != participant_id {
+            return Err("this participant does not own the task".into());
+        }
+    } else if !room.paused && (!peer.paused || peer.pending_delivery.is_some()) {
         return Err("pause the owner and stop its turn before releasing the claim".into());
     }
     let project = room.project.as_ref().ok_or("room has no Project")?;
     store.update(room_id, |r| {
-        r.claims
+        if let Some(participant_id) = participant_id {
+            active_peer(r, participant_id)?;
+        }
+        let latest = r
+            .claims
+            .iter()
+            .find(|claim| claim.task_id == task_id)
+            .ok_or("claim not found")?;
+        if latest.participant_id != peer.id
+            || !matches!(
+                latest.state.as_str(),
+                "active" | "reserved" | "blocked" | "uncertain"
+            )
+        {
+            return Err("claim changed or is already being released".into());
+        }
+        if participant_id.is_none() && !r.paused {
+            let owner = r
+                .participants
+                .iter()
+                .find(|p| p.id == peer.id)
+                .ok_or("claim owner not found")?;
+            if !owner.paused || owner.pending_delivery.is_some() {
+                return Err("pause the owner and stop its turn before releasing the claim".into());
+            }
+        }
+        let claim = r
+            .claims
             .iter_mut()
             .find(|c| c.task_id == task_id)
-            .ok_or("claim not found")?
-            .state = "releasing".into();
+            .ok_or("claim not found")?;
+        claim.state = "releasing".into();
+        if let Some(reason) = reason {
+            claim.summary = Some(format!("Released task: {reason}"));
+        }
+        claim.updated_at = crate::models::now_iso();
         Ok(())
     })?;
     if let Err(error) = github_tasks::set_task_state(project, task_id, None, "ready").await {
@@ -228,6 +285,17 @@ pub async fn release_claim(
         if let Some(item) = room.board.items.iter_mut().find(|i| i.id == task_id) {
             item.status = "Todo".into();
             item.agent = None;
+        }
+        if let Some(reason) = reason {
+            room.messages.push(super::models::Message {
+                id: uuid::Uuid::new_v4().to_string(),
+                sender: peer.name.clone(),
+                body: format!("Released task {task_id}: {reason}"),
+                created_at: crate::models::now_iso(),
+                participant_id: Some(peer.id.clone()),
+                target_participant_id: None,
+                source_event_id: None,
+            });
         }
         Ok(())
     })

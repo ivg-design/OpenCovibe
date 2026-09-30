@@ -44,6 +44,7 @@ export interface RoomParticipant {
   pending_delivery: RoomDelivery | null;
   no_progress_turns: number;
   work_signature: string | null;
+  brief?: string | null;
 }
 
 export interface RoomDelivery {
@@ -104,6 +105,7 @@ export interface Room {
   messages: RoomMessage[];
   timers: RoomTimer[];
   claims: RoomClaim[];
+  requests: RoomRequest[];
   auto_continue: boolean;
   max_concurrent: number;
   archived: boolean;
@@ -117,6 +119,40 @@ export interface AddParticipantInput {
   effort: string | null;
   use_worktree: boolean;
   max_turns: number;
+}
+
+export type RoomRequestKind = "agent" | "decision" | "review" | "completion";
+export type RoomRequestStatus =
+  | "pending"
+  | "creating"
+  | "approved"
+  | "rejected"
+  | "changes_requested"
+  | "verified"
+  | "accepted";
+
+export interface RoomRequest {
+  id: string;
+  kind: RoomRequestKind;
+  requester_id: string;
+  title: string;
+  body: string;
+  evidence: string | null;
+  task_id: string | null;
+  reviewer_id: string | null;
+  proposal: AddParticipantInput | null;
+  brief: string | null;
+  options: string[];
+  status: RoomRequestStatus;
+  response: string | null;
+  resolved_by: string | null;
+  review_response?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  approved_participant_id: string | null;
+  work_signature: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface SaveTimerInput {

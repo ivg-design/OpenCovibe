@@ -85,3 +85,16 @@ export function readRoomTask(
 export function setRoomConcurrency(id: string, limit: number): Promise<Room> {
   return getTransport().invoke("set_room_concurrency", { id, limit });
 }
+
+export function resolveRoomRequest(
+  id: string,
+  requestId: string,
+  approve: boolean,
+  response: string,
+): Promise<Room> {
+  return getTransport().invoke("resolve_room_request", { id, requestId, approve, response });
+}
+
+export function approveRoomAgent(id: string, requestId: string): Promise<Room> {
+  return getTransport().invoke("approve_room_agent", { id, requestId });
+}

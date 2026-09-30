@@ -843,3 +843,79 @@ fn delayed_board_refresh_cannot_erase_a_confirmed_task_or_completion() {
         .unwrap();
     assert_eq!(applied.board, fresh);
 }
+
+#[test]
+fn last_reserved_turn_can_write_governance_but_cannot_start_an_extra_turn() {
+    let fixture = Fixture::new();
+    let room = fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            room.participants[0].max_turns = 1;
+            Ok(())
+        })
+        .unwrap();
+    let planned = plan(&room, &room.participants[0], fixture.now()).unwrap();
+    let reserved = reserve_delivery(&fixture.store, &room.id, "peer-a", planned).unwrap();
+    assert_eq!(reserved.participants[0].wake_count, 1);
+    assert_eq!(
+        reserved.participants[0]
+            .pending_delivery
+            .as_ref()
+            .unwrap()
+            .state,
+        "prepared"
+    );
+    let question = |title: &str| crate::rooms::models::CreateRequestInput {
+        kind: "decision".into(),
+        title: title.into(),
+        body: "Choose the next approach".into(),
+        evidence: None,
+        task_id: None,
+        reviewer_id: None,
+        proposal: None,
+        brief: None,
+        options: vec![],
+    };
+    crate::rooms::governance::create_request(
+        &fixture.store,
+        &room.id,
+        "peer-a",
+        question("Before acknowledgement"),
+    )
+    .unwrap();
+    fixture
+        .store
+        .update(&room.id, |room| {
+            room.participants[0]
+                .pending_delivery
+                .as_mut()
+                .unwrap()
+                .state = "sent".into();
+            Ok(())
+        })
+        .unwrap();
+    crate::rooms::governance::create_request(
+        &fixture.store,
+        &room.id,
+        "peer-a",
+        question("After acknowledgement"),
+    )
+    .unwrap();
+    let completed = fixture
+        .store
+        .update(&room.id, |room| {
+            room.participants[0].pending_delivery = None;
+            room.participants[0].state = "idle".into();
+            Ok(())
+        })
+        .unwrap();
+    assert!(crate::rooms::governance::create_request(
+        &fixture.store,
+        &room.id,
+        "peer-a",
+        question("Unauthorized extra turn")
+    )
+    .unwrap_err()
+    .contains("budget"));
+    assert!(plan(&completed, &completed.participants[0], fixture.now()).is_none());
+}

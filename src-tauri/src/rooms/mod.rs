@@ -1,5 +1,6 @@
 pub mod github;
 pub mod github_tasks;
+pub mod governance;
 pub mod mcp;
 pub mod models;
 pub mod operations;

@@ -3,7 +3,7 @@ use crate::{
     commands::session::stop_session_impl,
     models::{ExecutionPath, RunSource, RunStatus},
     rooms::{
-        github, github_tasks,
+        github, github_tasks, governance,
         models::{
             AddParticipantInput, CreateRoomInput, Participant, ProjectStage, Room, SaveTimerInput,
             Timer,
@@ -299,11 +299,40 @@ pub async fn add_room_participant(
     id: String,
     input: AddParticipantInput,
 ) -> Result<Room, String> {
+    add_participant(&store, &id, input, None, None).await
+}
+
+async fn add_participant(
+    store: &RoomStore,
+    id: &str,
+    input: AddParticipantInput,
+    stable_id: Option<&str>,
+    brief: Option<&str>,
+) -> Result<Room, String> {
     validate_participant(&input)?;
-    let room = store.get(&id)?;
+    let room = store.get(id)?;
     if room.archived {
         return Err("room is archived".into());
     }
+    let peer_id = stable_id
+        .map(str::to_owned)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    if let Some(peer) = room.participants.iter().find(|p| p.id == peer_id) {
+        if peer.name != input.name.trim()
+            || peer.provider != input.provider
+            || peer.model != input.model
+            || peer.effort != input.effort
+            || peer.max_turns != input.max_turns
+            || peer.worktree_path.is_some() != input.use_worktree
+            || peer.brief.as_deref() != brief
+        {
+            return Err("request participant already exists with different settings".into());
+        }
+        return Ok(room);
+    }
+    let run_id = stable_id
+        .map(str::to_owned)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     if room
         .participants
         .iter()
@@ -311,8 +340,6 @@ pub async fn add_room_participant(
     {
         return Err("participant name is already used in this room".into());
     }
-    let peer_id = uuid::Uuid::new_v4().to_string();
-    let run_id = uuid::Uuid::new_v4().to_string();
     let (cwd, worktree_path, branch) = if input.use_worktree {
         let (path, branch) = worktrees::create(&room.repo_path, &room.id, &peer_id).await?;
         (path.clone(), Some(path), Some(branch))
@@ -345,6 +372,7 @@ pub async fn add_room_participant(
         paused: true,
         model: input.model,
         effort: input.effort,
+        brief: brief.map(str::to_owned),
         worktree_path,
         branch,
         state: "paused".into(),
@@ -358,9 +386,19 @@ pub async fn add_room_participant(
         no_progress_turns: 0,
         work_signature: None,
     };
-    store.update(&id, |r| {
+    store.update(id, |r| {
         if r.archived {
             return Err("room is archived".into());
+        }
+        if let Some(request_id) = stable_id {
+            let request = r
+                .requests
+                .iter()
+                .find(|request| request.id == request_id)
+                .ok_or("agent request not found")?;
+            if request.kind != "agent" || request.status != "creating" {
+                return Err("agent approval was cancelled before the participant was added".into());
+            }
         }
         if r.participants
             .iter()
@@ -371,7 +409,7 @@ pub async fn add_room_participant(
         r.participants.push(participant.clone());
         Ok(())
     })?;
-    store.get(&id)
+    store.get(id)
 }
 #[tauri::command]
 pub async fn set_room_participant_paused(
@@ -776,4 +814,74 @@ pub fn set_room_concurrency(
         r.max_concurrent = limit;
         Ok(())
     })
+}
+
+#[tauri::command]
+pub async fn resolve_room_request(
+    store: State<'_, Arc<RoomStore>>,
+    id: String,
+    request_id: String,
+    approve: bool,
+    response: String,
+) -> Result<Room, String> {
+    let _operation = store.project_operation.lock().await;
+    governance::resolve_request(&store, &id, &request_id, approve, &response)
+}
+
+#[tauri::command]
+pub async fn approve_room_agent(
+    store: State<'_, Arc<RoomStore>>,
+    id: String,
+    request_id: String,
+) -> Result<Room, String> {
+    let _operation = store.project_operation.lock().await;
+    let room = store.get(&id)?;
+    let request = room
+        .requests
+        .iter()
+        .find(|r| r.id == request_id)
+        .ok_or("request not found")?;
+    if request.kind != "agent" {
+        return Err("request is not for an additional agent".into());
+    }
+    if request.status == "approved" {
+        return Ok(room);
+    }
+    if room.archived || !matches!(request.status.as_str(), "pending" | "creating") {
+        return Err("agent request is no longer pending".into());
+    }
+    let proposal = request
+        .proposal
+        .clone()
+        .ok_or("request has no proposed participant")?;
+    let brief = request.brief.clone().ok_or("request has no brief")?;
+    validate_participant(&proposal)?;
+    store.update(&id, |room| {
+        if room.archived {
+            return Err("room is archived".into());
+        }
+        let request = room
+            .requests
+            .iter_mut()
+            .find(|r| r.id == request_id)
+            .ok_or("request not found")?;
+        if !matches!(request.status.as_str(), "pending" | "creating") {
+            return Err("agent request was already resolved".into());
+        }
+        request.status = "creating".into();
+        request.updated_at = crate::models::now_iso();
+        Ok(())
+    })?;
+    if let Err(error) =
+        add_participant(&store, &id, proposal, Some(&request_id), Some(&brief)).await
+    {
+        store.update(&id, |room| {
+            if let Some(request) = room.requests.iter_mut().find(|r| r.id == request_id) {
+                if request.status == "creating" { request.response = Some(format!("Adding the paused peer failed: {error}. Retry uses the same identity and preserves any created worktree.")); }
+            }
+            Ok(())
+        })?;
+        return Err(error);
+    }
+    governance::record_agent_approval(&store, &id, &request_id, &request_id)
 }

@@ -174,6 +174,8 @@ pub fn run() {
             commands::rooms::list_rooms,
             commands::rooms::get_room,
             commands::rooms::get_room_run_settings,
+            commands::rooms::resolve_room_request,
+            commands::rooms::approve_room_agent,
             commands::rooms::read_room_task,
             commands::rooms::create_room,
             commands::rooms::ensure_room_project,

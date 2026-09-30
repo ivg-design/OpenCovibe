@@ -6,11 +6,13 @@
   import Textarea from "$lib/components/Textarea.svelte";
   import RoomBoard from "$lib/components/RoomBoard.svelte";
   import RoomParticipants from "$lib/components/RoomParticipants.svelte";
+  import RoomRequests from "$lib/components/RoomRequests.svelte";
   import RoomTimers from "$lib/components/RoomTimers.svelte";
   import { t } from "$lib/i18n/index.svelte";
   import { getTransport } from "$lib/transport";
   import {
     addRoomParticipant,
+    approveRoomAgent,
     archiveRoom,
     attachRoomProject,
     createRoom,
@@ -19,6 +21,7 @@
     mergeRoomWorktree,
     postRoomMessage,
     refreshRoomBoard,
+    resolveRoomRequest,
     releaseRoomClaim,
     removeRoomParticipant,
     removeRoomTimer,
@@ -33,6 +36,7 @@
     CreateRoomInput,
     Room,
     RoomParticipant,
+    RoomRequest,
     RoomTimer,
     SaveTimerInput,
   } from "$lib/rooms/types";
@@ -262,6 +266,14 @@
   function addParticipant(input: Parameters<typeof addRoomParticipant>[1]) {
     void perform("add-participant", (id) => addRoomParticipant(id, input));
   }
+  function resolveRequest(request: RoomRequest, approve: boolean, response: string) {
+    void perform(`request:${request.id}`, (id) =>
+      resolveRoomRequest(id, request.id, approve, response),
+    );
+  }
+  function approveAgentRequest(request: RoomRequest) {
+    void perform(`request:${request.id}`, (id) => approveRoomAgent(id, request.id));
+  }
   function saveTimer(input: SaveTimerInput) {
     void perform("save-timer", (id) => saveRoomTimer(id, input));
   }
@@ -474,6 +486,13 @@
             {busyAction}
             onAction={participantAction}
             onAdd={addParticipant}
+          />
+          <RoomRequests
+            room={selected}
+            disabled={actionsDisabled}
+            {busyAction}
+            onResolve={resolveRequest}
+            onApproveAgent={approveAgentRequest}
           />
           <RoomTimers
             timers={selected.timers}

@@ -41,6 +41,8 @@ pub struct Participant {
     #[serde(default)]
     pub effort: Option<String>,
     #[serde(default)]
+    pub brief: Option<String>,
+    #[serde(default)]
     pub worktree_path: Option<String>,
     #[serde(default)]
     pub branch: Option<String>,
@@ -159,6 +161,8 @@ pub struct Room {
     pub timers: Vec<Timer>,
     #[serde(default)]
     pub claims: Vec<Claim>,
+    #[serde(default)]
+    pub requests: Vec<RoomRequest>,
     #[serde(default = "yes")]
     pub auto_continue: bool,
     #[serde(default)]
@@ -178,7 +182,7 @@ pub struct CreateRoomInput {
     pub create_project: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AddParticipantInput {
     pub name: String,
     pub provider: String,
@@ -203,4 +207,47 @@ impl Room {
     pub fn project_title(&self) -> String {
         format!("{} [room:{}]", self.title, self.id)
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoomRequest {
+    pub id: String,
+    pub kind: String,
+    pub requester_id: String,
+    pub title: String,
+    pub body: String,
+    pub evidence: Option<String>,
+    pub task_id: Option<String>,
+    pub reviewer_id: Option<String>,
+    pub proposal: Option<AddParticipantInput>,
+    pub brief: Option<String>,
+    pub options: Vec<String>,
+    pub status: String,
+    pub response: Option<String>,
+    pub resolved_by: Option<String>,
+    #[serde(default)]
+    pub review_response: Option<String>,
+    #[serde(default)]
+    pub reviewed_by: Option<String>,
+    #[serde(default)]
+    pub reviewed_at: Option<String>,
+    pub approved_participant_id: Option<String>,
+    #[serde(default)]
+    pub work_signature: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateRequestInput {
+    pub kind: String,
+    pub title: String,
+    pub body: String,
+    pub evidence: Option<String>,
+    pub task_id: Option<String>,
+    pub reviewer_id: Option<String>,
+    pub proposal: Option<AddParticipantInput>,
+    pub brief: Option<String>,
+    #[serde(default)]
+    pub options: Vec<String>,
 }

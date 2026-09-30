@@ -23,17 +23,27 @@ GitHub Project, independent peers, and a continuous shared conversation.
 6. Open a peer's session to inspect tools, answer approval requests or send provider controls.
    The room board is read-only: inspect task bodies/evidence, filter titles/priority/agents, and
    follow GitHub links. Peers change the canonical task through room tools.
-7. Pause the room to stop its provider processes. Resume preserves claims and provider context.
+7. Requests records agent proposals, questions for the human, independent peer reviews and
+   final completion. Approving an agent creates exactly one paused peer with its approved brief;
+   explicitly resume it when ready. Answer a decision in its card. Reviews go to a named different
+   peer and retain their evidence. Resolve requests for changes by cancelling the old request and
+   creating a new one after the correction. Completion needs all board work Done, no unfinished
+   claims or other open requests, fresh GitHub data, and independent peer verification. Pause the
+   room, refresh the board, and accept with a note to archive the completed room.
+8. Pause the room to stop its provider processes. Resume preserves claims and provider context.
    A peer that reaches its turn limit needs explicit Resume to grant another budget. Archive
    keeps the room, Project, conversation and worktrees. Removing a peer requires releasing its
    unfinished claims. Worktrees are retained; Merge is explicit and requires clean checkouts.
-8. Settings → Appearance includes persistent custom colors with reset and contrast handling.
+9. Settings → Appearance includes persistent custom colors with reset and contrast handling.
 
 ## Runtime boundaries
 
 The desktop host owns wakeups, not a model supervisor. It does not appoint a team lead or
-create additional agents. Peers ask the human through the room conversation when they need
-another agent, a decision or approval. The human adds peers through the room controls.
+create additional agents autonomously. Peers use persistent request cards to ask for another
+agent or a human decision and appoint independent reviewers. The human approves the proposed
+configuration and brief, answers decisions and accepts final completion. These actions are not
+available through agent MCP tools. Completion approval preserves the peer review evidence and
+checks that the board, claims and peer roster still match the reviewed snapshot.
 
 Every delivery reserves its budget and timer count in SQLite before sending. On an interrupted
 or ambiguous delivery, startup pauses that participant and does not replay the message. Inspect
@@ -48,12 +58,15 @@ claiming work still requires a fresh snapshot. The host runs while the desktop a
 including when hidden in the tray; it does not schedule work after Quit.
 
 Room-scoped stdio MCP tools provide snapshot, post_message, read_task, create_task, claim_task,
-finish_task and block_task. They bind one room and participant and check ownership and pauses.
+finish_task, block_task, release_task, request_agent, request_decision, request_review,
+respond_request and propose_completion. They bind one room and participant and check ownership,
+pauses and finite turn budgets for governance writes. Repeated identical request creation returns
+the existing record; conflicting reuse of a request title is rejected.
 Finishing requires a summary and evidence; the proof is stored on GitHub before marking Done.
 Exact task-creation intents are persisted to avoid blindly repeating uncertain writes. Creation
 waits for the new task to appear in the claimable Project snapshot. In-flight board reads cannot
 overwrite a task change or newer refresh committed while the read was pending.
-Codex approvals are configured only for the seven app-owned room tools using per-process
+Codex approvals are configured only for the thirteen app-owned room tools using per-process
 [per-tool overrides](https://learn.chatgpt.com/docs/config-file/config-reference).
 Other permission requests keep the provider's normal approval behavior.
 

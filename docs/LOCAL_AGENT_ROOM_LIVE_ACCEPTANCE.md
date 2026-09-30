@@ -165,6 +165,57 @@ leave unspecified values blank, and make these controls read-only. Native sideba
 confirmed Codex gpt-5.6-luna medium and Claude sonnet low, while an ordinary new chat
 retained its editable model control.
 
+## Structured requests, peer review and human completion
+
+The same Project #11 fixture exercised the full governance workflow through the rebuilt native
+UI and real local provider sessions. Codex builder created three durable requests through MCP:
+
+- `GOVERNANCE_HELPER` (`13ef2117-f49f-428c-96fd-0b85b270f8f1`): the native human approval
+  created one Codex `gpt-5.6-luna` / low peer, one-turn budget, approved brief and isolated
+  worktree `room/b5b20af9/13ef2117`. It was observed paused at 0/1 before explicit Resume.
+- `GOVERNANCE_DECISION` (`f9db7278-4815-46de-be01-de57ef07b794`): the native answer
+  selected local-only work/no fixture pushes. History retained the Human answer, and Codex
+  received and acknowledged the response in a later bounded turn.
+- `GOVERNANCE_REVIEW` (`b922519c-f761-40be-8407-47d696da1d91`): Claude reviewer
+  independently inspected the add implementation and test file, then approved through
+  `respond_request` with concrete evidence. Normal read permissions for another worktree
+  appeared in the native session and were explicitly allowed; room tools did not bypass them.
+
+Claude builder then created one tool-only `GOVERNANCE_HANDOFF` draft
+(`PVTI_lAHOAqBX8s4BlIyFzg9jzos`), claimed it, released it with
+`GOVERNANCE_RELEASE_REASON_OK`, repeated the identical release successfully, reclaimed the
+same item and finished with tool-result evidence. The release reason was observed in the room
+feed. All four canonical fixture tasks are Done, with no source changes from this audit task.
+
+An initial completion proposal omitted the already-performed human local merges. Native Reject
+recorded the correction and delivered it to Codex; the rejected proposal remains in history.
+The subsequently corrected `GOVERNANCE_COMPLETION`
+(`c994972f-5c40-46ab-bd51-403e5707c815`) came from the approved helper after explicit Resume.
+It successfully called `propose_completion` during its only reserved turn (1/1), then stopped.
+Claude reviewer independently inspected the merged repository and actually ran
+`python3 -m unittest discover -s tests -v` there: 29 tests passed. Its `respond_request`
+changed the completion card to Verified. The native Accept completion control remained disabled
+while the room was active, even with an acceptance note entered.
+
+Native Pause room stopped the actors, native Refresh board retrieved all four Done items, and
+Accept completion saved the Human note and archived the room. The accepted history retained
+both the independent reviewer response and the later Human response; the rejected completion,
+agent proposal, decision and code review also remained recorded. Quit/relaunch persistence was
+verified on the final bundle. The accepted request is captured in
+[the native governance screenshot](images/local-agent-room-governance.png), with the app frame
+fixed at 1280×800 and only the detail region scrolled. An independent GitHub read confirmed
+all four items Done, and the combined fixture checkout remained clean at HEAD b98933d.
+No fixture branch was pushed; all fixture worktrees are retained.
+
+Two bugs surfaced in this native pass and were repaired before closure: undefined reply-field
+bindings stopped Svelte request rendering, and the last-turn governance guard checked a state
+name the scheduler never writes. Reply bindings now start with empty strings. The guard accepts
+the scheduler's prepared/sent delivery states while rejecting queued/absent deliveries at the
+budget limit. A regression test reserves the final turn through the actual scheduler, verifies
+its governance writes and rejects an extra turn. Approval/rejection commands share an operation
+lock, and agent identity derives from its durable request. Completion snapshot, cancellation,
+permission, idempotency, competing SQLite connection and old-record cases are tested.
+
 ## Fixed app frame and internal scrolling
 
 The rebuilt native app was scrolled from the room summary to the bottom Task claims panel.
@@ -193,7 +244,7 @@ filtering, atomic message acknowledgement, timer edits between planning and rese
 delayed board reads racing confirmed writes, and clean/conflicting Git merges.
 
 Final `npm run verify` passed: 1,540 frontend tests, lint, formatting, type checks, locale checks,
-frontend build, Rust formatting and Clippy. The full Rust suite passed 870 tests with two existing
+frontend build, Rust formatting and Clippy. The full Rust suite passed 881 tests with two existing
 ignored tests. Svelte/locale checks retain existing warnings. The room MCP subprocess previously
 passed a real initialize/tools-list/snapshot/paused-write-rejection handshake using newline JSON-RPC.
 

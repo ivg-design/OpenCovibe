@@ -593,15 +593,7 @@ pub(crate) async fn start_session_impl(
         adapter_settings.codex_provider = None;
         adapter_settings.no_session_persistence = false;
         adapter_settings.ephemeral = false;
-        for tool in [
-            "snapshot",
-            "post_message",
-            "read_task",
-            "create_task",
-            "claim_task",
-            "finish_task",
-            "block_task",
-        ] {
+        for tool in crate::rooms::mcp::ROOM_TOOL_NAMES {
             adapter_settings
                 .allowed_tools
                 .push(format!("mcp__room__{tool}"));

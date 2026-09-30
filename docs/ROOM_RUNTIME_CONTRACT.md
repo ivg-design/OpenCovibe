@@ -36,8 +36,31 @@ requires a summary and evidence, written to GitHub before Done. Task creation pe
 intent so uncertain network outcomes require reconciliation rather than duplicate creation.
 
 Room-scoped stdio MCP tools are snapshot, post_message, read_task, create_task, claim_task,
-finish_task and block_task. Each subprocess binds one room and participant; writes check pauses
-and ownership. Codex's per-process approval override applies only to those seven tools.
+finish_task, block_task, release_task, request_agent, request_decision, request_review,
+respond_request and propose_completion. Each subprocess binds one room and participant; writes
+check pauses and ownership. Codex and Claude use the same thirteen-tool per-process allowlist;
+other provider permissions retain normal approval behavior.
+
+## Requests and acceptance
+
+Requests are atomically saved in the room database with a visible message. Review requests wake
+only their appointed peer through the existing directed-message delivery path. Human responses
+reach the requester through that same bounded path. Creating the same kind/title/content again
+is idempotent; reusing a title with changed content fails. Rejected or corrected requests remain
+in history, including the reviewer response even after human acceptance.
+
+An additional-agent request contains a proposed provider/model/effort/budget/worktree and brief.
+Only the desktop human command creates the peer, always paused. A durable creating state and
+request-derived peer/run/worktree identity make interrupted approval retryable without duplicates.
+Cancellation before the member is saved prevents creation; after it is saved the approval must
+be reconciled. Agents cannot approve proposals, answer human decisions or accept completion.
+
+Only a named different peer can approve a review or verify completion. Completion captures a
+stable board/claim/roster signature. Verification and final acceptance require the same signature,
+a fresh readable Project board (when attached), all tasks Done, no unfinished claims and no
+other unresolved requests. Final human acceptance additionally requires the room paused with no
+running/waiting/pending deliveries and archives it permanently. A changed snapshot requires
+cancelling the old proposal and submitting a new one.
 
 ## Workspaces
 

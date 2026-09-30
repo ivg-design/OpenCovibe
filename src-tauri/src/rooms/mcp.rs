@@ -1,6 +1,6 @@
 use super::{
-    github, github_tasks,
-    models::{Participant, Room},
+    github, github_tasks, governance,
+    models::{CreateRequestInput, Participant, Room},
     operations,
     store::RoomStore,
 };
@@ -14,6 +14,21 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const DB_NAME: &str = "rooms.sqlite3";
+pub const ROOM_TOOL_NAMES: &[&str] = &[
+    "snapshot",
+    "post_message",
+    "read_task",
+    "create_task",
+    "claim_task",
+    "finish_task",
+    "block_task",
+    "request_agent",
+    "request_decision",
+    "request_review",
+    "propose_completion",
+    "respond_request",
+    "release_task",
+];
 
 fn open_store(data_dir: &Path) -> Result<RoomStore, String> {
     if !data_dir.is_absolute() {
@@ -314,6 +329,111 @@ async fn call_tool(
                 json!({"task_id":task_id,"claim":updated.claims.iter().find(|c| c.task_id == task_id)}),
             )
         }
+        "request_agent" | "request_decision" | "request_review" | "propose_completion" => {
+            let (kind, title, body) = match name {
+                "request_agent" => (
+                    "agent",
+                    required_string(args, "title")?,
+                    required_string(args, "reason")?,
+                ),
+                "request_decision" => (
+                    "decision",
+                    required_string(args, "title")?,
+                    required_string(args, "question")?,
+                ),
+                "request_review" => (
+                    "review",
+                    required_string(args, "title")?,
+                    required_string(args, "instructions")?,
+                ),
+                _ => (
+                    "completion",
+                    required_string(args, "title")?,
+                    required_string(args, "summary")?,
+                ),
+            };
+            let string = |field: &str| args.get(field).and_then(Value::as_str).map(str::to_owned);
+            let input = CreateRequestInput {
+                kind: kind.into(),
+                title: title.into(),
+                body: body.into(),
+                evidence: string("evidence"),
+                task_id: string("task_id"),
+                reviewer_id: string("reviewer_id"),
+                brief: string("brief"),
+                proposal: args
+                    .get("proposal")
+                    .filter(|v| !v.is_null())
+                    .map(|v| {
+                        serde_json::from_value(v.clone())
+                            .map_err(|e| format!("invalid proposal: {e}"))
+                    })
+                    .transpose()?,
+                options: args
+                    .get("options")
+                    .filter(|v| !v.is_null())
+                    .map(|v| {
+                        serde_json::from_value(v.clone())
+                            .map_err(|e| format!("invalid options: {e}"))
+                    })
+                    .transpose()?
+                    .unwrap_or_default(),
+            };
+            let updated = governance::create_request(&store, room_id, participant_id, input)?;
+            Ok(
+                json!({"request": updated.requests.iter().rev().find(|r| r.requester_id == participant_id && r.kind == kind && r.title == title)}),
+            )
+        }
+        "respond_request" => {
+            let verdict = required_string(args, "verdict")?;
+            if !matches!(verdict, "approved" | "changes_requested") {
+                return Err("verdict must be approved or changes_requested".into());
+            }
+            let request_id = required_string(args, "request_id")?;
+            let response = required_string(args, "response")?;
+            let updated = governance::respond_request(
+                &store,
+                room_id,
+                participant_id,
+                request_id,
+                verdict == "approved",
+                response,
+            )?;
+            Ok(json!({"request": updated.requests.iter().find(|r| r.id == request_id)}))
+        }
+        "release_task" => {
+            operations::active_peer(&room, participant_id)?;
+            if peer.wake_count >= peer.max_turns
+                && peer
+                    .pending_delivery
+                    .as_ref()
+                    .is_none_or(|delivery| !matches!(delivery.state.as_str(), "prepared" | "sent"))
+            {
+                return Err("participant turn budget is exhausted".into());
+            }
+            let task_id = required_string(args, "task_id")?;
+            let claim = room
+                .claims
+                .iter()
+                .find(|c| c.task_id == task_id && c.participant_id == participant_id)
+                .ok_or("this participant does not own the task")?;
+            if claim.state == "released" {
+                return Ok(json!({"task_id": task_id, "released": true}));
+            }
+            if claim.state == "done" {
+                return Err("completed task cannot be released".into());
+            }
+            let reason = required_string(args, "reason")?;
+            if reason.len() > 4000 {
+                return Err("release reason exceeds 4000 bytes".into());
+            }
+            let updated =
+                operations::release_own_claim(&store, room_id, participant_id, task_id, reason)
+                    .await?;
+            Ok(
+                json!({"task_id": task_id, "claim": updated.claims.iter().find(|c| c.task_id == task_id)}),
+            )
+        }
         _ => Err(format!("unknown room tool: {name}")),
     }
 }
@@ -339,6 +459,7 @@ fn snapshot(room: &Room, peer: &Participant) -> Value {
         "messages":messages,
         "claims":room.claims,
         "timers":room.timers,
+        "requests":room.requests,
     })
 }
 
@@ -360,7 +481,13 @@ fn tool_definitions() -> Value {
         make("create_task","Create or find an exact-title draft task on the room's GitHub Project, then refresh its board.",&["title","body"],json!({"title":{"type":"string"},"body":{"type":"string"}})),
         make("claim_task","Atomically claim an eligible room board task and update GitHub.",&["task_id"],json!({"task_id":{"type":"string"}})),
         make("finish_task","Mark a task owned by this participant complete with summary and evidence.",&["task_id","summary","evidence"],json!({"task_id":{"type":"string"},"summary":{"type":"string"},"evidence":{"type":"string"}})),
-        make("block_task","Mark a task owned by this participant blocked and pause the participant.",&["task_id","reason"],json!({"task_id":{"type":"string"},"reason":{"type":"string"}}))
+        make("block_task","Mark a task owned by this participant blocked and pause the participant.",&["task_id","reason"],json!({"task_id":{"type":"string"},"reason":{"type":"string"}})),
+        make("request_agent","Request a new local peer for HUMAN approval. This never creates a peer or runs a model. Exact retries return the same request.",&["title","reason","brief","proposal"],json!({"title":{"type":"string"},"reason":{"type":"string"},"brief":{"type":"string"},"proposal":{"type":"object","properties":{"name":{"type":"string"},"provider":{"enum":["codex","claude"]},"model":{"type":["string","null"]},"effort":{"type":["string","null"]},"use_worktree":{"type":"boolean"},"max_turns":{"type":"integer","minimum":1,"maximum":200}},"required":["name","provider","use_worktree","max_turns"],"additionalProperties":false}})),
+        make("request_decision","Ask the human a durable question with optional choices and evidence. The answer wakes the requester when eligible.",&["title","question"],json!({"title":{"type":"string"},"question":{"type":"string"},"options":{"type":"array","items":{"type":"string"},"maxItems":5},"evidence":{"type":["string","null"]}})),
+        make("request_review","Ask another room peer to review evidence. The requester cannot approve their own review.",&["title","instructions","evidence","reviewer_id"],json!({"title":{"type":"string"},"instructions":{"type":"string"},"evidence":{"type":"string"},"reviewer_id":{"type":"string"},"task_id":{"type":["string","null"]}})),
+        make("propose_completion","Propose final room completion for independent peer verification, then human acceptance. The canonical board must be fresh and complete. This does not close the room.",&["title","summary","evidence","reviewer_id"],json!({"title":{"type":"string"},"summary":{"type":"string"},"evidence":{"type":"string"},"reviewer_id":{"type":"string"}})),
+        make("respond_request","Respond only to a review or completion assigned to you, with concrete review evidence. Only the human can answer decisions, add peers or accept final completion.",&["request_id","verdict","response"],json!({"request_id":{"type":"string"},"verdict":{"enum":["approved","changes_requested"]},"response":{"type":"string"}})),
+        make("release_task","Release only your own unfinished task back to the canonical board with a reason. Uncertain writes keep ownership until reconciled.",&["task_id","reason"],json!({"task_id":{"type":"string"},"reason":{"type":"string"}}))
     ])
 }
 
@@ -475,15 +602,7 @@ fn codex_overrides(server: &Value) -> Result<Vec<String>, String> {
         "-c".into(),
         "mcp_servers.room.tool_timeout_sec=120".into(),
     ];
-    for tool in [
-        "snapshot",
-        "post_message",
-        "read_task",
-        "create_task",
-        "claim_task",
-        "finish_task",
-        "block_task",
-    ] {
+    for tool in ROOM_TOOL_NAMES {
         overrides.extend([
             "-c".into(),
             format!("mcp_servers.room.tools.{tool}.approval_mode=\"approve\""),
@@ -497,7 +616,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn automatic_approval_is_limited_to_the_seven_scoped_room_tools() {
+    fn automatic_approval_is_limited_to_scoped_room_tools() {
         let args = codex_overrides(&json!({"command":"/tmp/Local App","args":["--room-mcp","--room-id","room","--participant-id","peer"]})).unwrap();
         for pair in args.chunks_exact(2) {
             assert_eq!(pair[0], "-c");
@@ -507,7 +626,7 @@ mod tests {
             .iter()
             .filter(|a| a.contains("approval_mode="))
             .collect();
-        assert_eq!(approvals.len(), 7);
+        assert_eq!(approvals.len(), 13);
         assert!(approvals.iter().all(|a| a.ends_with("=\"approve\"")));
         assert!(!args
             .iter()
@@ -574,6 +693,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn governance_tools_are_scoped_and_cannot_perform_human_approval() {
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = temp.path().join("data");
+        let store = RoomStore::open(&data_dir.join(DB_NAME)).unwrap();
+        let room = store
+            .create(crate::rooms::models::CreateRoomInput {
+                title: "Governance scope".into(),
+                objective: "Test authority".into(),
+                repo_path: temp.path().display().to_string(),
+                repository: "owner/repo".into(),
+                create_project: false,
+            })
+            .unwrap();
+        store
+            .update(&room.id, |room| {
+                room.paused = false;
+                room.participants.push(Participant {
+                    id: "peer".into(),
+                    name: "Peer".into(),
+                    paused: false,
+                    max_turns: 2,
+                    ..Default::default()
+                });
+                Ok(())
+            })
+            .unwrap();
+        let decision = call_tool(&data_dir, &room.id, "peer", "request_decision", &json!({"title":"Which approach?","question":"Choose for this test.","options":["A","B"]})).await.unwrap();
+        let request_id = decision["request"]["id"].as_str().unwrap();
+        let peer_answer = call_tool(
+            &data_dir,
+            &room.id,
+            "peer",
+            "respond_request",
+            &json!({"request_id":request_id,"verdict":"approved","response":"I choose A"}),
+        )
+        .await
+        .unwrap_err();
+        assert!(peer_answer.contains("only review and completion"));
+        for name in ["approve_room_agent", "resolve_room_request"] {
+            assert!(call_tool(&data_dir, &room.id, "peer", name, &json!({}))
+                .await
+                .unwrap_err()
+                .contains("unknown room tool"));
+            assert!(!ROOM_TOOL_NAMES.contains(&name));
+        }
+        store
+            .update(&room.id, |room| {
+                room.participants[0].paused = true;
+                Ok(())
+            })
+            .unwrap();
+        for name in [
+            "request_decision",
+            "request_agent",
+            "request_review",
+            "propose_completion",
+            "respond_request",
+            "release_task",
+        ] {
+            let result = call_tool(&data_dir, &room.id, "peer", name, &json!({"title":"No write","question":"Paused","reason":"Paused","instructions":"Paused","summary":"Paused","brief":"Paused","reviewer_id":"peer","verdict":"approved","request_id":request_id,"response":"Paused","task_id":"none"})).await;
+            assert!(
+                result.is_err(),
+                "{name} unexpectedly authorized a paused peer"
+            );
+        }
+        let saved = store.get(&room.id).unwrap();
+        assert_eq!(saved.requests.len(), 1);
+        assert_eq!(saved.requests[0].status, "pending");
+    }
+
+    #[tokio::test]
     async fn initialize_and_tools_list_advertise_the_room_protocol() {
         let temp = tempfile::tempdir().unwrap();
         let initialized = dispatch(temp.path(), "room", "peer", &json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}})).await.unwrap();
@@ -601,7 +791,13 @@ mod tests {
                 "create_task",
                 "claim_task",
                 "finish_task",
-                "block_task"
+                "block_task",
+                "request_agent",
+                "request_decision",
+                "request_review",
+                "propose_completion",
+                "respond_request",
+                "release_task"
             ]
         );
     }
@@ -647,6 +843,7 @@ mod tests {
             messages: vec![],
             timers: vec![],
             claims: vec![],
+            requests: vec![],
             auto_continue: true,
             max_concurrent: 3,
             archived: false,
