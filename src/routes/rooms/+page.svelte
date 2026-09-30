@@ -24,6 +24,7 @@
     removeRoomTimer,
     saveRoomTimer,
     setRoomAutoContinue,
+    setRoomConcurrency,
     setRoomPaused,
     setRoomParticipantPaused,
     wakeRoomParticipant,
@@ -287,7 +288,7 @@
 </script>
 
 <svelte:head><title>{tr("room_pageTitle")}</title></svelte:head>
-<main class="mx-auto max-w-7xl space-y-5 p-4 md:p-6">
+<main class="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col overflow-hidden p-4 md:p-6">
   <header class="flex flex-wrap items-start justify-between gap-3">
     <div>
       <h1 class="text-2xl font-semibold text-foreground">{tr("room_pageTitle")}</h1>
@@ -301,47 +302,13 @@
         >
       </div>{/if}
   </header>
-  {#if ready && !desktop}<Card class="p-5 text-sm text-muted-foreground"
+  {#if ready && !desktop}<Card class="mt-5 p-5 text-sm text-muted-foreground"
       >{tr("room_desktopOnly")}</Card
     >{:else if desktop}
-    {#if error}<div
-        class="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
-        role="alert"
-      >
-        {error}
-      </div>{/if}{#if notice}<div
-        class="rounded-md border border-primary/30 bg-primary/5 p-3 text-sm"
-        role="status"
-      >
-        {notice}
-      </div>{/if}
-    {#if showCreate}<Card class="p-4 md:p-5"
-        ><h2 class="mb-4 text-base font-semibold">{tr("room_createTitle")}</h2>
-        <form class="grid gap-3 md:grid-cols-2" onsubmit={submitCreate}>
-          <label class="space-y-1 text-xs text-muted-foreground"
-            ><span>{tr("room_titleLabel")}</span><Input bind:value={title} /></label
-          ><label class="space-y-1 text-xs text-muted-foreground"
-            ><span>{tr("room_repositoryLabel")}</span><Input
-              bind:value={repository}
-              placeholder="OWNER/REPO"
-            /></label
-          ><label class="space-y-1 text-xs text-muted-foreground md:col-span-2"
-            ><span>{tr("room_objectiveLabel")}</span><Textarea
-              bind:value={objective}
-              rows={3}
-            /></label
-          ><label class="space-y-1 text-xs text-muted-foreground md:col-span-2"
-            ><span>{tr("room_repoPathLabel")}</span><Input bind:value={repoPath} /></label
-          ><label class="flex items-center gap-2 text-sm md:col-span-2"
-            ><input type="checkbox" bind:checked={createProject} />{tr("room_createProject")}</label
-          >
-          <div class="md:col-span-2">
-            <Button loading={creating}>{tr("room_createRoom")}</Button>
-          </div>
-        </form></Card
-      >{/if}
-    <div class="grid gap-5 lg:grid-cols-[250px_minmax(0,1fr)]">
-      <aside class="space-y-2">
+    <div
+      class="mt-5 grid min-h-0 flex-1 grid-rows-[minmax(7rem,30%)_minmax(0,1fr)] gap-5 overflow-hidden lg:grid-cols-[250px_minmax(0,1fr)] lg:grid-rows-1"
+    >
+      <aside class="min-h-0 space-y-2 overflow-y-auto lg:max-h-full">
         <h2 class="px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {tr("room_savedRooms")}
         </h2>
@@ -361,7 +328,45 @@
             ></button
           >{/each}
       </aside>
-      <div class="min-w-0 space-y-5">
+      <div class="min-h-0 min-w-0 space-y-5 overflow-y-auto">
+        {#if error}<div
+            class="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
+            role="alert"
+          >
+            {error}
+          </div>{/if}{#if notice}<div
+            class="rounded-md border border-primary/30 bg-primary/5 p-3 text-sm"
+            role="status"
+          >
+            {notice}
+          </div>{/if}
+        {#if showCreate}<Card class="p-4 md:p-5"
+            ><h2 class="mb-4 text-base font-semibold">{tr("room_createTitle")}</h2>
+            <form class="grid gap-3 md:grid-cols-2" onsubmit={submitCreate}>
+              <label class="space-y-1 text-xs text-muted-foreground"
+                ><span>{tr("room_titleLabel")}</span><Input bind:value={title} /></label
+              ><label class="space-y-1 text-xs text-muted-foreground"
+                ><span>{tr("room_repositoryLabel")}</span><Input
+                  bind:value={repository}
+                  placeholder="OWNER/REPO"
+                /></label
+              ><label class="space-y-1 text-xs text-muted-foreground md:col-span-2"
+                ><span>{tr("room_objectiveLabel")}</span><Textarea
+                  bind:value={objective}
+                  rows={3}
+                /></label
+              ><label class="space-y-1 text-xs text-muted-foreground md:col-span-2"
+                ><span>{tr("room_repoPathLabel")}</span><Input bind:value={repoPath} /></label
+              ><label class="flex items-center gap-2 text-sm md:col-span-2"
+                ><input type="checkbox" bind:checked={createProject} />{tr(
+                  "room_createProject",
+                )}</label
+              >
+              <div class="md:col-span-2">
+                <Button loading={creating}>{tr("room_createRoom")}</Button>
+              </div>
+            </form></Card
+          >{/if}
         {#if selected}
           <Card class="p-4 md:p-5"
             ><div class="flex flex-wrap items-start justify-between gap-3">
@@ -434,6 +439,20 @@
                     )}
                 />{tr("room_autoContinue")}</label
               >
+              <label class="flex items-center gap-2 text-sm">
+                <span>{tr("room_concurrency")}</span>
+                <select
+                  class="h-9 rounded-md border bg-background px-2 text-sm"
+                  value={selected.max_concurrent}
+                  disabled={actionsDisabled}
+                  onchange={(event) =>
+                    void perform("concurrency", (id) =>
+                      setRoomConcurrency(id, Number(event.currentTarget.value)),
+                    )}
+                >
+                  {#each [1, 2, 3, 4, 5] as limit}<option value={limit}>{limit}</option>{/each}
+                </select>
+              </label>
               {#if !selected.archived}<Button
                   size="sm"
                   variant="outline"
@@ -450,6 +469,7 @@
           <RoomParticipants
             participants={selected.participants}
             claims={selected.claims}
+            roomPaused={selected.paused}
             disabled={actionsDisabled}
             {busyAction}
             onAction={participantAction}

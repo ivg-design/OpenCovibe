@@ -489,6 +489,7 @@
           </button>
         {:else}
           <span class="truncate text-foreground/80">{model}</span>
+          {#if effort}<span class="text-foreground/60 text-[10px]">{effort}</span>{/if}
         {/if}
       {/if}
 

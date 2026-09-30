@@ -1393,10 +1393,12 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<div class="flex h-screen overflow-hidden">
+<div class="flex h-dvh min-h-0 min-w-0 overflow-hidden">
   <!-- Sidebar: Icon Rail + Content Panel -->
   {#if sidebarOpen}
-    <aside class="flex shrink-0 bg-sidebar text-sidebar-foreground transition-all duration-200">
+    <aside
+      class="flex min-h-0 shrink-0 bg-sidebar text-sidebar-foreground transition-all duration-200"
+    >
       <!-- A. Icon Rail -->
       <div
         class="flex w-[44px] flex-col items-center border-r border-sidebar-border bg-black/[0.03] dark:bg-black/20"
@@ -2426,7 +2428,7 @@
   {/if}
 
   <!-- Main content -->
-  <div class="flex flex-1 flex-col overflow-hidden">
+  <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
     <UpdateBanner />
     <!-- Top bar (non-chat pages only — chat uses SessionStatusBar) -->
     {#if !isChatPage}
@@ -2463,7 +2465,10 @@
     {/if}
 
     <!-- Page content -->
-    <main class="flex-1 overflow-y-auto">
+    <main
+      class="min-h-0 min-w-0 flex-1 overflow-y-auto"
+      class:overflow-hidden={currentPath?.startsWith("/rooms")}
+    >
       {@render children()}
     </main>
   </div>

@@ -1846,7 +1846,7 @@
   "room_addTimer": "Add timer",
   "room_noTimers": "No timers configured.",
   "room_timerStats": "Every {interval}s · {count}/{max} deliveries · {mode}",
-  "room_anyState": "Any state",
+  "room_anyState": "Queue while busy",
   "room_disableTimer": "Disable",
   "room_enableTimer": "Enable",
   "room_autoContinue": "Continue to another eligible task after finishing",
@@ -1883,5 +1883,8 @@
   "room_closeTaskDetails": "Close task details",
   "room_taskBodyEmpty": "No task instructions were provided.",
   "room_resumeParticipant": "Resume",
-  "room_pauseParticipant": "Pause"
+  "room_pauseParticipant": "Pause",
+  "room_concurrency": "Concurrent turns",
+  "room_timerQueued": "Queued until this agent finishes its turn",
+  "room_timerModeHelp": "Idle-only timers wait; otherwise a due message queues while busy. Both deliver after the agent is idle and keep permission waits intact."
 }

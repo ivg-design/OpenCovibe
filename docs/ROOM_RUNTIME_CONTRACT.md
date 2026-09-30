@@ -8,13 +8,21 @@ Room messages form one continuous feed. No relay or remote collaborator service 
 
 Automatic task continuation requires an active room and participant, a fresh readable board,
 an eligible unclaimed or explicitly self-owned task, no pending turn or interaction, and a
-remaining turn budget. The host offers work without appointing a manager. Peers choose work
+remaining turn budget and a room concurrency slot (default 3, configurable from 1 to 5). The host offers work without appointing a manager. Peers choose work
 and claim it before changing the remote task or beginning the task.
 
 Human broadcasts and directed human/agent messages can wake idle peers. Agent broadcasts
 are visible without waking everyone. Timers have a minimum interval and a finite delivery limit;
 overdue messages coalesce while busy. Pauses, pending interactions and exhausted budgets block
-delivery. Failed/quota/blocked participants do not automatically retry.
+delivery. Failed/quota/blocked participants do not automatically retry. Non-idle-only timers
+persist one queued wake while busy; idle-only timers wait without queuing. Editing, disabling or
+deleting a timer cancels its old queued wake. A long scheduling gap coalesces missed intervals
+into one delivery rather than replaying a burst.
+
+Three completed automatic task turns with no change in task status, ownership, claims or
+completion evidence pause the peer with a visible reason. Chat chatter and timestamp changes
+do not count as task progress. Explicit Resume resets this counter and the turn budget.
+Permissions and clarifications expose a waiting reason; timed messages do not bypass them.
 
 SQLite commits delivery intent and reserves budget before the provider write. An ambiguous
 or interrupted delivery pauses its participant on restart until explicit Resume; it is never
@@ -40,8 +48,9 @@ worktree deletions.
 
 ## Acceptance
 
-The native acceptance scenario uses two actual providers in one room, automatic continuation
-to another task, ownership and GitHub completion proof, shared/directed messages, a timer,
-pause/budget stops, relaunch persistence, and an isolated Git worktree. Test-only GitHub fixtures
-belong in Project #9. Automated tests additionally cover interrupted delivery recovery and merge
-failure behavior. See [the acceptance record](LOCAL_AGENT_ROOM_LIVE_ACCEPTANCE.md).
+The acceptance target includes a room with three peers using both actual providers, independent
+worktrees, code changes and test/commit evidence, peer review messages, automatic continuation,
+GitHub ownership and completion, bounded timers, hidden-window continuation and relaunch
+persistence. Keep observed native results separate from deterministic policy tests. The original
+Project #9 arithmetic fixture alone does not close this target. See [the acceptance record](LOCAL_AGENT_ROOM_LIVE_ACCEPTANCE.md)
+for the actual results and remaining boundaries.

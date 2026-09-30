@@ -1,4 +1,4 @@
-use super::{plan, recover, reserve_delivery};
+use super::{plan, queue_due_timers, recover, reserve_delivery};
 use crate::rooms::{
     models::{BoardItem, Claim, CreateRoomInput, Delivery, Participant, Room, Timer},
     store::RoomStore,
@@ -89,6 +89,28 @@ fn participant(id: &str, name: &str) -> Participant {
     }
 }
 
+#[test]
+fn older_room_records_get_runtime_field_defaults() {
+    let fixture = Fixture::new();
+    let mut value = serde_json::to_value(&fixture.room).unwrap();
+    value.as_object_mut().unwrap().remove("max_concurrent");
+    for peer in value["participants"].as_array_mut().unwrap() {
+        peer.as_object_mut().unwrap().remove("no_progress_turns");
+        peer.as_object_mut().unwrap().remove("work_signature");
+    }
+    value["timers"] = serde_json::json!([{
+        "id":"timer-old", "participant_id":"peer-a", "message":"hello",
+        "interval_seconds":30, "idle_only":false, "enabled":true,
+        "next_due_at":1, "max_deliveries":2, "delivered_count":0, "last_error":null
+    }]);
+
+    let restored: Room = serde_json::from_value(value).unwrap();
+    assert_eq!(restored.max_concurrent, 3);
+    assert_eq!(restored.participants[0].no_progress_turns, 0);
+    assert_eq!(restored.participants[0].work_signature, None);
+    assert_eq!(restored.timers[0].queued_at, None);
+}
+
 fn claim(task_id: &str, participant_id: &str, state: &str) -> Claim {
     Claim {
         task_id: task_id.into(),
@@ -121,6 +143,7 @@ fn timer(id: &str, participant_id: &str, now: i64) -> Timer {
         idle_only: true,
         enabled: true,
         next_due_at: now - 1,
+        queued_at: None,
         max_deliveries: 2,
         delivered_count: 0,
         last_error: None,
@@ -239,6 +262,267 @@ fn paused_archived_busy_waiting_pending_and_budget_exhausted_peers_never_plan() 
     let mut exhausted = peer.clone();
     exhausted.wake_count = exhausted.max_turns;
     assert!(plan(&room, &exhausted, now).is_none());
+}
+
+#[test]
+fn concurrent_limit_is_checked_during_planning_and_atomic_reservation() {
+    let mut fixture = Fixture::new();
+    fixture.room = fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            room.max_concurrent = 1;
+            Ok(())
+        })
+        .unwrap();
+    let now = fixture.now();
+    let peer_a = fixture.peer("peer-a");
+    let peer_b = fixture.peer("peer-b");
+    let planned_a = plan(&fixture.room, &peer_a, now).unwrap();
+    let planned_b = plan(&fixture.room, &peer_b, now).unwrap();
+
+    reserve_delivery(&fixture.store, &fixture.room.id, &peer_a.id, planned_a).unwrap();
+    assert!(reserve_delivery(&fixture.store, &fixture.room.id, &peer_b.id, planned_b).is_err());
+    let after = fixture.store.get(&fixture.room.id).unwrap();
+    assert_eq!(
+        after
+            .participants
+            .iter()
+            .filter(|p| p.pending_delivery.is_some())
+            .count(),
+        1
+    );
+    assert!(plan(&after, &peer_b, now).is_none());
+}
+
+#[test]
+fn parallel_delivery_reservations_never_exceed_room_limit() {
+    let mut fixture = Fixture::new();
+    fixture.room = fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            room.max_concurrent = 1;
+            Ok(())
+        })
+        .unwrap();
+    let path = fixture._temp.path().join("rooms.sqlite3");
+    let room_id = fixture.room.id.clone();
+    let barrier = Arc::new(Barrier::new(3));
+    let mut joins = Vec::new();
+    for (peer_id, created_at) in [("peer-a", 100), ("peer-b", 101)] {
+        let peer_id = peer_id.to_owned();
+        let path = path.clone();
+        let room_id = room_id.clone();
+        let barrier = barrier.clone();
+        joins.push(std::thread::spawn(move || {
+            let store = RoomStore::open(Path::new(&path)).unwrap();
+            barrier.wait();
+            reserve_delivery(
+                &store,
+                &room_id,
+                &peer_id,
+                delivery("message", None, created_at),
+            )
+            .is_ok()
+        }));
+    }
+    barrier.wait();
+    let outcomes = joins
+        .into_iter()
+        .map(|join| join.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(outcomes.iter().filter(|won| **won).count(), 1);
+    assert_eq!(outcomes.iter().filter(|won| !**won).count(), 1);
+    let after = fixture.store.get(&room_id).unwrap();
+    assert_eq!(
+        after
+            .participants
+            .iter()
+            .filter(|p| p.pending_delivery.is_some())
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn busy_timer_is_durably_coalesced_and_delivered_once_after_long_gap() {
+    let fixture = Fixture::new();
+    let now = fixture.now();
+    fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            let peer = room
+                .participants
+                .iter_mut()
+                .find(|p| p.id == "peer-a")
+                .unwrap();
+            peer.state = "busy".into();
+            peer.pending_delivery = Some(delivery("task", None, now - 60_000));
+            room.timers.push(timer("timer-a", "peer-a", now - 10));
+            room.timers[0].idle_only = false;
+            Ok(())
+        })
+        .unwrap();
+
+    queue_due_timers(&fixture.store, &fixture.room.id, "peer-a", now).unwrap();
+    let first_queue = fixture.store.get(&fixture.room.id).unwrap().timers[0]
+        .queued_at
+        .unwrap();
+    queue_due_timers(&fixture.store, &fixture.room.id, "peer-a", now + 600_000).unwrap();
+    let queued = fixture.store.get(&fixture.room.id).unwrap();
+    assert_eq!(queued.timers[0].queued_at, Some(first_queue));
+    assert_eq!(queued.timers[0].delivered_count, 0);
+
+    let idle = fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            let peer = room
+                .participants
+                .iter_mut()
+                .find(|p| p.id == "peer-a")
+                .unwrap();
+            peer.state = "idle".into();
+            peer.pending_delivery = None;
+            Ok(())
+        })
+        .unwrap();
+    let peer = idle.participants.iter().find(|p| p.id == "peer-a").unwrap();
+    let planned = plan(&idle, peer, now + 600_000).unwrap();
+    assert_eq!(planned.timer_id.as_deref(), Some("timer-a"));
+    let delivered = reserve_delivery(&fixture.store, &fixture.room.id, "peer-a", planned).unwrap();
+    assert_eq!(delivered.timers[0].delivered_count, 1);
+    assert_eq!(delivered.timers[0].queued_at, None);
+    assert_eq!(delivered.timers[0].next_due_at, now + 630_000);
+}
+
+#[test]
+fn waiting_paused_and_idle_only_busy_peers_do_not_queue_timers() {
+    let fixture = Fixture::new();
+    let now = fixture.now();
+    fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            room.timers.push(timer("timer-a", "peer-a", now - 10));
+            room.timers[0].idle_only = false;
+            let peer = room
+                .participants
+                .iter_mut()
+                .find(|p| p.id == "peer-a")
+                .unwrap();
+            peer.state = "waiting".into();
+            Ok(())
+        })
+        .unwrap();
+    queue_due_timers(&fixture.store, &fixture.room.id, "peer-a", now).unwrap();
+    assert_eq!(
+        fixture.store.get(&fixture.room.id).unwrap().timers[0].queued_at,
+        None
+    );
+
+    fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            let peer = room
+                .participants
+                .iter_mut()
+                .find(|p| p.id == "peer-a")
+                .unwrap();
+            peer.state = "busy".into();
+            room.timers[0].idle_only = true;
+            Ok(())
+        })
+        .unwrap();
+    queue_due_timers(&fixture.store, &fixture.room.id, "peer-a", now).unwrap();
+    assert_eq!(
+        fixture.store.get(&fixture.room.id).unwrap().timers[0].queued_at,
+        None
+    );
+
+    fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            room.paused = true;
+            room.timers[0].idle_only = false;
+            Ok(())
+        })
+        .unwrap();
+    queue_due_timers(&fixture.store, &fixture.room.id, "peer-a", now).unwrap();
+    assert_eq!(
+        fixture.store.get(&fixture.room.id).unwrap().timers[0].queued_at,
+        None
+    );
+}
+
+#[test]
+fn task_turns_pause_after_three_unchanged_work_fingerprints() {
+    let mut peer = participant("peer", "Codex");
+    peer.work_signature = Some("same-work".into());
+    for completed in 1u32..=3 {
+        peer.state = "busy".into();
+        peer.pending_delivery = Some(delivery("task", None, completed as i64));
+        super::apply_event_state(
+            &mut peer,
+            "run_state",
+            &serde_json::json!({"state":"completed"}),
+            Some("same-work"),
+        );
+        assert_eq!(peer.no_progress_turns, completed);
+    }
+    assert!(peer.paused);
+    assert_eq!(peer.state, "no_progress");
+    assert!(peer
+        .last_error
+        .as_deref()
+        .unwrap()
+        .contains("3 completed task turns"));
+
+    let mut progressed = participant("peer", "Codex");
+    progressed.work_signature = Some("before".into());
+    progressed.no_progress_turns = 2;
+    progressed.pending_delivery = Some(delivery("task", None, 1));
+    super::apply_event_state(
+        &mut progressed,
+        "run_state",
+        &serde_json::json!({"state":"completed"}),
+        Some("after"),
+    );
+    assert_eq!(progressed.no_progress_turns, 0);
+}
+
+#[test]
+fn waiting_permission_and_quota_events_have_explicit_state() {
+    let mut peer = participant("peer", "Codex");
+    peer.state = "busy".into();
+    peer.pending_delivery = Some(delivery("task", None, 1));
+    super::apply_event_state(&mut peer, "permission_prompt", &serde_json::json!({}), None);
+    assert_eq!(peer.state, "waiting");
+    assert!(peer
+        .last_error
+        .as_deref()
+        .unwrap()
+        .contains("Waiting for human input"));
+
+    super::apply_event_state(
+        &mut peer,
+        "interaction_resolved",
+        &serde_json::json!({}),
+        None,
+    );
+    assert_eq!(peer.state, "busy");
+    assert_eq!(peer.last_error, None);
+
+    super::apply_event_state(
+        &mut peer,
+        "rate_limit_event",
+        &serde_json::json!({"status":"rejected"}),
+        None,
+    );
+    assert!(peer.paused);
+    assert_eq!(peer.state, "quota");
+    assert!(peer
+        .last_error
+        .as_deref()
+        .unwrap()
+        .contains("Provider quota rejected"));
 }
 
 #[test]

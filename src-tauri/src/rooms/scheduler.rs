@@ -83,12 +83,13 @@ pub fn timed_message(
     now_ms: i64,
 ) -> WakeDecision {
     if room.paused
+        || room.archived
         || peer.paused
         || !timer.enabled
         || timer.participant_id != peer.id
         || timer.message.trim().is_empty()
         || timer.interval_seconds < 30
-        || now_ms < timer.next_due_at
+        || (timer.queued_at.is_none() && now_ms < timer.next_due_at)
         || timer.delivered_count >= timer.max_deliveries
         || matches!(state, PeerState::Waiting | PeerState::Offline)
     {
@@ -96,7 +97,9 @@ pub fn timed_message(
     }
     match state {
         PeerState::Idle => WakeDecision::Timer(timer.id.clone()),
-        PeerState::Busy if !timer.idle_only => WakeDecision::QueueTimer(timer.id.clone()),
+        PeerState::Busy if !timer.idle_only && timer.queued_at.is_none() => {
+            WakeDecision::QueueTimer(timer.id.clone())
+        }
         _ => WakeDecision::Wait,
     }
 }
@@ -222,6 +225,7 @@ mod tests {
             idle_only: false,
             enabled: true,
             next_due_at: now - 1000,
+            queued_at: None,
             max_deliveries: 3,
             delivered_count: 0,
             last_error: None,

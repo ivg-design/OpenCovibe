@@ -42,6 +42,8 @@ export interface RoomParticipant {
   event_cursor: number;
   message_cursor: number;
   pending_delivery: RoomDelivery | null;
+  no_progress_turns: number;
+  work_signature: string | null;
 }
 
 export interface RoomDelivery {
@@ -83,6 +85,7 @@ export interface RoomTimer {
   next_due_at: number;
   max_deliveries: number;
   delivered_count: number;
+  queued_at: number | null;
   last_error: string | null;
 }
 
@@ -102,6 +105,7 @@ export interface Room {
   timers: RoomTimer[];
   claims: RoomClaim[];
   auto_continue: boolean;
+  max_concurrent: number;
   archived: boolean;
   runtime_error: string | null;
 }

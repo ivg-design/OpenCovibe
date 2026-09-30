@@ -107,6 +107,7 @@
           ><input type="checkbox" bind:checked={enabled} />{t("room_timerEnabled")}</label
         >
       </div>
+      <p class="text-xs text-muted-foreground md:col-span-2">{t("room_timerModeHelp")}</p>
       <div class="flex gap-2 md:col-span-2">
         <Button
           disabled={disabled ||
@@ -149,6 +150,9 @@
               mode: timer.idle_only ? t("room_idleOnly") : t("room_anyState"),
             })}
           </p>
+          {#if timer.queued_at}<p class="text-xs text-muted-foreground" role="status">
+              {t("room_timerQueued")}
+            </p>{/if}
           {#if timer.last_error}<p class="text-xs text-destructive" role="status">
               {timer.last_error}
             </p>{/if}

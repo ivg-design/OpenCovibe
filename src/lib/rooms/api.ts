@@ -81,3 +81,7 @@ export function readRoomTask(
 ): Promise<{ id: string; title: string; body: string; url: string | null; kind: string }> {
   return getTransport().invoke("read_room_task", { id, taskId });
 }
+
+export function setRoomConcurrency(id: string, limit: number): Promise<Room> {
+  return getTransport().invoke("set_room_concurrency", { id, limit });
+}

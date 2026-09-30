@@ -27,6 +27,25 @@ pub fn get_room(store: State<'_, Arc<RoomStore>>, id: String) -> Result<Room, St
     store.get(&id)
 }
 #[tauri::command]
+pub fn get_room_run_settings(
+    store: State<'_, Arc<RoomStore>>,
+    run_id: String,
+) -> Result<Option<serde_json::Value>, String> {
+    Ok(store.list()?.into_iter().find_map(|room| {
+        room.participants
+            .iter()
+            .find(|participant| participant.run_id == run_id)
+            .map(|participant| {
+                serde_json::json!({
+                    "model": participant.model,
+                    "effort": participant.effort,
+                    "room_id": room.id,
+                    "participant_id": participant.id,
+                })
+            })
+    }))
+}
+#[tauri::command]
 pub async fn create_room(
     store: State<'_, Arc<RoomStore>>,
     input: CreateRoomInput,
@@ -336,6 +355,8 @@ pub async fn add_room_participant(
         event_cursor: 0,
         message_cursor: 0,
         pending_delivery: None,
+        no_progress_turns: 0,
+        work_signature: None,
     };
     store.update(&id, |r| {
         if r.archived {
@@ -389,6 +410,8 @@ pub async fn set_room_participant_paused(
             p.paused = false;
             p.pending_delivery = None;
             p.wake_count = 0;
+            p.no_progress_turns = 0;
+            p.work_signature = None;
             p.last_error = None;
             p.state = "idle".into();
             Ok(())
@@ -536,6 +559,7 @@ pub fn save_room_timer(
                 .ok_or("timer not found")?;
             t.participant_id = input.participant_id;
             t.message = input.message.trim().into();
+            t.queued_at = None;
             t.interval_seconds = input.interval_seconds;
             t.idle_only = input.idle_only;
             t.enabled = input.enabled;
@@ -554,6 +578,7 @@ pub fn save_room_timer(
                     + input.interval_seconds as i64 * 1000,
                 max_deliveries: input.max_deliveries,
                 delivered_count: 0,
+                queued_at: None,
                 last_error: None,
             })
         }
@@ -733,4 +758,22 @@ pub async fn read_room_task(
     let room = store.get(&id)?;
     let project = room.project.ok_or("room has no GitHub Project")?;
     github_tasks::read_task(&project, &task_id).await
+}
+
+#[tauri::command]
+pub fn set_room_concurrency(
+    store: State<'_, Arc<RoomStore>>,
+    id: String,
+    limit: u32,
+) -> Result<Room, String> {
+    if !(1..=5).contains(&limit) {
+        return Err("concurrent turn limit must be between 1 and 5".into());
+    }
+    store.update(&id, |r| {
+        if r.archived {
+            return Err("room is archived".into());
+        }
+        r.max_concurrent = limit;
+        Ok(())
+    })
 }

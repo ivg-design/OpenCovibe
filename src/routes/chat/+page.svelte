@@ -741,6 +741,42 @@
 
   let effectiveModels = $derived(getModelsForAgent(effectiveAgent, { platformModels }));
   let currentEffort = $state("");
+  type RoomRunSettingsBinding = {
+    runId: string;
+    room_id: string;
+    participant_id: string;
+    model: string | null;
+    effort: string | null;
+  };
+  let runId = $derived($page.url.searchParams.get("run") ?? "");
+  let roomSettingsLoadingRunId = $state<string | null>(null);
+  let roomRunSettings = $state<RoomRunSettingsBinding | null>(null);
+  let isRoomSettingsScope = $derived(
+    !!runId &&
+      (store.run?.id !== runId ||
+        roomSettingsLoadingRunId === runId ||
+        roomRunSettings?.runId === runId),
+  );
+  let statusBarModel = $derived.by(() => {
+    const roomSettings = roomRunSettings;
+    if (isRoomSettingsScope) {
+      return roomSettings && roomSettings.runId === store.run?.id ? (roomSettings.model ?? "") : "";
+    }
+    return effectiveAgent === "codex"
+      ? codexDisplayModel(store.run?.model) ||
+          codexDisplayModel(store.model) ||
+          getCodexDefaultModel() ||
+          ""
+      : store.model;
+  });
+  let statusBarEffort = $derived.by(() => {
+    if (!store.features.effortSelector) return undefined;
+    if (!isRoomSettingsScope) return currentEffort;
+    const roomSettings = roomRunSettings;
+    return roomSettings && roomSettings.runId === store.run?.id
+      ? roomSettings.effort || undefined
+      : undefined;
+  });
   let isCodexAgent = $derived(store.agent === "codex");
   let assistantDisplayName = $derived(isCodexAgent ? "Codex" : t("chat_claude"));
 
@@ -748,6 +784,7 @@
   // also auto-populate default effort ("high") when empty and model supports it.
   $effect(() => {
     if (!store.features.effortSelector) return;
+    if (isRoomSettingsScope) return;
 
     // Codex: effort is user-driven and persisted to agent settings (not CLI config).
     // No auto-default — empty means "use Codex's own default" (spawn skips the flag).
@@ -969,6 +1006,7 @@
     if (scrollTo) _scrollToInFlight = true;
 
     await store.loadRun(id, xtermRef);
+    if (gen !== progressiveGen) return;
     if (id) folderCwdOverride = ""; // clear folder override when a real run loads
 
     // Reload project data with the run's cwd
@@ -1265,11 +1303,42 @@
   }
 
   // ── URL-derived (primitive values only — avoids $effect re-trigger on unrelated URL changes) ──
-  let runId = $derived($page.url.searchParams.get("run") ?? "");
   let hasResumeParam = $derived($page.url.searchParams.has("resume"));
   let folderParam = $derived($page.url.searchParams.get("folder"));
   let hostParam = $derived($page.url.searchParams.get("host"));
   let agentParam = $derived($page.url.searchParams.get("agent"));
+
+  let roomSettingsLookupSequence = 0;
+  async function loadRoomRunSettingsForRoute(id: string) {
+    const sequence = ++roomSettingsLookupSequence;
+    roomRunSettings = null;
+    roomSettingsLoadingRunId = id || null;
+    if (!id) return;
+
+    try {
+      const roomSettings = await getTransport().invoke<Omit<
+        RoomRunSettingsBinding,
+        "runId"
+      > | null>("get_room_run_settings", { runId: id });
+      if (sequence !== roomSettingsLookupSequence || runId !== id) return;
+      roomRunSettings = roomSettings ? { ...roomSettings, runId: id } : null;
+    } catch (error) {
+      if (sequence !== roomSettingsLookupSequence || runId !== id) return;
+      roomRunSettings = null;
+      dbg("chat", "room run settings lookup unavailable", { runId: id, error: String(error) });
+    } finally {
+      if (sequence === roomSettingsLookupSequence && runId === id) {
+        roomSettingsLoadingRunId = null;
+      }
+    }
+  }
+
+  // Resolve room-owned settings on every route change, including runs whose live
+  // session lets the run loader skip its normal history reload path.
+  $effect(() => {
+    const id = runId;
+    untrack(() => void loadRoomRunSettingsForRoute(id));
+  });
 
   // Consume ?agent= param: switch agent for new sessions, then clean URL
   $effect(() => {
@@ -2700,6 +2769,7 @@
   }
 
   async function handleModelChange(newModel: string) {
+    if (isRoomSettingsScope) return;
     dbg("chat", "model change", { agent: effectiveAgent, from: store.model, to: newModel });
     store.model = newModel;
 
@@ -2763,6 +2833,7 @@
   }
 
   async function handleEffortChange(newEffort: string) {
+    if (isRoomSettingsScope) return;
     dbg("chat", "effort change", { agent: effectiveAgent, from: currentEffort, to: newEffort });
     currentEffort = newEffort;
 
@@ -4540,12 +4611,7 @@
       running={store.sessionAlive}
       run={store.run}
       agent={store.run?.agent ?? store.agent}
-      model={effectiveAgent === "codex"
-        ? codexDisplayModel(store.run?.model) ||
-          codexDisplayModel(store.model) ||
-          getCodexDefaultModel() ||
-          ""
-        : store.model}
+      model={statusBarModel}
       cost={store.usage.cost}
       costAvailable={store.usage.costAvailable}
       inputTokens={cumulativeTokens.input}
@@ -4555,9 +4621,11 @@
       parentRunId={store.run?.parent_run_id}
       onEndSession={handleStop}
       onFork={forkOverlay ? undefined : () => handleResume("fork")}
-      onModelChange={handleModelChange}
-      effort={store.features.effortSelector ? currentEffort : undefined}
-      onEffortChange={store.features.effortSelector ? handleEffortChange : undefined}
+      onModelChange={isRoomSettingsScope ? undefined : handleModelChange}
+      effort={statusBarEffort}
+      onEffortChange={store.features.effortSelector && !isRoomSettingsScope
+        ? handleEffortChange
+        : undefined}
       onNavigateParent={store.run?.parent_run_id
         ? () => goto(`/chat?run=${store.run!.parent_run_id}`)
         : undefined}

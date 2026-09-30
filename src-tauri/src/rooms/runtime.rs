@@ -79,6 +79,7 @@ pub fn start(app: tauri::AppHandle) {
                     }
                 }
                 for peer in &room.participants {
+                    queue_due_timers(&store, &room.id, &peer.id, now).ok();
                     let current = match store.get(&room.id) {
                         Ok(r) => r,
                         Err(_) => continue,
@@ -204,6 +205,7 @@ pub fn plan(room: &Room, p: &Participant, now: i64) -> Option<Delivery> {
         || p.pending_delivery.is_some()
         || p.state != "idle"
         || p.wake_count >= p.max_turns
+        || busy_slots(room) >= room.max_concurrent.clamp(1, 5) as usize
     {
         return None;
     }
@@ -285,6 +287,73 @@ pub fn plan(room: &Room, p: &Participant, now: i64) -> Option<Delivery> {
     None
 }
 
+fn busy_slots(room: &Room) -> usize {
+    room.participants
+        .iter()
+        .filter(|p| p.state == "busy" || p.pending_delivery.is_some())
+        .count()
+}
+
+fn work_signature(room: &Room) -> String {
+    let mut tasks = room
+        .board
+        .items
+        .iter()
+        .map(|item| (&item.id, &item.status, &item.agent, &item.kind))
+        .collect::<Vec<_>>();
+    tasks.sort_by(|a, b| a.0.cmp(b.0));
+    let mut claims = room
+        .claims
+        .iter()
+        .map(|claim| {
+            (
+                &claim.task_id,
+                &claim.participant_id,
+                &claim.state,
+                &claim.summary,
+                &claim.evidence,
+            )
+        })
+        .collect::<Vec<_>>();
+    claims.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+    serde_json::to_string(&(tasks, claims)).unwrap_or_default()
+}
+
+fn queue_due_timers(
+    store: &RoomStore,
+    room_id: &str,
+    peer_id: &str,
+    now: i64,
+) -> Result<Room, String> {
+    store.update(room_id, |room| {
+        if room.paused || room.archived {
+            return Ok(());
+        }
+        let Some(peer) = room.participants.iter().find(|p| p.id == peer_id) else {
+            return Ok(());
+        };
+        if peer.paused || peer.state != "busy" {
+            return Ok(());
+        }
+        let due = room
+            .timers
+            .iter()
+            .filter(|t| t.participant_id == peer_id && t.queued_at.is_none())
+            .filter(|t| {
+                matches!(
+                    scheduler::timed_message(room, peer, t, PeerState::Busy, now),
+                    WakeDecision::QueueTimer(_)
+                )
+            })
+            .map(|t| t.id.clone())
+            .collect::<Vec<_>>();
+        for timer in room.timers.iter_mut().filter(|t| due.contains(&t.id)) {
+            timer.queued_at = Some(now);
+        }
+        Ok(())
+    })
+}
+
 fn reserve_delivery(
     store: &RoomStore,
     room_id: &str,
@@ -294,6 +363,9 @@ fn reserve_delivery(
     store.update(room_id, |r| {
         if r.paused || r.archived {
             return Err("room paused".into());
+        }
+        if busy_slots(r) >= r.max_concurrent.clamp(1, 5) as usize {
+            return Err("room concurrent participant limit reached".into());
         }
         let p = r
             .participants
@@ -316,12 +388,13 @@ fn reserve_delivery(
             if !t.enabled
                 || t.participant_id != peer_id
                 || t.delivered_count >= t.max_deliveries
-                || t.next_due_at > delivery.created_at
+                || (t.queued_at.is_none() && t.next_due_at > delivery.created_at)
             {
                 return Err("timer not due".into());
             }
             delivery.text = t.message.clone();
             t.delivered_count += 1;
+            t.queued_at = None;
             t.next_due_at = delivery
                 .created_at
                 .saturating_add((t.interval_seconds as i64).saturating_mul(1000));
@@ -329,9 +402,13 @@ fn reserve_delivery(
         // Capture the prompt and acknowledge its message cursor in the same transaction.
         // A message arriving after planning must either be included here or stay unread.
         delivery.text = prompt(r, p, &delivery);
+        let task_signature = (delivery.reason == "task").then(|| work_signature(r));
         let p = r.participants.iter_mut().find(|p| p.id == peer_id).unwrap();
         p.wake_count += 1;
         p.last_wake_at = Some(delivery.created_at);
+        if let Some(signature) = task_signature {
+            p.work_signature = Some(signature);
+        }
         p.message_cursor = r.messages.len();
         p.state = "busy".into();
         p.last_error = None;
@@ -418,36 +495,163 @@ pub(crate) fn import_events(
     store.update(room_id, |r| {
         for event in &page.events {
             let seq = event.get("_seq").and_then(|v| v.as_u64()).unwrap_or(0);
-            let Some(p) = r.participants.iter_mut().find(|p| p.id == peer.id) else { return Ok(()) };
-            if seq <= p.event_cursor { continue; }
             let kind = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
-            if kind == "message_complete" && event.get("parent_tool_use_id").is_none_or(|v| v.is_null()) {
-                if let Some(text) = event.get("text").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+            let completed_signature = (kind == "run_state"
+                && matches!(
+                    event.get("state").and_then(|v| v.as_str()).unwrap_or(""),
+                    "idle" | "completed"
+                ))
+            .then(|| work_signature(r));
+            let Some(p) = r.participants.iter_mut().find(|p| p.id == peer.id) else {
+                return Ok(());
+            };
+            if seq <= p.event_cursor {
+                continue;
+            }
+            if kind == "message_complete"
+                && event.get("parent_tool_use_id").is_none_or(|v| v.is_null())
+            {
+                if let Some(text) = event
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.trim().is_empty())
+                {
                     let source = format!("{}:{seq}", p.run_id);
-                    if !r.messages.iter().any(|m| m.source_event_id.as_ref() == Some(&source)) {
-                        r.messages.push(Message { id: uuid::Uuid::new_v4().to_string(), sender: p.name.clone(), body: text.into(), created_at: crate::models::now_iso(), participant_id: Some(p.id.clone()), target_participant_id: None, source_event_id: Some(source) });
+                    if !r
+                        .messages
+                        .iter()
+                        .any(|m| m.source_event_id.as_ref() == Some(&source))
+                    {
+                        r.messages.push(Message {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            sender: p.name.clone(),
+                            body: text.into(),
+                            created_at: crate::models::now_iso(),
+                            participant_id: Some(p.id.clone()),
+                            target_participant_id: None,
+                            source_event_id: Some(source),
+                        });
                     }
                 }
             }
-            match kind {
-                "permission_prompt" | "elicitation_prompt" | "hook_callback" => { if !p.paused { p.state = "waiting".into(); } }
-                "tool_start" if event.get("tool_name").and_then(|v| v.as_str()) == Some("AskUserQuestion") => { if !p.paused { p.state = "waiting".into(); } }
-                "interaction_resolved" | "control_cancelled" => { if !p.paused && p.pending_delivery.is_some() { p.state = "busy".into(); } }
-                "run_state" => match event.get("state").and_then(|v| v.as_str()).unwrap_or("") {
-                    "idle" | "completed" => { p.pending_delivery = None; if let Some(error) = event.get("error").and_then(|v| v.as_str()).filter(|e| !e.is_empty()) { p.paused = true; p.state = "failed".into(); p.last_error = Some(error.into()); } else if !p.paused { p.state = "idle".into(); } }
-                    "running" => { if !p.paused { p.state = "busy".into(); } }
-                    "failed" => { p.paused = true; p.state = "failed".into(); p.last_error = Some(event.get("error").and_then(|v| v.as_str()).unwrap_or("provider failed").into()); }
-                    "stopped" => { p.paused = true; p.state = "paused".into(); p.pending_delivery = None; }
-                    _ => {}
-                },
-                "rate_limit_event" if event.get("status").and_then(|v| v.as_str()) == Some("rejected") => { p.paused = true; p.state = "quota".into(); p.last_error = Some("Provider quota rejected this turn. Resume explicitly after allowance is available.".into()); }
-                _ => {}
-            }
+            apply_event_state(p, kind, event, completed_signature.as_deref());
             p.event_cursor = seq;
         }
         Ok(())
     })?;
     Ok(())
+}
+
+fn apply_event_state(
+    peer: &mut Participant,
+    kind: &str,
+    event: &serde_json::Value,
+    completed_signature: Option<&str>,
+) {
+    const WAITING_MESSAGE: &str =
+        "Waiting for human input to resolve a permission or clarification request.";
+    match kind {
+        "permission_prompt" | "elicitation_prompt" | "hook_callback" => {
+            if !peer.paused {
+                peer.state = "waiting".into();
+                peer.last_error = Some(WAITING_MESSAGE.into());
+            }
+        }
+        "tool_start"
+            if event.get("tool_name").and_then(|v| v.as_str()) == Some("AskUserQuestion") =>
+        {
+            if !peer.paused {
+                peer.state = "waiting".into();
+                peer.last_error = Some(WAITING_MESSAGE.into());
+            }
+        }
+        "interaction_resolved" | "control_cancelled" => {
+            if !peer.paused {
+                if peer.last_error.as_deref() == Some(WAITING_MESSAGE) {
+                    peer.last_error = None;
+                }
+                if peer.pending_delivery.is_some() {
+                    peer.state = "busy".into();
+                }
+            }
+        }
+        "run_state" => {
+            match event.get("state").and_then(|v| v.as_str()).unwrap_or("") {
+                "idle" | "completed" => {
+                    let task_turn = peer
+                        .pending_delivery
+                        .as_ref()
+                        .is_some_and(|d| d.reason == "task");
+                    peer.pending_delivery = None;
+                    if let Some(error) = event
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .filter(|e| !e.is_empty())
+                    {
+                        peer.paused = true;
+                        peer.state = "failed".into();
+                        peer.last_error = Some(error.into());
+                    } else if !peer.paused {
+                        if task_turn {
+                            record_task_turn_completion(peer, completed_signature);
+                        }
+                        if peer.no_progress_turns >= 3 {
+                            peer.paused = true;
+                            peer.state = "no_progress".into();
+                            peer.last_error = Some("Paused after 3 completed task turns without measurable claim or board progress. Resume explicitly to continue.".into());
+                        } else {
+                            peer.state = "idle".into();
+                            if peer.last_error.as_deref().is_some_and(|e| {
+                                e.starts_with("Paused after 3 completed task turns")
+                            }) {
+                                peer.last_error = None;
+                            }
+                        }
+                    }
+                }
+                "running" => {
+                    if !peer.paused {
+                        peer.state = "busy".into();
+                    }
+                }
+                "failed" => {
+                    peer.paused = true;
+                    peer.state = "failed".into();
+                    peer.last_error = Some(
+                        event
+                            .get("error")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("provider failed")
+                            .into(),
+                    );
+                }
+                "stopped" => {
+                    peer.paused = true;
+                    peer.state = "paused".into();
+                    peer.pending_delivery = None;
+                }
+                _ => {}
+            }
+        }
+        "rate_limit_event" if event.get("status").and_then(|v| v.as_str()) == Some("rejected") => {
+            peer.paused = true;
+            peer.state = "quota".into();
+            peer.last_error = Some("Provider quota rejected this turn. Resume explicitly after allowance is available.".into());
+        }
+        _ => {}
+    }
+}
+
+fn record_task_turn_completion(peer: &mut Participant, current_signature: Option<&str>) {
+    let Some(current_signature) = current_signature else {
+        return;
+    };
+    if peer.work_signature.as_deref() == Some(current_signature) {
+        peer.no_progress_turns = peer.no_progress_turns.saturating_add(1);
+    } else {
+        peer.no_progress_turns = 0;
+    }
+    peer.work_signature = Some(current_signature.into());
 }
 
 #[cfg(test)]

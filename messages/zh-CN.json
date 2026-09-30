@@ -1846,7 +1846,7 @@
   "room_addTimer": "添加定时器",
   "room_noTimers": "尚未配置定时器。",
   "room_timerStats": "每 {interval} 秒 · 已投递 {count}/{max} 次 · {mode}",
-  "room_anyState": "任何状态",
+  "room_anyState": "忙碌时排队",
   "room_disableTimer": "停用",
   "room_enableTimer": "启用",
   "room_autoContinue": "完成后继续处理下一个符合条件的任务",
@@ -1883,5 +1883,8 @@
   "room_closeTaskDetails": "关闭任务详情",
   "room_taskBodyEmpty": "此任务没有提供说明。",
   "room_resumeParticipant": "继续",
-  "room_pauseParticipant": "暂停"
+  "room_pauseParticipant": "暂停",
+  "room_concurrency": "并发轮次",
+  "room_timerQueued": "已排队，等待该智能体完成当前轮次",
+  "room_timerModeHelp": "仅空闲计时器等待空闲；否则到期消息会在忙碌时排队。两种模式均在智能体空闲后投递，不会绕过权限等待。"
 }

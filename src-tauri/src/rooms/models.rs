@@ -60,6 +60,10 @@ pub struct Participant {
     pub message_cursor: usize,
     #[serde(default)]
     pub pending_delivery: Option<Delivery>,
+    #[serde(default)]
+    pub no_progress_turns: u32,
+    #[serde(default)]
+    pub work_signature: Option<String>,
 }
 
 fn idle_state() -> String {
@@ -70,6 +74,9 @@ pub fn turn_limit() -> u32 {
 }
 fn yes() -> bool {
     true
+}
+pub fn default_max_concurrent() -> u32 {
+    3
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,6 +123,8 @@ pub struct Timer {
     pub idle_only: bool,
     pub enabled: bool,
     pub next_due_at: i64,
+    #[serde(default)]
+    pub queued_at: Option<i64>,
     pub max_deliveries: u32,
     pub delivered_count: u32,
     pub last_error: Option<String>,
@@ -156,6 +165,8 @@ pub struct Room {
     pub archived: bool,
     #[serde(default)]
     pub runtime_error: Option<String>,
+    #[serde(default = "default_max_concurrent")]
+    pub max_concurrent: u32,
 }
 
 #[derive(Debug, Deserialize)]

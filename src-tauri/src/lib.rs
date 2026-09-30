@@ -173,6 +173,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::rooms::list_rooms,
             commands::rooms::get_room,
+            commands::rooms::get_room_run_settings,
             commands::rooms::read_room_task,
             commands::rooms::create_room,
             commands::rooms::ensure_room_project,
@@ -186,6 +187,7 @@ pub fn run() {
             commands::rooms::save_room_timer,
             commands::rooms::remove_room_timer,
             commands::rooms::set_room_auto_continue,
+            commands::rooms::set_room_concurrency,
             commands::rooms::attach_room_project,
             commands::rooms::archive_room,
             commands::rooms::release_room_claim,

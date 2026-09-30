@@ -9,6 +9,7 @@
     participants,
     claims,
     disabled,
+    roomPaused,
     busyAction,
     onAction,
     onAdd,
@@ -16,6 +17,7 @@
     participants: RoomParticipant[];
     claims: { task_id: string; participant_id: string; state: string }[];
     disabled: boolean;
+    roomPaused: boolean;
     busyAction: string;
     onAction: (action: string, participant: RoomParticipant, message?: string) => void;
     onAdd: (input: {
@@ -81,7 +83,9 @@
     <label class="space-y-1 text-xs text-muted-foreground"
       ><span>{t("room_effortOptional")}</span><Input
         bind:value={effort}
-        placeholder="low / medium / high"
+        placeholder={provider === "codex"
+          ? "minimal / low / medium / high / xhigh"
+          : "low / medium / high"}
       /></label
     >
     <label class="space-y-1 text-xs text-muted-foreground"
@@ -156,7 +160,10 @@
           <Button
             size="sm"
             variant="outline"
-            disabled={disabled || isActive || !participant.worktree_path || !participant.paused}
+            disabled={disabled ||
+              isActive ||
+              !participant.worktree_path ||
+              (!roomPaused && !participant.paused)}
             onclick={() => onAction("merge", participant)}>{t("room_mergeWorktree")}</Button
           >
           <Button
@@ -212,7 +219,7 @@
                 <span>{claim.task_id} · {claim.state}</span><Button
                   size="sm"
                   variant="outline"
-                  disabled={disabled || isActive}
+                  disabled={disabled || isActive || (!roomPaused && !participant.paused)}
                   onclick={() => onAction(`release:${claim.task_id}`, participant)}
                   >{t("room_releaseClaim")}</Button
                 >
