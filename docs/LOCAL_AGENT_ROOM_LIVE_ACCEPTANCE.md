@@ -1,5 +1,10 @@
 # Live acceptance: 2026-09-29
 
+A later fresh packaged-app run created Project #12, exercised real Codex/Claude coding,
+automatic continuation, a tray timer, structured governance and full restart persistence.
+The merged fixture passed nine tests with no app code changes. See the
+[fresh end-to-end report](LOCAL_AGENT_ROOM_E2E_2026-09-29.md) for its evidence and boundaries.
+
 Environment: unsigned macOS debug bundle, identifier `design.ivg.opencovibe.local`,
 isolated `OPENCOVIBE_DATA_DIR=/Users/ivg/github/OpenCovibe/.local-data`.
 Tests used existing subscription-backed local CLI logins; no global provider configuration,
