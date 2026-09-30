@@ -72,6 +72,27 @@
       )
       .map((participant) => participant.id);
   }
+  function autoGrow(node: HTMLTextAreaElement, _value: string) {
+    const resize = () => {
+      node.style.height = "auto";
+      const maxHeight = Math.min(window.innerHeight * 0.3, 200);
+      node.style.height = `${Math.min(node.scrollHeight + 2, maxHeight)}px`;
+      node.style.overflowY = node.scrollHeight > maxHeight ? "auto" : "hidden";
+    };
+    const observer = new ResizeObserver(resize);
+    if (node.parentElement) observer.observe(node.parentElement);
+    window.addEventListener("resize", resize);
+    node.addEventListener("input", resize);
+    queueMicrotask(resize);
+    return {
+      update: resize,
+      destroy() {
+        observer.disconnect();
+        window.removeEventListener("resize", resize);
+        node.removeEventListener("input", resize);
+      },
+    };
+  }
   $effect(() => {
     const roomId = selected.id;
     const count = visibleMessages.length;
@@ -216,10 +237,10 @@
       </article>{/each}
   </div>
   <form class="shrink-0 border-t pt-2" onsubmit={submitMessage}>
-    <div class="flex flex-wrap items-end gap-2">
-      <label class="min-w-0 w-32 space-y-1 text-xs text-muted-foreground"
+    <div class="flex min-w-0 flex-wrap items-end gap-2">
+      <label class="min-w-0 w-32 flex-none space-y-1 text-xs text-muted-foreground"
         ><span class="sr-only">{tr("room_target")}</span><select
-          class="h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground"
+          class="min-h-9 w-full min-w-[90px] rounded-md border bg-background px-2 text-sm text-foreground"
           bind:value={targetParticipantId}
           ><option value="">{tr("room_everyone")}</option
           >{#each visibleParticipants as p (p.id)}<option value={p.id}>{p.name}</option
@@ -229,7 +250,9 @@
       <div class="min-w-0 flex-1 basis-36">
         <label
           ><span class="sr-only">{tr("room_messagePlaceholder")}</span><textarea
-            class="min-h-9 w-full resize-none rounded-md border bg-background px-3 py-2 text-sm"
+            use:autoGrow={humanMessage}
+            aria-label={tr("room_messagePlaceholder")}
+            class="block min-h-9 max-h-[min(30dvh,200px)] w-full min-w-0 resize-none overflow-y-hidden rounded-md border bg-background px-3 py-1.5 text-sm"
             rows="1"
             wrap="soft"
             bind:value={humanMessage}
@@ -247,6 +270,7 @@
       </div>
       <Button
         size="sm"
+        class="min-h-9 min-w-[90px]"
         disabled={!humanMessage.trim() || actionsDisabled}
         loading={busyAction === "message"}>{tr("room_sendMessage")}</Button
       >

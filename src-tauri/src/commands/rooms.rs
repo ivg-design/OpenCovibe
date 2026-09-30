@@ -8,7 +8,7 @@ use crate::{
             AddParticipantInput, CreateRoomInput, Participant, ParticipantSettings, ProjectStage,
             Room, RoomProject, SaveTimerInput, Timer,
         },
-        operations,
+        operations, repository,
         store::RoomStore,
         worktrees,
     },
@@ -32,37 +32,15 @@ pub struct RoomSessionSeed {
 }
 
 async fn session_repository(cwd: &str) -> Result<(String, String), String> {
-    async fn git(cwd: &str, args: &[&str]) -> Result<String, String> {
-        let output = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            tokio::process::Command::new("git")
-                .env("PATH", crate::agent::claude_stream::augmented_path())
-                .args(["-C", cwd])
-                .args(args)
-                .stdin(std::process::Stdio::null())
-                .kill_on_drop(true)
-                .output(),
-        )
-        .await
-        .map_err(|_| "Repository lookup timed out")?
-        .map_err(|e| e.to_string())?;
-        if !output.status.success() {
-            return Err("Choose a conversation in an existing Git repository.".into());
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).trim().into())
-    }
-    let root = git(cwd, &["rev-parse", "--show-toplevel"]).await?;
-    let remote = git(cwd, &["remote", "get-url", "origin"])
-        .await
-        .unwrap_or_default();
-    let repository = remote
-        .strip_prefix("https://github.com/")
-        .or_else(|| remote.strip_prefix("git@github.com:"))
-        .unwrap_or("")
-        .trim_end_matches(".git")
-        .trim_end_matches('/')
-        .to_owned();
-    Ok((root, repository))
+    let inspection = repository::inspect(cwd).await?;
+    Ok((inspection.repo_path, inspection.repository))
+}
+
+#[tauri::command]
+pub async fn inspect_room_repository(
+    path: String,
+) -> Result<repository::RepositoryInspection, String> {
+    repository::inspect(&path).await
 }
 
 #[tauri::command]
@@ -228,8 +206,13 @@ pub fn get_room_run_settings(
 #[tauri::command]
 pub async fn create_room(
     store: State<'_, Arc<RoomStore>>,
-    input: CreateRoomInput,
+    mut input: CreateRoomInput,
 ) -> Result<Room, String> {
+    let inspected = repository::inspect(&input.repo_path).await?;
+    input.repo_path = inspected.repo_path;
+    if input.repository.trim().is_empty() && !inspected.repository.is_empty() {
+        input.repository = inspected.repository;
+    }
     let create_project = input.create_project;
     let room = store.create(input)?;
     if create_project {

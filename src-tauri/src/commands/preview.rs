@@ -13,6 +13,20 @@ pub async fn open_preview_window(
 ) -> Result<(), String> {
     let parsed_url = validate_localhost(&url)?;
 
+    // Give a useful failure before opening an empty webview. Any HTTP response
+    // (including a login/error page) confirms that a local server is reachable.
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|_| "preview_unreachable".to_string())?;
+    client
+        .get(parsed_url.clone())
+        .send()
+        .await
+        .map_err(|_| "preview_unreachable".to_string())?;
+
     log::debug!(
         "[preview] open_preview_window: url={}, instance_id={}",
         url,
@@ -96,7 +110,7 @@ pub async fn close_preview_window(app: AppHandle) -> Result<(), String> {
 fn validate_localhost(url: &str) -> Result<url::Url, String> {
     let parsed = url::Url::parse(url).map_err(|e| format!("preview_invalid_url: {e}"))?;
     let host = parsed.host_str().unwrap_or("");
-    if !["localhost", "127.0.0.1", "0.0.0.0", "::1"].contains(&host) {
+    if !["localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"].contains(&host) {
         return Err(format!(
             "preview_invalid_url: only localhost allowed, got {}",
             host

@@ -79,10 +79,17 @@ export interface CliSessionSummary {
   sessionId: string;
   cwd: string;
   firstPrompt: string;
+  title?: string | null;
+  projectPath?: string;
+  isSubagent?: boolean;
+  isAutomated?: boolean;
+  parentSessionId?: string | null;
+  archived?: boolean;
   startedAt: string;
   lastActivityAt: string;
   /** Claude: message count; Codex: completed turn count */
   messageCount: number;
+  countsExact?: boolean;
   model?: string;
   cliVersion?: string;
   /** Claude: file size; Codex: sum of all rollout sizes */

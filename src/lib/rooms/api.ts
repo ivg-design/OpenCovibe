@@ -5,6 +5,7 @@ import type {
   CreateRoomInput,
   Room,
   RoomSessionSeed,
+  RepositoryInspection,
   SaveTimerInput,
 } from "./types";
 
@@ -22,6 +23,10 @@ export function createRoom(input: CreateRoomInput): Promise<Room> {
 
 export function getRoomSessionSeed(runId: string): Promise<RoomSessionSeed> {
   return getTransport().invoke("get_room_session_seed", { runId });
+}
+
+export function inspectRoomRepository(path: string): Promise<RepositoryInspection> {
+  return getTransport().invoke("inspect_room_repository", { path });
 }
 
 export function createRoomFromSession(

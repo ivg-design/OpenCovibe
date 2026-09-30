@@ -4,6 +4,7 @@ pub mod claude_usage;
 pub mod cli_config;
 pub mod cli_sessions;
 pub mod cli_sessions_common;
+pub mod codex_catalog;
 pub mod codex_sessions;
 pub mod codex_usage;
 pub mod community_skills;

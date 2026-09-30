@@ -610,7 +610,7 @@
             ? 'text-primary hover:bg-primary/10'
             : 'text-foreground/50 hover:text-foreground hover:bg-accent'}"
           onclick={onPreviewToggle}
-          title="Preview"
+          title={t("preview_label")}
         >
           <svg
             class="h-3 w-3"
@@ -622,7 +622,7 @@
             stroke-linejoin="round"
             ><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /></svg
           >
-          Preview
+          {t("preview_label")}
         </button>
       {/if}
       {#if !running && onRewind && persistedFiles && persistedFiles.length > 0}

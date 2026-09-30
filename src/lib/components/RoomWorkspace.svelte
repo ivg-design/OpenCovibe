@@ -38,6 +38,7 @@
     setRoomParticipantPaused,
     wakeRoomParticipant,
     updateRoomParticipantSettings,
+    inspectRoomRepository,
   } from "$lib/rooms/api";
   import type {
     CreateRoomInput,
@@ -48,6 +49,7 @@
     RoomTimer,
     RoomSessionSeed,
     SaveTimerInput,
+    RepositoryInspection,
   } from "$lib/rooms/types";
 
   const tr: typeof t = t;
@@ -89,7 +91,14 @@
     repoPath = $state(""),
     repository = $state(""),
     createProject = $state(true),
-    creating = $state(false);
+    creating = $state(false),
+    repoInspection = $state<RepositoryInspection | null>(null),
+    inspectingRepository = $state(false),
+    repositoryFolderError = $state(false),
+    manualRepository = $state(false),
+    selectedRemote = $state("");
+  let repositoryRequest = 0,
+    repositoryTimer: ReturnType<typeof setTimeout> | undefined;
   let humanMessage = $state(""),
     targetParticipantId = $state(""),
     activeSidechatId = $state("");
@@ -109,6 +118,8 @@
     return () => {
       window.clearInterval(timer);
       generation++;
+      repositoryRequest++;
+      if (repositoryTimer) clearTimeout(repositoryTimer);
     };
   });
   async function initialize() {
@@ -125,6 +136,7 @@
         objective = sourceSession.objective;
         repoPath = sourceSession.repo_path;
         repository = sourceSession.repository;
+        manualRepository = !sourceSession.repository;
         sourceProjectId = sourceSession.projects.length === 1 ? sourceSession.projects[0].id : "";
         createProject = sourceSession.projects.length === 0 && !sourceSession.project_error;
         showCreate = true;
@@ -135,6 +147,68 @@
       }
     }
     await loadRooms($page.url.searchParams.get("room") ?? storedSelection());
+  }
+  function onRepositoryPathInput(value: string) {
+    repoPath = value;
+    repositoryRequest++;
+    if (repositoryTimer) clearTimeout(repositoryTimer);
+    repoInspection = null;
+    repositoryFolderError = false;
+    selectedRemote = "";
+    repository = "";
+    manualRepository = false;
+    if (!value.trim()) {
+      inspectingRepository = false;
+      return;
+    }
+    inspectingRepository = true;
+    const request = repositoryRequest;
+    repositoryTimer = setTimeout(() => void detectRepository(value, request), 300);
+  }
+  async function detectRepository(path: string, request = ++repositoryRequest) {
+    inspectingRepository = true;
+    try {
+      const result = await inspectRoomRepository(path.trim());
+      if (request !== repositoryRequest) return;
+      repoInspection = result;
+      repositoryFolderError = false;
+      repoPath = result.repo_path;
+      selectedRemote = result.repositories[0]?.remote ?? "";
+      repository = result.repository;
+      manualRepository = result.repositories.length === 0;
+    } catch {
+      if (request === repositoryRequest) {
+        repoInspection = null;
+        repository = "";
+        manualRepository = true;
+        repositoryFolderError = true;
+      }
+    } finally {
+      if (request === repositoryRequest) inspectingRepository = false;
+    }
+  }
+  async function browseRepository() {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const chosen = await open({
+        directory: true,
+        multiple: false,
+        title: tr("room_chooseFolder"),
+        defaultPath: repoPath.trim() || undefined,
+      });
+      if (typeof chosen === "string") {
+        onRepositoryPathInput(chosen);
+        if (repositoryTimer) clearTimeout(repositoryTimer);
+        await detectRepository(chosen, repositoryRequest);
+      }
+    } catch {
+      error = tr("room_folderPickerError");
+    }
+  }
+  function selectRepositoryRemote(remote: string) {
+    selectedRemote = remote;
+    repository =
+      repoInspection?.repositories.find((item) => item.remote === remote)?.repository ?? "";
   }
   async function loadRooms(preferredRoomId: string | null = null) {
     if (!desktop) return;
@@ -235,7 +309,7 @@
   }
   async function submitCreate(event: SubmitEvent) {
     event.preventDefault();
-    if (!desktop || creating || busyAction || loadingRoom) return;
+    if (!desktop || creating || busyAction || loadingRoom || inspectingRepository) return;
     if (sourceSession?.projects.length && !sourceProjectId && !createProject) {
       error = tr("room_chooseProject");
       return;
@@ -269,6 +343,11 @@
       saveSelection(room.id);
       showCreate = false;
       title = objective = repoPath = repository = "";
+      repositoryRequest++;
+      repoInspection = null;
+      manualRepository = false;
+      repositoryFolderError = false;
+      inspectingRepository = false;
       createProject = true;
       sourceSession = null;
       sourceProjectId = "";
@@ -417,7 +496,18 @@
             size="sm"
             onclick={() => {
               showCreate = !showCreate;
-              if (!showCreate) sourceSession = null;
+              if (!showCreate) {
+                sourceSession = null;
+                repositoryRequest++;
+                if (repositoryTimer) clearTimeout(repositoryTimer);
+                inspectingRepository = false;
+                title = objective = repoPath = repository = "";
+                repoInspection = null;
+                manualRepository = false;
+                repositoryFolderError = false;
+                sourceProjectId = "";
+                createProject = true;
+              }
             }}>{showCreate ? tr("common_cancel") : tr("room_newRoom")}</Button
           >{/if}
       </div>{/if}
@@ -454,20 +544,95 @@
             <form class="grid gap-3 md:grid-cols-2" onsubmit={submitCreate}>
               <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
                 ><span>{tr("room_titleLabel")}</span><Input bind:value={title} /></label
-              ><label class="min-w-0 space-y-1 text-xs text-muted-foreground"
-                ><span>{tr("room_repositoryLabel")}</span><Input
-                  bind:value={repository}
-                  placeholder="OWNER/REPO"
-                /></label
-              ><label class="min-w-0 space-y-1 text-xs text-muted-foreground md:col-span-2"
+              >
+              <div class="min-w-0 space-y-2 text-xs text-muted-foreground md:col-span-2">
+                <span class="block">{tr("room_repoPathLabel")}</span>
+                <div class="flex min-w-0 flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onclick={() => void browseRepository()}
+                    disabled={!!sourceSession}
+                  >
+                    {tr("room_chooseFolder")}
+                  </Button>
+                  <span class="min-w-0 flex-1 break-all" title={repoPath}
+                    >{repoPath || tr("room_noFolderSelected")}</span
+                  >
+                  {#if inspectingRepository}<span role="status"
+                      >{tr("room_detectingRepository")}</span
+                    >{/if}
+                </div>
+                {#if repositoryFolderError}<p class="text-destructive" role="status">
+                    {tr("room_invalidGitFolderHelp")}
+                  </p>{/if}
+                {#if !sourceSession}<details class="min-w-0">
+                    <summary class="cursor-pointer text-primary"
+                      >{tr("room_advancedFolderPath")}</summary
+                    >
+                    <label class="mt-2 block min-w-0 space-y-1"
+                      ><span>{tr("room_repoPathLabel")}</span><Input
+                        value={repoPath}
+                        oninput={(event) =>
+                          onRepositoryPathInput((event.currentTarget as HTMLInputElement).value)}
+                        placeholder="/path/to/repository"
+                      /></label
+                    >
+                  </details>{/if}
+              </div>
+              {#if repoInspection && repoInspection.repositories.length > 1 && !manualRepository}
+                <label class="min-w-0 space-y-1 text-xs text-muted-foreground md:col-span-2">
+                  <span>{tr("room_repositoryLabel")}</span><select
+                    class="h-9 w-full min-w-0 rounded-md border bg-background px-2 text-sm text-foreground"
+                    value={selectedRemote}
+                    onchange={(event) => selectRepositoryRemote(event.currentTarget.value)}
+                  >
+                    {#each repoInspection.repositories as item (item.remote)}<option
+                        value={item.remote}>{item.remote} · {item.repository}</option
+                      >{/each}
+                  </select>
+                </label>
+              {:else if repoInspection && repoInspection.repositories.length && !manualRepository}
+                <div class="flex min-w-0 flex-wrap items-center gap-2 text-xs md:col-span-2">
+                  <span class="min-w-0 break-all text-muted-foreground"
+                    >{tr("room_githubRepository")}: {repository}</span
+                  >
+                  <button
+                    type="button"
+                    class="text-primary underline underline-offset-4"
+                    onclick={() => (manualRepository = true)}>{tr("room_editRepository")}</button
+                  >
+                </div>
+              {/if}
+              {#if manualRepository && !repositoryFolderError}
+                <label class="min-w-0 space-y-1 text-xs text-muted-foreground md:col-span-2">
+                  <span>{tr("room_repositoryLabel")}</span><Input
+                    bind:value={repository}
+                    placeholder="OWNER/REPO"
+                  />
+                  {#if repoInspection && repoInspection.repositories.length === 0}<span
+                      class="block">{tr("room_noGithubRemoteHelp")}</span
+                    >{/if}
+                  {#if repoInspection && repoInspection.repositories.length > 0}<span class="block"
+                      >{tr("room_repositoryOverrideHelp")}</span
+                    >{/if}
+                </label>
+              {:else if sourceSession}
+                <div class="flex min-w-0 flex-wrap items-center gap-2 text-xs md:col-span-2">
+                  <span class="min-w-0 break-all text-muted-foreground"
+                    >{tr("room_githubRepository")}: {repository}</span
+                  ><button
+                    type="button"
+                    class="text-primary underline underline-offset-4"
+                    onclick={() => (manualRepository = true)}>{tr("room_editRepository")}</button
+                  >
+                </div>
+              {/if}
+              <p class="text-xs text-muted-foreground md:col-span-2">{tr("room_repositoryHelp")}</p>
+              <label class="min-w-0 space-y-1 text-xs text-muted-foreground md:col-span-2"
                 ><span>{tr("room_objectiveLabel")}</span><Textarea
                   bind:value={objective}
                   rows={3}
-                /></label
-              ><label class="min-w-0 space-y-1 text-xs text-muted-foreground md:col-span-2"
-                ><span>{tr("room_repoPathLabel")}</span><Input
-                  bind:value={repoPath}
-                  disabled={!!sourceSession}
                 /></label
               >{#if sourceSession?.projects.length}<label
                   class="min-w-0 space-y-1 text-xs text-muted-foreground md:col-span-2"
@@ -498,7 +663,9 @@
                 />{tr("room_createProject")}</label
               >
               <div class="md:col-span-2">
-                <Button loading={creating}>{tr("room_createRoom")}</Button>
+                <Button loading={creating} disabled={inspectingRepository || repositoryFolderError}
+                  >{tr("room_createRoom")}</Button
+                >
               </div>
             </form></Card
           >{/if}

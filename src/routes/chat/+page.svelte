@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Button from "$lib/components/Button.svelte";
   import { page } from "$app/stores";
   import { goto, replaceState } from "$app/navigation";
   import { tick, onMount, untrack, getContext } from "svelte";
@@ -217,7 +218,17 @@
   let previewInstanceId = $state("");
   let previewOpen = $derived(previewInstanceId !== "");
   let previewUrlBarOpen = $state(false);
-  let previewUrlInput = $state(localStorage.getItem("ocv:preview-url") ?? "http://localhost:");
+  let previewUrlInput = $state("");
+  let previewOpening = $state(false);
+  let previewError = $state("");
+  const previewStorageKey = $derived(
+    `ocv:preview-url:${store.sessionCwd || store.run?.cwd || "new-chat"}`,
+  );
+  $effect(() => {
+    previewUrlInput = localStorage.getItem(previewStorageKey) ?? "";
+    previewError = "";
+    previewUrlBarOpen = false;
+  });
 
   // ── Model contamination helpers ──
 
@@ -3033,7 +3044,9 @@
     }
   }
 
-  async function openPreview(url: string): Promise<"ok" | "invalid_url" | "open_failed"> {
+  async function openPreview(
+    url: string,
+  ): Promise<"ok" | "invalid_url" | "open_failed" | "unreachable"> {
     dbg("preview", "openPreview", { url });
     if (!isLocalhostUrl(url)) return "invalid_url";
 
@@ -3043,13 +3056,14 @@
 
     try {
       await api.openPreviewWindow(url, instanceId);
-      localStorage.setItem("ocv:preview-url", url);
+      localStorage.setItem(previewStorageKey, url);
       return "ok";
     } catch (e) {
       dbgWarn("preview", "openPreview failed", e);
       resetPreviewState();
       const msg = String(e);
       if (msg.startsWith("preview_invalid_url:")) return "invalid_url";
+      if (msg.includes("preview_unreachable")) return "unreachable";
       return "open_failed";
     }
   }
@@ -3066,13 +3080,27 @@
 
   /** Open preview + show result as command output. Returns true on success. */
   async function openPreviewAndNotify(url: string): Promise<boolean> {
-    const result = await openPreview(url);
-    if (result === "ok") {
-      appendCommandOutput(t("preview_opened"));
-      return true;
+    if (previewOpening) return false;
+    previewOpening = true;
+    previewError = "";
+    try {
+      const result = await openPreview(url);
+      if (result === "ok") {
+        appendCommandOutput(t("preview_opened"));
+        return true;
+      }
+      previewError = t(
+        result === "invalid_url"
+          ? "preview_invalidUrl"
+          : result === "unreachable"
+            ? "preview_unreachable"
+            : "preview_openFailed",
+      );
+      previewUrlBarOpen = true;
+      return false;
+    } finally {
+      previewOpening = false;
     }
-    appendCommandOutput(t(result === "invalid_url" ? "preview_invalidUrl" : "preview_openFailed"));
-    return false;
   }
 
   function formatElementContext(sel: ElementSelection): string {
@@ -3572,7 +3600,7 @@
         await closePreview();
         appendCommandOutput(t("preview_closed"));
       } else {
-        const lastUrl = localStorage.getItem("ocv:preview-url");
+        const lastUrl = localStorage.getItem(previewStorageKey);
         if (lastUrl) {
           await openPreviewAndNotify(lastUrl);
         } else {
@@ -4812,63 +4840,83 @@
 
     <!-- Preview URL input bar -->
     {#if previewUrlBarOpen}
-      <div class="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-muted/30 text-xs">
-        <svg
-          class="w-3.5 h-3.5 shrink-0 text-muted-foreground"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-        >
-          <circle cx="12" cy="12" r="10" /><path
-            d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"
-          />
-        </svg>
-        <input
-          id="__preview-url-input"
-          type="text"
-          bind:value={previewUrlInput}
-          placeholder="http://localhost:3000"
-          class="flex-1 bg-transparent border-none outline-none text-xs text-foreground placeholder:text-muted-foreground/50 font-mono"
-          onkeydown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              const url = previewUrlInput.trim();
-              if (url) {
-                openPreviewAndNotify(url).then((ok) => {
-                  if (ok) previewUrlBarOpen = false;
-                });
-              }
-            } else if (e.key === "Escape") {
-              previewUrlBarOpen = false;
-            }
-          }}
-        />
-        {#if previewOpen}
-          <button
-            onclick={() => {
-              closePreview();
-              previewUrlBarOpen = false;
-            }}
-            class="px-2 py-0.5 rounded text-xs bg-muted hover:bg-accent text-foreground transition-colors"
-          >
-            {t("preview_close")}
-          </button>
-        {/if}
-        <button
-          onclick={() => {
-            previewUrlBarOpen = false;
-          }}
-          class="text-muted-foreground hover:text-foreground transition-colors"
-        >
+      <div class="min-w-0 shrink-0 space-y-2 px-3 py-2 border-b border-border bg-muted/30 text-xs">
+        <p class="text-muted-foreground">{t("preview_help")}</p>
+        {#if previewError}<p class="text-destructive" role="alert">{previewError}</p>{/if}
+        <div class="flex min-w-0 flex-wrap items-center gap-2">
           <svg
-            class="w-3.5 h-3.5"
+            class="w-3.5 h-3.5 shrink-0 text-muted-foreground"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
-            stroke-width="2"><path d="M18 6 6 18M6 6l12 12" /></svg
+            stroke-width="2"
           >
-        </button>
+            <circle cx="12" cy="12" r="10" /><path
+              d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"
+            />
+          </svg>
+          <input
+            id="__preview-url-input"
+            type="text"
+            bind:value={previewUrlInput}
+            oninput={(e) => {
+              if (!e.currentTarget.value.trim()) localStorage.removeItem(previewStorageKey);
+              previewError = "";
+            }}
+            placeholder="http://localhost:3000"
+            aria-label={t("preview_label")}
+            class="min-w-0 flex-[1_1_12rem] bg-transparent border rounded px-2 py-2 outline-none text-xs text-foreground placeholder:text-muted-foreground/50 font-mono"
+            onkeydown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                const url = previewUrlInput.trim();
+                if (url) {
+                  openPreviewAndNotify(url).then((ok) => {
+                    if (ok) previewUrlBarOpen = false;
+                  });
+                }
+              } else if (e.key === "Escape") {
+                previewUrlBarOpen = false;
+              }
+            }}
+          />
+          <Button
+            type="button"
+            size="sm"
+            disabled={!isLocalhostUrl(previewUrlInput.trim())}
+            loading={previewOpening}
+            onclick={() => {
+              void openPreviewAndNotify(previewUrlInput.trim()).then((ok) => {
+                if (ok) previewUrlBarOpen = false;
+              });
+            }}>{t("preview_open")}</Button
+          >
+          {#if previewOpen}
+            <button
+              onclick={() => {
+                closePreview();
+                previewUrlBarOpen = false;
+              }}
+              class="px-2 py-0.5 rounded text-xs bg-muted hover:bg-accent text-foreground transition-colors"
+            >
+              {t("preview_close")}
+            </button>
+          {/if}
+          <button
+            onclick={() => {
+              previewUrlBarOpen = false;
+            }}
+            class="text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <svg
+              class="w-3.5 h-3.5"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"><path d="M18 6 6 18M6 6l12 12" /></svg
+            >
+          </button>
+        </div>
       </div>
     {/if}
 

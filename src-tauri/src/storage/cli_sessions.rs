@@ -1065,9 +1065,16 @@ fn extract_summary(
 
     Ok(Some(CliSessionSummary {
         agent: "claude".to_string(),
-        session_id,
-        cwd: matched_cwd,
+        session_id: session_id.clone(),
+        cwd: matched_cwd.clone(),
         first_prompt: first_prompt.unwrap_or_default(),
+        title: indexed_title(path, &session_id),
+        project_path: super::codex_catalog::project_path(&matched_cwd),
+        is_subagent: false,
+        is_automated: false,
+        parent_session_id: None,
+        archived: false,
+        counts_exact: head_bytes >= size,
         started_at: started_at.unwrap_or_default(),
         last_activity_at: last_ts.unwrap_or_default(),
         message_count,
@@ -1083,6 +1090,21 @@ fn extract_summary(
 }
 
 // ── Import ──────────────────────────────────────────────────────────
+
+fn indexed_title(path: &Path, session_id: &str) -> Option<String> {
+    let index = path.parent()?.join("sessions-index.json");
+    let value: Value = serde_json::from_slice(&std::fs::read(index).ok()?).ok()?;
+    let entry = value["entries"]
+        .as_array()?
+        .iter()
+        .find(|e| e["sessionId"].as_str() == Some(session_id))?;
+    entry
+        .get("customTitle")
+        .or_else(|| entry.get("summary"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_owned)
+}
 
 /// Import a CLI session as a new run.
 pub fn import_session(
@@ -1237,7 +1259,7 @@ pub fn import_session(
         result_subtype: None,
         model,
         parent_run_id: None,
-        name: None,
+        name: indexed_title(&cli_path, session_id),
         remote_host_name: None,
         remote_cwd: None,
         remote_host_snapshot: None,

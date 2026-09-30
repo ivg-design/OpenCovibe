@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -34,7 +34,7 @@ use std::time::{Duration, SystemTime};
 
 const MAX_DISCOVER_CANDIDATES: usize = 500;
 const SCAN_HEAD_LINES_FOR_FIRST_PROMPT: usize = 100;
-const SUMMARY_CACHE_VERSION: u32 = 2;
+const SUMMARY_CACHE_VERSION: u32 = 3;
 
 fn summary_cache_path() -> PathBuf {
     scan_cache_path("codex-summary-scan-cache.json")
@@ -47,6 +47,7 @@ fn summary_cache_path() -> PathBuf {
 struct SummaryFileScan {
     /// Count of `event_msg/task_complete` records in this file.
     task_complete_count: u32,
+    counts_exact: bool,
     /// Last `timestamp` field seen in the file (for last_activity_at).
     last_ts: Option<String>,
     /// First `user_message` text within the head window (truncated for the prompt preview).
@@ -58,7 +59,7 @@ struct SummaryFileScan {
 // ── Paths ────────────────────────────────────────────────────────────
 
 fn codex_sessions_dir() -> Option<PathBuf> {
-    super::dirs_next().map(|h| h.join(".codex").join("sessions"))
+    super::codex_catalog::home().map(|h| h.join("sessions"))
 }
 
 /// Validate path is within `~/.codex/sessions/` (path traversal guard).
@@ -104,6 +105,7 @@ struct RolloutMeta {
     cwd: String,
     cli_version: Option<String>,
     model_provider: Option<String>,
+    source: Value,
 }
 
 fn mtime_ns(meta: &fs::Metadata) -> u128 {
@@ -219,6 +221,7 @@ fn read_first_session_meta(path: &Path) -> Result<RolloutMeta, String> {
             cwd,
             cli_version,
             model_provider,
+            source: payload.get("source").cloned().unwrap_or_default(),
         });
     }
     Err("empty rollout file".to_string())
@@ -228,33 +231,66 @@ fn read_first_session_meta(path: &Path) -> Result<RolloutMeta, String> {
 
 /// Discover Codex sessions grouped by thread_id.
 ///
-/// **Hard contract**: this function may truncate to `MAX_DISCOVER_CANDIDATES`
-/// rollout files (mtime desc). Import does a fresh full walk via
-/// `find_rollouts_for_thread`, so old rollouts beyond truncation are still
-/// importable once the user selects a thread.
+/// Project, source and name filters run across all metadata before limiting
+/// the returned conversations. Import reads every rollout for a selected thread;
+/// bounded discovery previews never truncate the imported history.
 pub fn discover_sessions(target_cwd: &str) -> Result<DiscoverResult, String> {
-    let root = match codex_sessions_dir() {
-        Some(r) => r,
-        None => {
-            return Ok(DiscoverResult {
-                sessions: Vec::new(),
-                total: 0,
-                truncated: false,
-            })
-        }
-    };
+    discover_sessions_filtered(target_cwd, false, false, "")
+}
+
+pub fn discover_sessions_filtered(
+    target_cwd: &str,
+    include_subagents: bool,
+    include_archived: bool,
+    query: &str,
+) -> Result<DiscoverResult, String> {
+    let home = super::codex_catalog::home().ok_or("Cannot locate Codex conversations")?;
     let imported = build_imported_index_cached(Duration::from_secs(30));
-    discover_sessions_in_root(&root, target_cwd, &imported, &summary_cache_path())
+    let catalog = super::codex_catalog::read(&home);
+    discover_with_catalog(
+        &home.join("sessions"),
+        target_cwd,
+        &imported,
+        &summary_cache_path(),
+        &catalog,
+        include_subagents,
+        include_archived,
+        query,
+    )
 }
 
 /// Testable inner: discovery against an explicit root + imported-index. The
 /// summary scan cache lives at `cache_path` (a parameter so tests give each run
 /// its own file — no shared global cache state).
+#[cfg(test)]
 fn discover_sessions_in_root(
     root: &Path,
     target_cwd: &str,
     imported: &crate::storage::cli_sessions::ImportedIndex,
     cache_path: &Path,
+) -> Result<DiscoverResult, String> {
+    discover_with_catalog(
+        root,
+        target_cwd,
+        imported,
+        cache_path,
+        &HashMap::new(),
+        true,
+        true,
+        "",
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn discover_with_catalog(
+    root: &Path,
+    target_cwd: &str,
+    imported: &crate::storage::cli_sessions::ImportedIndex,
+    cache_path: &Path,
+    catalog: &HashMap<String, super::codex_catalog::ThreadInfo>,
+    include_subagents: bool,
+    include_archived: bool,
+    query: &str,
 ) -> Result<DiscoverResult, String> {
     let start = std::time::Instant::now();
     if !root.exists() {
@@ -265,41 +301,42 @@ fn discover_sessions_in_root(
         });
     }
 
-    let mut files = collect_rollout_files(root);
-    files.sort_by_key(|x| std::cmp::Reverse(x.2));
-    let total_candidates = files.len();
-    let truncated = files.len() > MAX_DISCOVER_CANDIDATES;
-    if truncated {
-        files.truncate(MAX_DISCOVER_CANDIDATES);
-    }
-
-    log::debug!(
-        "[codex_sessions] discover: {} candidate files (total={}, truncated={})",
-        files.len(),
-        total_candidates,
-        truncated
-    );
-
+    let files = collect_rollout_files(root);
+    // Resolve tiny metadata before limiting; unrelated projects and subagents
+    // must never consume another project's discovery window.
     let parsed: Vec<RolloutFileInfo> = files
         .par_iter()
-        .filter_map(|(path, size, mtime, mtime_ns_val)| {
-            let meta = read_first_session_meta(path).ok()?;
+        .filter_map(|(path, size, mtime, ns)| {
+            let stem = path.file_stem()?.to_str()?;
+            let id = stem
+                .len()
+                .checked_sub(36)
+                .and_then(|start| stem.get(start..));
+            let meta = if let Some((id, info)) = id.and_then(|id| {
+                catalog
+                    .get(id)
+                    .filter(|i| !i.cwd.is_empty())
+                    .map(|i| (id, i))
+            }) {
+                RolloutMeta {
+                    thread_id: id.to_owned(),
+                    timestamp: info.created_at.clone(),
+                    cwd: info.cwd.clone(),
+                    source: info.source.clone(),
+                    ..Default::default()
+                }
+            } else {
+                read_first_session_meta(path).ok()?
+            };
             Some(RolloutFileInfo {
                 path: path.clone(),
                 size: *size,
                 mtime: *mtime,
-                mtime_ns: *mtime_ns_val,
+                mtime_ns: *ns,
                 meta,
             })
         })
         .collect();
-
-    // Scan each rollout's body once, reusing unchanged files from the disk cache
-    // (key = path + mtime_ns + size). This is the expensive part of discovery —
-    // it used to be a single-threaded per-thread re-parse on every call.
-    let scans = scan_summary_files(&parsed, cache_path);
-
-    // Group by thread_id
     let mut groups: HashMap<String, Vec<RolloutFileInfo>> = HashMap::new();
     for fi in parsed {
         groups
@@ -307,18 +344,102 @@ fn discover_sessions_in_root(
             .or_default()
             .push(fi);
     }
-
     let show_all = target_cwd.is_empty() || target_cwd == "/";
-
-    let mut summaries: Vec<CliSessionSummary> = groups
+    let target_project = super::codex_catalog::project_path(target_cwd);
+    let query = query.trim().to_lowercase();
+    let mut projects = HashMap::new();
+    let mut eligible: Vec<_> = groups
         .into_iter()
-        .filter_map(|(thread_id, mut files)| {
-            files.sort_by_key(|f| f.mtime); // asc
+        .filter_map(|(id, mut files)| {
+            files.sort_by_key(|f| f.mtime);
             let latest = files.last()?;
-            if !show_all && latest.meta.cwd != target_cwd {
+            let info = catalog.get(&id);
+            let source = info
+                .filter(|i| !i.source.is_null())
+                .map(|i| &i.source)
+                .unwrap_or(&latest.meta.source);
+            if !include_subagents
+                && (super::codex_catalog::is_subagent(source) || source.as_str() == Some("exec"))
+            {
                 return None;
             }
-            build_summary(&thread_id, &files, &scans, imported)
+            if !include_archived && info.is_some_and(|i| i.archived) {
+                return None;
+            }
+            let project = projects
+                .entry(latest.meta.cwd.clone())
+                .or_insert_with(|| super::codex_catalog::project_path(&latest.meta.cwd))
+                .clone();
+            if !show_all && project != target_project {
+                return None;
+            }
+            if !query.is_empty()
+                && ![
+                    id.as_str(),
+                    latest.meta.cwd.as_str(),
+                    info.and_then(|i| i.name.as_deref()).unwrap_or(""),
+                    info.map(|i| i.prompt.as_str()).unwrap_or(""),
+                    info.and_then(|i| i.model.as_deref()).unwrap_or(""),
+                ]
+                .iter()
+                .any(|text| text.to_lowercase().contains(&query))
+            {
+                // A names-only index has no opening prompt or model. Search a
+                // bounded transcript preview before applying the result cap.
+                if info.is_some_and(|i| !i.prompt.is_empty() && i.model.is_some()) {
+                    return None;
+                }
+                let preview = scan_summary_file(&latest.path);
+                if ![
+                    preview.first_user_message.as_deref(),
+                    preview.last_model.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                .any(|text| text.to_lowercase().contains(&query))
+                {
+                    return None;
+                }
+            }
+            let activity = info.map(|i| i.updated_at.clone()).unwrap_or_else(|| {
+                chrono::DateTime::<chrono::Utc>::from(latest.mtime).to_rfc3339()
+            });
+            Some((id, files, project, activity))
+        })
+        .collect();
+    eligible.sort_by(|a, b| b.3.cmp(&a.3));
+    let total = eligible.len();
+    let truncated = total > MAX_DISCOVER_CANDIDATES;
+    eligible.truncate(MAX_DISCOVER_CANDIDATES);
+    let selected_files: Vec<_> = eligible
+        .iter()
+        .flat_map(|(_, files, _, _)| files.iter().cloned())
+        .collect();
+    let scans = scan_summary_files(&selected_files, cache_path);
+    let mut summaries: Vec<CliSessionSummary> = eligible
+        .into_iter()
+        .filter_map(|(id, files, project, _)| {
+            let mut summary = build_summary(&id, &files, &scans, imported)?;
+            summary.project_path = project;
+            if let Some(info) = catalog.get(&id) {
+                summary.title = info.name.clone();
+                if !info.prompt.is_empty() {
+                    summary.first_prompt = info.prompt.clone();
+                }
+                if info.model.is_some() {
+                    summary.model = info.model.clone();
+                }
+                if !info.updated_at.is_empty() {
+                    summary.last_activity_at = info.updated_at.clone();
+                }
+                if !info.source.is_null() {
+                    summary.is_subagent = super::codex_catalog::is_subagent(&info.source);
+                    summary.is_automated = info.source.as_str() == Some("exec");
+                    summary.parent_session_id = super::codex_catalog::parent_session(&info.source);
+                }
+                summary.archived = info.archived;
+            }
+            Some(summary)
         })
         .collect();
 
@@ -330,10 +451,9 @@ fn discover_sessions_in_root(
         start.elapsed()
     );
 
-    let total = summaries.len();
     Ok(DiscoverResult {
         sessions: summaries,
-        total: if truncated { total_candidates } else { total },
+        total,
         truncated,
     })
 }
@@ -373,16 +493,38 @@ fn clean_user_prompt(record: &Value) -> Option<String> {
 
 /// Scan one rollout's body into a cacheable `SummaryFileScan`.
 ///
-/// Mirrors the per-file pass the old `build_summary` did inline: counts
-/// `task_complete`, tracks the last timestamp, the first head-window
-/// `user_message`, and the last `turn_context` model.
+/// Small files are read fully; large files use bounded head/tail windows.
+/// Exact turn counts are shown only when the whole file was scanned. Desktop
+/// metadata supplies current names/models even when a middle record is skipped.
 fn scan_summary_file(path: &Path) -> SummaryFileScan {
     let mut scan = SummaryFileScan::default();
     let Ok(file) = File::open(path) else {
         return scan;
     };
+    let size = file.metadata().map(|m| m.len()).unwrap_or(0);
+    const WINDOW: u64 = 128 * 1024;
+    scan.counts_exact = size <= WINDOW * 2;
+    let mut reader = BufReader::new(file);
+    let mut bytes = Vec::new();
+    if scan.counts_exact {
+        let _ = reader.read_to_end(&mut bytes);
+    } else {
+        let _ = reader.by_ref().take(WINDOW).read_to_end(&mut bytes);
+        if let Some(end) = bytes.iter().rposition(|b| *b == b'\n') {
+            bytes.truncate(end + 1);
+        } else {
+            bytes.clear();
+        }
+        if reader.seek(SeekFrom::Start(size - WINDOW)).is_ok() {
+            let mut tail = Vec::new();
+            let _ = reader.take(WINDOW).read_to_end(&mut tail);
+            if let Some(start) = tail.iter().position(|b| *b == b'\n') {
+                bytes.extend_from_slice(&tail[start + 1..]);
+            }
+        }
+    }
     let mut head_seen = 0usize;
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
+    for line in String::from_utf8_lossy(&bytes).lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -542,6 +684,17 @@ fn build_summary(
         session_id: thread_id.to_string(),
         cwd: latest.meta.cwd.clone(),
         first_prompt: first_prompt.unwrap_or_default(),
+        title: None,
+        project_path: String::new(),
+        is_subagent: super::codex_catalog::is_subagent(&latest.meta.source),
+        is_automated: latest.meta.source.as_str() == Some("exec"),
+        parent_session_id: super::codex_catalog::parent_session(&latest.meta.source),
+        archived: false,
+        counts_exact: files_asc.iter().all(|f| {
+            scans
+                .get(&cache_key(&f.path))
+                .is_some_and(|s| s.counts_exact)
+        }),
         started_at: earliest.meta.timestamp.clone(),
         last_activity_at: last_activity_ts.unwrap_or_else(|| earliest.meta.timestamp.clone()),
         message_count,
@@ -573,8 +726,7 @@ fn truncate_prompt(text: &str) -> String {
 // ── Find rollouts for a thread (full walk) ──────────────────────────
 
 /// Walk `~/.codex/sessions/` fully and return all rollout files whose first
-/// session_meta line matches `thread_id`. **Not subject to discovery's 500-file
-/// truncation.**
+/// session_meta line matches `thread_id`. Not subject to discovery's result cap.
 fn find_rollouts_for_thread(thread_id: &str) -> Result<Vec<RolloutFileInfo>, String> {
     let root = codex_sessions_dir().ok_or("cannot determine home dir")?;
     find_rollouts_for_thread_in(&root, thread_id)
@@ -591,6 +743,14 @@ fn find_rollouts_for_thread_in(
     let matches: Vec<RolloutFileInfo> = files
         .par_iter()
         .filter_map(|(path, size, mtime, mtime_ns_val)| {
+            if uuid::Uuid::parse_str(thread_id).is_ok()
+                && !path
+                    .file_name()?
+                    .to_str()?
+                    .ends_with(&format!("{thread_id}.jsonl"))
+            {
+                return None;
+            }
             let meta = read_first_session_meta(path).ok()?;
             if meta.thread_id != thread_id {
                 return None;
@@ -970,7 +1130,11 @@ impl CodexRolloutImporter {
                     },
                     BusEvent::MessageComplete {
                         run_id: self.run_id.clone(),
-                        message_id: format!("codex-import-msg-{}", self.turn_counter),
+                        message_id: format!(
+                            "codex-import-msg-{}-{}",
+                            self.turn_counter,
+                            sha256_short(text)
+                        ),
                         text: text.to_string(),
                         parent_tool_use_id: None,
                         model,
@@ -1209,7 +1373,11 @@ impl CodexRolloutImporter {
                 match role {
                     "assistant" => vec![BusEvent::MessageComplete {
                         run_id: self.run_id.clone(),
-                        message_id: format!("codex-import-msg-fallback-{}", self.turn_counter),
+                        message_id: format!(
+                            "codex-import-msg-fallback-{}-{}",
+                            self.turn_counter,
+                            sha256_short(&content)
+                        ),
                         text: content,
                         parent_tool_use_id: None,
                         model: self.pending_model.clone(),
@@ -1354,7 +1522,11 @@ pub fn import_session(
         result_subtype: None,
         model: None,
         parent_run_id: None,
-        name: None,
+        name: super::codex_catalog::home().and_then(|h| {
+            super::codex_catalog::read(&h)
+                .get(thread_id)
+                .and_then(|i| i.name.clone())
+        }),
         remote_host_name: None,
         remote_cwd: None,
         remote_host_snapshot: None,
@@ -1914,6 +2086,27 @@ mod tests {
     // ── Message dedup ──
 
     #[test]
+    fn distinct_assistant_updates_in_same_turn_keep_distinct_ids() {
+        let mut imp = importer();
+        imp.turn_counter = 1;
+        let first = imp.handle_response_item(
+            Some(&json!({"type":"message","role":"assistant","content":"First update"})),
+            "message",
+        );
+        let second = imp.handle_response_item(
+            Some(&json!({"type":"message","role":"assistant","content":"Second update"})),
+            "message",
+        );
+        match (&first[0], &second[0]) {
+            (
+                BusEvent::MessageComplete { message_id: a, .. },
+                BusEvent::MessageComplete { message_id: b, .. },
+            ) => assert_ne!(a, b),
+            _ => panic!("Expected two completed messages"),
+        }
+    }
+
+    #[test]
     fn response_item_message_dedup_same_turn() {
         let mut imp = importer();
         imp.turn_counter = 1;
@@ -2116,6 +2309,202 @@ mod tests {
     }
 
     #[test]
+    fn catalog_names_search_and_main_filter_before_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_rollout(
+            tmp.path(),
+            "2026",
+            "01",
+            "01",
+            "rollout-main.jsonl",
+            "main",
+            "/repo",
+            &[],
+        );
+        write_rollout(
+            tmp.path(),
+            "2026",
+            "01",
+            "01",
+            "rollout-child.jsonl",
+            "child",
+            "/repo",
+            &[],
+        );
+        let catalog = HashMap::from([
+            (
+                "main".into(),
+                super::super::codex_catalog::ThreadInfo {
+                    name: Some("RAV 2.6.0 work".into()),
+                    cwd: "/repo".into(),
+                    source: json!("vscode"),
+                    ..Default::default()
+                },
+            ),
+            (
+                "child".into(),
+                super::super::codex_catalog::ThreadInfo {
+                    name: Some("Implementation lane".into()),
+                    cwd: "/repo".into(),
+                    source: json!({"subagent":{"thread_spawn":{"parent_thread_id":"main"}}}),
+                    ..Default::default()
+                },
+            ),
+        ]);
+        let discover = |subagents, query| {
+            discover_with_catalog(
+                tmp.path(),
+                "/repo",
+                &empty_imported(),
+                &test_cache_path(tmp.path()),
+                &catalog,
+                subagents,
+                false,
+                query,
+            )
+            .unwrap()
+        };
+        let main = discover(false, "RAV 2.6");
+        assert_eq!(main.sessions.len(), 1);
+        assert_eq!(main.sessions[0].title.as_deref(), Some("RAV 2.6.0 work"));
+        let with_children = discover(true, "");
+        assert_eq!(with_children.sessions.len(), 2);
+        assert_eq!(
+            with_children
+                .sessions
+                .iter()
+                .find(|s| s.session_id == "child")
+                .unwrap()
+                .parent_session_id
+                .as_deref(),
+            Some("main")
+        );
+    }
+
+    #[test]
+    fn names_only_catalog_searches_transcript_and_preserves_subagent_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main_path = write_rollout(
+            tmp.path(),
+            "2026",
+            "01",
+            "01",
+            "rollout-main.jsonl",
+            "main",
+            "/repo",
+            &[
+                r#"{"type":"event_msg","payload":{"type":"user_message","message":"Investigate playback performance"}}"#,
+                r#"{"type":"turn_context","payload":{"model":"gpt-6-sol"}}"#,
+            ],
+        );
+        let child_path = main_path.with_file_name("rollout-child.jsonl");
+        let child_meta = json!({"type":"session_meta","payload":{
+            "id":"child", "cwd":"/repo", "timestamp":"2026-01-01T00:00:00Z",
+            "source":{"subagent":{"thread_spawn":{"parent_thread_id":"main"}}}
+        }});
+        std::fs::write(child_path, format!("{child_meta}\n")).unwrap();
+        let catalog = HashMap::from([
+            (
+                "main".into(),
+                super::super::codex_catalog::ThreadInfo {
+                    name: Some("Main chat".into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "child".into(),
+                super::super::codex_catalog::ThreadInfo {
+                    name: Some("Child lane".into()),
+                    ..Default::default()
+                },
+            ),
+        ]);
+        let discover = |include, query| {
+            discover_with_catalog(
+                tmp.path(),
+                "/repo",
+                &empty_imported(),
+                &test_cache_path(tmp.path()),
+                &catalog,
+                include,
+                false,
+                query,
+            )
+            .unwrap()
+        };
+        for query in ["playback performance", "gpt-6-sol"] {
+            assert_eq!(discover(false, query).sessions[0].session_id, "main");
+        }
+        assert_eq!(discover(false, "").sessions.len(), 1);
+        let all = discover(true, "");
+        let child = all
+            .sessions
+            .iter()
+            .find(|s| s.session_id == "child")
+            .unwrap();
+        assert!(child.is_subagent);
+        assert_eq!(child.parent_session_id.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn large_rollout_summary_has_bounded_preview_and_no_fake_turn_count() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("large.jsonl");
+        let head = r#"{"timestamp":"2026-01-01T00:00:00Z","type":"event_msg","payload":{"type":"user_message","message":"Human opening"}}"#;
+        let tail = r#"{"timestamp":"2026-09-30T00:00:00Z","type":"turn_context","payload":{"model":"gpt-6-sol"}}"#;
+        std::fs::write(
+            &path,
+            format!("{head}\n{}\n{tail}\n", "x".repeat(1024 * 1024)),
+        )
+        .unwrap();
+        let summary = scan_summary_file(&path);
+        assert_eq!(summary.first_user_message.as_deref(), Some("Human opening"));
+        assert_eq!(summary.last_model.as_deref(), Some("gpt-6-sol"));
+        assert!(!summary.counts_exact);
+    }
+
+    #[test]
+    #[ignore = "Local read-only acceptance: requires this user's RAV Codex sessions"]
+    fn live_rav_named_main_chats_are_discoverable() {
+        let home = super::super::codex_catalog::home().unwrap();
+        let catalog = super::super::codex_catalog::read(&home);
+        let tmp = tempfile::tempdir().unwrap();
+        let started = std::time::Instant::now();
+        let result = discover_with_catalog(
+            &home.join("sessions"),
+            "/Users/ivg/github/rive-animation-viewer",
+            &empty_imported(),
+            &test_cache_path(tmp.path()),
+            &catalog,
+            false,
+            false,
+            "",
+        )
+        .unwrap();
+        for title in [
+            "Add VM interaction timeline",
+            "RAV 2.6.0 work",
+            "Find zero-polling VM channel",
+            "Investigate global VM",
+            "Investigate RAV playback performance",
+        ] {
+            assert!(
+                result
+                    .sessions
+                    .iter()
+                    .any(|s| s.title.as_deref() == Some(title)),
+                "Missing {title}"
+            );
+        }
+        assert!(result.sessions.iter().all(|s| !s.is_subagent));
+        println!(
+            "RAV main chats {}, discovery {:?}, all five names present",
+            result.sessions.len(),
+            started.elapsed()
+        );
+    }
+
+    #[test]
     fn discover_empty_root_returns_empty() {
         let tmp = tempfile::tempdir().unwrap();
         // Don't create the sessions/ subdir at all — fully nonexistent root path
@@ -2285,17 +2674,28 @@ mod tests {
             );
         }
 
-        // Discovery truncates to 500 (mtime desc keeps the 505 "new" files;
-        // first 500 of them are kept; "old" files are evicted).
+        // The all-project result cap applies to complete threads. Choosing the
+        // older project below must recover all five of its rollouts.
         let result =
             discover_sessions_in_root(root, "/", &empty_imported(), &test_cache_path(root))
                 .unwrap();
         assert!(result.truncated);
-        assert_eq!(result.total, 510, "truncated total = candidate file count");
+        assert_eq!(result.total, 506, "truncated total = eligible thread count");
         assert!(
             !result.sessions.iter().any(|s| s.session_id == "old-thread"),
             "old-thread evicted from discovery window"
         );
+
+        let project_result =
+            discover_sessions_in_root(root, "/tmp/old", &empty_imported(), &test_cache_path(root))
+                .unwrap();
+        assert_eq!(
+            project_result.sessions.len(),
+            1,
+            "older project must not be crowded out by unrelated work"
+        );
+        assert_eq!(project_result.sessions[0].rollout_paths.len(), 5);
+        assert!(!project_result.truncated);
 
         // Full walk still finds all 5 old rollouts — this is the hard contract.
         let old_rollouts = find_rollouts_for_thread_in(root, "old-thread").unwrap();

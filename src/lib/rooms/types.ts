@@ -143,6 +143,17 @@ export interface RoomSessionSeed {
   project_error: string | null;
 }
 
+export interface GitHubRepository {
+  remote: string;
+  repository: string;
+}
+
+export interface RepositoryInspection {
+  repo_path: string;
+  repository: string;
+  repositories: GitHubRepository[];
+}
+
 export interface ParticipantSettings {
   name: string;
   model: string | null;

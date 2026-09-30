@@ -962,7 +962,17 @@ pub async fn dispatch_command(
                 .get("agent")
                 .and_then(|v| v.as_str())
                 .map(String::from);
-            let result = crate::commands::cli_sync::discover_cli_sessions(cwd, agent).await?;
+            let result = crate::commands::cli_sync::discover_cli_sessions(
+                cwd,
+                agent,
+                params.get("includeSubagents").and_then(Value::as_bool),
+                params.get("includeArchived").and_then(Value::as_bool),
+                params
+                    .get("query")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            )
+            .await?;
             serde_json::to_value(result).map_err(|e| e.to_string())
         }
 

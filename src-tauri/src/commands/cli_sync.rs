@@ -17,6 +17,9 @@ fn agent_or_default(agent: Option<String>) -> String {
 pub async fn discover_cli_sessions(
     cwd: String,
     agent: Option<String>,
+    include_subagents: Option<bool>,
+    include_archived: Option<bool>,
+    query: Option<String>,
 ) -> Result<DiscoverResult, String> {
     let start = std::time::Instant::now();
     let agent = agent_or_default(agent);
@@ -27,7 +30,12 @@ pub async fn discover_cli_sessions(
     );
 
     let result = tokio::task::spawn_blocking(move || match agent.as_str() {
-        "codex" => codex_sessions::discover_sessions(&cwd),
+        "codex" => codex_sessions::discover_sessions_filtered(
+            &cwd,
+            include_subagents.unwrap_or(false),
+            include_archived.unwrap_or(false),
+            query.as_deref().unwrap_or(""),
+        ),
         _ => cli_sessions::discover_sessions(&cwd),
     })
     .await

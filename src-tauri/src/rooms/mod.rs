@@ -4,6 +4,7 @@ pub mod governance;
 pub mod mcp;
 pub mod models;
 pub mod operations;
+pub mod repository;
 pub mod runtime;
 pub mod scheduler;
 pub mod session_seed;

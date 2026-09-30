@@ -24,9 +24,23 @@ pub struct CliSessionSummary {
     pub session_id: String,
     pub cwd: String,
     pub first_prompt: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub project_path: String,
+    #[serde(default)]
+    pub is_subagent: bool,
+    #[serde(default)]
+    pub is_automated: bool,
+    #[serde(default)]
+    pub parent_session_id: Option<String>,
+    #[serde(default)]
+    pub archived: bool,
     pub started_at: String,
     pub last_activity_at: String,
     pub message_count: u32,
+    #[serde(default)]
+    pub counts_exact: bool,
     pub model: Option<String>,
     pub cli_version: Option<String>,
     pub file_size: u64,
