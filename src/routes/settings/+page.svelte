@@ -1859,6 +1859,31 @@
           </div>
         </Card>
 
+        <Card class="p-6 space-y-3">
+          <label class="block space-y-2">
+            <span class="block text-sm font-medium">{t("settings_permissionDefault")}</span>
+            <span class="block text-xs text-muted-foreground"
+              >{t("settings_permissionDefaultDesc")}</span
+            >
+            <select
+              aria-label={t("settings_permissionDefault")}
+              class="h-9 rounded-md border border-input bg-background px-3 text-sm"
+              value={settings?.permission_mode === "bypassPermissions"
+                ? "auto_all"
+                : (settings?.permission_mode ?? "auto_read")}
+              onchange={(event) => saveGeneralPatch({ permission_mode: event.currentTarget.value })}
+            >
+              <option value="ask">{t("prompt_permAskLabel")}</option>
+              <option value="auto_read">{t("prompt_permAutoReadLabel")}</option>
+              <option value="auto_all">{t("settings_permissionBypass")}</option>
+              <option value="plan">{t("prompt_permPlanLabel")}</option>
+            </select>
+          </label>
+          {#if settings?.permission_mode === "auto_all" || settings?.permission_mode === "bypassPermissions"}
+            <p class="text-xs text-muted-foreground">{t("settings_permissionBypassDesc")}</p>
+          {/if}
+        </Card>
+
         <!-- Language Card -->
         <Card class="p-6 space-y-4">
           <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">

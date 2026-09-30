@@ -280,8 +280,12 @@ pub fn build_settings_args(settings: &AdapterSettings, print_mode: bool) -> Vec<
 
     // Permission mode
     if let Some(ref perm) = settings.permission_mode {
-        args.push("--permission-mode".into());
-        args.push(perm.clone());
+        if perm == "bypassPermissions" {
+            args.push("--dangerously-skip-permissions".into());
+        } else {
+            args.push("--permission-mode".into());
+            args.push(perm.clone());
+        }
     }
 
     // System prompt takes priority over append_system_prompt
@@ -521,6 +525,20 @@ mod tests {
         let args = build_settings_args(&s, false);
         assert!(args.contains(&"--debug".to_string()));
         assert!(args.contains(&"api".to_string()));
+    }
+
+    #[test]
+    fn bypass_mode_emits_claude_skip_permissions_flag_only_when_selected() {
+        let mut s = make_settings();
+        assert!(!build_settings_args(&s, false).contains(&"--dangerously-skip-permissions".into()));
+        s.permission_mode = Some("bypassPermissions".into());
+        let args = build_settings_args(&s, false);
+        assert!(args.contains(&"--dangerously-skip-permissions".into()));
+        assert!(!args.contains(&"--permission-mode".into()));
+        s.permission_mode = Some("default".into());
+        let args = build_settings_args(&s, false);
+        assert!(!args.contains(&"--dangerously-skip-permissions".into()));
+        assert!(args.contains(&"--permission-mode".into()));
     }
 
     #[test]

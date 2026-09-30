@@ -2,7 +2,23 @@ export const CUSTOM_PALETTE_STORAGE_KEY = "ocv:custom-palette";
 
 export const PALETTE_FIELDS = ["primary", "background", "sidebar", "foreground", "border"] as const;
 export type PaletteField = (typeof PALETTE_FIELDS)[number];
-export type CustomPalette = Partial<Record<PaletteField, string>>;
+export type CustomPalette = Partial<Record<PaletteField, string>> & { style?: "matrix" };
+
+export const MATRIX_PALETTE: Readonly<CustomPalette> = {
+  style: "matrix",
+  primary: "#3CFF88",
+  background: "#050805",
+  sidebar: "#080E09",
+  foreground: "#B8F7C5",
+  border: "#244C31",
+};
+
+export function isMatrixPalette(palette: CustomPalette): boolean {
+  return (
+    palette.style === "matrix" ||
+    PALETTE_FIELDS.every((field) => palette[field]?.toUpperCase() === MATRIX_PALETTE[field])
+  );
+}
 
 export interface PaletteStorage {
   getItem(key: string): string | null;
@@ -19,6 +35,8 @@ export function isHexColor(value: string): boolean {
 export function normalizePalette(value: unknown): CustomPalette {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const palette: CustomPalette = {};
+  const candidate = value as Record<string, unknown>;
+  if (candidate.style === "matrix") palette.style = "matrix";
   for (const field of PALETTE_FIELDS) {
     const color = (value as Record<string, unknown>)[field];
     if (typeof color === "string" && isHexColor(color)) palette[field] = color.toUpperCase();
@@ -30,7 +48,16 @@ export function readCustomPalette(storage: PaletteStorage | null): CustomPalette
   if (!storage) return {};
   try {
     const stored = storage.getItem(CUSTOM_PALETTE_STORAGE_KEY);
-    return stored ? normalizePalette(JSON.parse(stored)) : {};
+    const palette = stored ? normalizePalette(JSON.parse(stored)) : {};
+    // Preserve the first Matrix preset's surface styling after color customization.
+    if (
+      !palette.style &&
+      palette.background === MATRIX_PALETTE.background &&
+      palette.sidebar === MATRIX_PALETTE.sidebar
+    ) {
+      palette.style = "matrix";
+    }
+    return palette;
   } catch {
     return {};
   }

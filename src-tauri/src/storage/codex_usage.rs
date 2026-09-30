@@ -18,10 +18,46 @@ use crate::pricing;
 use crate::storage::cli_sessions_common::{cache_key, scan_cache_path, CachedFile, DiskScanCache};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Instant, UNIX_EPOCH};
 
 const DISK_CACHE_VERSION: u32 = 2;
+const CACHE_TTL_SECS: u64 = 120;
+// Serialize cold scans and share their result between the chart and heatmap requests.
+static CACHE: LazyLock<Mutex<Option<(Instant, FileData)>>> = LazyLock::new(|| Mutex::new(None));
+
+#[derive(Deserialize)]
+struct UsageEvent {
+    #[serde(rename = "type")]
+    kind: String,
+    timestamp: Option<String>,
+    payload: Option<UsagePayload>,
+}
+
+#[derive(Deserialize, Default)]
+struct UsagePayload {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    model: Option<String>,
+    model_provider: Option<String>,
+    info: Option<UsageInfo>,
+}
+
+#[derive(Deserialize)]
+struct UsageInfo {
+    last_token_usage: Option<TurnTokens>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct TurnTokens {
+    input_tokens: u64,
+    cached_input_tokens: u64,
+    output_tokens: u64,
+    reasoning_output_tokens: u64,
+}
 const PRICING_KEY_SEPARATOR: char = '\u{1f}';
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -89,101 +125,64 @@ fn list_rollout_files(dir: &Path) -> Vec<(PathBuf, u128, u64)> {
 /// `turn_context` events; attributes each `token_count` (last_token_usage delta) to it.
 fn scan_single_rollout(path: &Path) -> FileData {
     let mut data = FileData::default();
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
         Err(_) => return data,
     };
-
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
     let mut current_model: Option<String> = None;
     let mut model_provider: Option<String> = None;
-    let mut date_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut date_set = std::collections::HashSet::new();
 
-    for line in content.lines() {
-        if line.is_empty() {
-            continue;
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
         }
-        let v: serde_json::Value = match serde_json::from_str(line) {
-            Ok(v) => v,
+        // Deserialize only usage metadata. Tool outputs, message content and images
+        // are skipped without allocating a JSON tree or loading the entire rollout.
+        let event: UsageEvent = match serde_json::from_str(&line) {
+            Ok(event) => event,
             Err(_) => continue,
         };
-
-        let line_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
-
-        if line_type == "session_meta" {
-            model_provider = v
-                .get("payload")
-                .and_then(|p| p.get("model_provider"))
-                .and_then(|provider| provider.as_str())
-                .map(str::to_string);
+        let Some(payload) = event.payload else {
             continue;
-        }
-
-        // Track the session model.
-        if line_type == "turn_context" {
-            if let Some(m) = v
-                .get("payload")
-                .and_then(|p| p.get("model"))
-                .and_then(|m| m.as_str())
-            {
-                current_model = Some(m.to_string());
+        };
+        match event.kind.as_str() {
+            "session_meta" => model_provider = payload.model_provider,
+            "turn_context" => {
+                if payload.model.is_some() {
+                    current_model = payload.model;
+                }
             }
-            continue;
-        }
-
-        // token_count carries this turn's usage delta.
-        if line_type == "event_msg" {
-            let payload = match v.get("payload") {
-                Some(p) => p,
-                None => continue,
-            };
-            if payload.get("type").and_then(|t| t.as_str()) != Some("token_count") {
-                continue;
+            "event_msg" if payload.kind.as_deref() == Some("token_count") => {
+                let Some(last) = payload.info.and_then(|info| info.last_token_usage) else {
+                    continue;
+                };
+                if last.input_tokens == 0
+                    && last.output_tokens == 0
+                    && last.reasoning_output_tokens == 0
+                {
+                    continue;
+                }
+                let Some(date) = event.timestamp.as_deref().and_then(|ts| ts.get(..10)) else {
+                    continue;
+                };
+                let model = current_model.as_deref().unwrap_or("codex-unknown");
+                let tc = data
+                    .daily
+                    .entry(date.to_string())
+                    .or_default()
+                    .entry(pricing_key(model_provider.as_deref(), model))
+                    .or_default();
+                tc.input += last.input_tokens;
+                tc.cache_read += last.cached_input_tokens;
+                tc.output += last.output_tokens + last.reasoning_output_tokens;
+                date_set.insert(date.to_string());
             }
-            let last = match payload.get("info").and_then(|i| i.get("last_token_usage")) {
-                Some(l) => l,
-                None => continue,
-            };
-            let input = last
-                .get("input_tokens")
-                .and_then(|x| x.as_u64())
-                .unwrap_or(0);
-            let cached = last
-                .get("cached_input_tokens")
-                .and_then(|x| x.as_u64())
-                .unwrap_or(0);
-            let output = last
-                .get("output_tokens")
-                .and_then(|x| x.as_u64())
-                .unwrap_or(0);
-            let reasoning = last
-                .get("reasoning_output_tokens")
-                .and_then(|x| x.as_u64())
-                .unwrap_or(0);
-            if input == 0 && output == 0 && reasoning == 0 {
-                continue;
-            }
-
-            // Date from the event timestamp (fall back to skipping if absent).
-            let date = match v.get("timestamp").and_then(|t| t.as_str()) {
-                Some(ts) if ts.len() >= 10 => ts[..10].to_string(),
-                _ => continue,
-            };
-            // Unknown model stays visible, but pricing is explicitly unavailable.
-            let model = current_model
-                .clone()
-                .unwrap_or_else(|| "codex-unknown".to_string());
-            let key = pricing_key(model_provider.as_deref(), &model);
-
-            let tc = data
-                .daily
-                .entry(date.clone())
-                .or_default()
-                .entry(key)
-                .or_default();
-            tc.input += input;
-            tc.cache_read += cached;
-            tc.output += output + reasoning;
-            date_set.insert(date);
+            _ => {}
         }
     }
 
@@ -217,6 +216,18 @@ fn disk_cache_path() -> PathBuf {
 
 /// Read aggregated global Codex usage. `days` filters the daily window (None = all time).
 pub fn read_global_codex_usage(days: Option<u32>) -> Result<UsageOverview, String> {
+    let mut cache = CACHE
+        .lock()
+        .map_err(|e| format!("Codex usage cache lock: {e}"))?;
+    if let Some((computed_at, data)) = cache.as_ref() {
+        if computed_at.elapsed().as_secs() < CACHE_TTL_SECS {
+            return Ok(build_overview(
+                data.daily.clone(),
+                data.dates.iter().cloned().collect(),
+                days,
+            ));
+        }
+    }
     let dir = match sessions_dir() {
         Some(d) => d,
         None => return Ok(empty_overview()),
@@ -268,7 +279,27 @@ pub fn read_global_codex_usage(days: Option<u32>) -> Result<UsageOverview, Strin
     }
     .write(&disk_cache_path());
 
+    *cache = Some((
+        Instant::now(),
+        FileData {
+            daily: merged.clone(),
+            dates: all_dates.iter().cloned().collect(),
+        },
+    ));
     Ok(build_overview(merged, all_dates, days))
+}
+
+/// Force the next request to rebuild both caches, including newly appended turns.
+pub fn clear_cache() -> Result<(), String> {
+    let mut cache = CACHE
+        .lock()
+        .map_err(|e| format!("Codex usage cache lock: {e}"))?;
+    *cache = None;
+    match std::fs::remove_file(disk_cache_path()) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Clear Codex usage cache: {e}")),
+    }
 }
 
 fn empty_overview() -> UsageOverview {
@@ -451,6 +482,65 @@ mod tests {
         assert_eq!(tc.cache_read, 40);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn streams_large_non_usage_records_and_recovers_after_malformed_lines() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout-large.jsonl");
+        let mut file = std::fs::File::create(&path).unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({"type":"session_meta", "payload":{"model_provider":"custom"}})
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({"type":"turn_context", "payload":{"model":"model-a"}})
+        )
+        .unwrap();
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({"type":"response_item", "payload":{
+                "type":"function_call_output", "output":"x".repeat(4 * 1024 * 1024),
+                "info":{"last_token_usage":{"input_tokens":999999}}
+            }})
+        )
+        .unwrap();
+        writeln!(file, "malformed partial record").unwrap();
+        for (date, model, input) in [
+            ("2026-06-01", "model-a", 100),
+            ("2026-06-02", "model-b", 200),
+        ] {
+            writeln!(
+                file,
+                "{}",
+                serde_json::json!({"type":"turn_context","payload":{"model":model}})
+            )
+            .unwrap();
+            writeln!(file, "{}", serde_json::json!({"type":"event_msg","timestamp":format!("{date}T12:00:00Z"),
+                "payload":{"type":"token_count","info":{"last_token_usage":{
+                    "input_tokens":input,"cached_input_tokens":20,"output_tokens":10,"reasoning_output_tokens":5
+                }}}})).unwrap();
+        }
+        // An incomplete trailing record must not discard earlier usage.
+        write!(file, "{{\"type\":").unwrap();
+        drop(file);
+        let data = scan_single_rollout(&path);
+        assert_eq!(data.daily.len(), 2);
+        for (date, model, input) in [
+            ("2026-06-01", "model-a", 100),
+            ("2026-06-02", "model-b", 200),
+        ] {
+            let tokens = &data.daily[date][&pricing_key(Some("custom"), model)];
+            assert_eq!(tokens.input, input);
+            assert_eq!(tokens.cache_read, 20);
+            assert_eq!(tokens.output, 15);
+        }
     }
 
     #[test]

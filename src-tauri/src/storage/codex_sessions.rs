@@ -34,7 +34,7 @@ use std::time::{Duration, SystemTime};
 
 const MAX_DISCOVER_CANDIDATES: usize = 500;
 const SCAN_HEAD_LINES_FOR_FIRST_PROMPT: usize = 100;
-const SUMMARY_CACHE_VERSION: u32 = 1;
+const SUMMARY_CACHE_VERSION: u32 = 2;
 
 fn summary_cache_path() -> PathBuf {
     scan_cache_path("codex-summary-scan-cache.json")
@@ -338,6 +338,39 @@ fn discover_sessions_in_root(
     })
 }
 
+/// Response-item user messages are the only prompt source in app-server rollouts.
+/// Exclude the separate context records injected by the desktop/CLI harness.
+fn clean_user_prompt(record: &Value) -> Option<String> {
+    let payload = record.get("payload")?;
+    match record.get("type")?.as_str()? {
+        "event_msg" if payload.get("type")?.as_str()? == "user_message" => {
+            payload.get("message")?.as_str().map(str::to_string)
+        }
+        "response_item"
+            if payload.get("type")?.as_str()? == "message"
+                && payload.get("role")?.as_str()? == "user" =>
+        {
+            let content = extract_message_text(payload);
+            let text = content.trim_start();
+            let injected = [
+                "# AGENTS.md instructions for ",
+                "<environment_context>",
+                "<permissions instructions>",
+                "<skills_instructions>",
+                "<recommended_plugins>",
+                "<app-context>",
+                "<collaboration_mode>",
+                "<user_instructions>",
+                "<multi_agent_role>",
+            ]
+            .iter()
+            .any(|prefix| text.starts_with(prefix));
+            (!text.is_empty() && !injected).then_some(content)
+        }
+        _ => None,
+    }
+}
+
 /// Scan one rollout's body into a cacheable `SummaryFileScan`.
 ///
 /// Mirrors the per-file pass the old `build_summary` did inline: counts
@@ -359,6 +392,9 @@ fn scan_summary_file(path: &Path) -> SummaryFileScan {
         };
         if let Some(ts) = json.get("timestamp").and_then(|v| v.as_str()) {
             scan.last_ts = Some(ts.to_string());
+        }
+        if scan.first_user_message.is_none() && head_seen < SCAN_HEAD_LINES_FOR_FIRST_PROMPT {
+            scan.first_user_message = clean_user_prompt(&json).map(|text| truncate_prompt(&text));
         }
         let outer_type = json.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if outer_type == "event_msg" {
@@ -1154,12 +1190,16 @@ impl CodexRolloutImporter {
                 if role.is_empty() || content.is_empty() {
                     return Vec::new();
                 }
-                // User messages are emitted via event_msg/user_message (the clean prompt).
-                // response_item user blocks ALSO carry injected context (AGENTS.md, environment
-                // preamble) that would render as spurious user bubbles — skip them here, and
-                // don't touch seen_message_keys so the event_msg path still emits the real prompt.
                 if role == "user" {
-                    return Vec::new();
+                    let record = json!({"type":"response_item", "payload":p});
+                    let Some(text) = clean_user_prompt(&record) else {
+                        return Vec::new();
+                    };
+                    // Share deduplication and turn handling with the older event-msg format.
+                    return self.handle_event_msg(
+                        Some(&json!({"type":"user_message", "message":text})),
+                        "user_message",
+                    );
                 }
                 let key = self.message_key(role, &content);
                 if self.seen_message_keys.contains(&key) {
@@ -1284,21 +1324,9 @@ pub fn import_session(
                 let Ok(json): std::result::Result<Value, _> = serde_json::from_str(trimmed) else {
                     continue;
                 };
-                let outer = json.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                let inner = json
-                    .get("payload")
-                    .and_then(|p| p.get("type"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                if outer == "event_msg" && inner == "user_message" {
-                    if let Some(text) = json
-                        .get("payload")
-                        .and_then(|p| p.get("message"))
-                        .and_then(|v| v.as_str())
-                    {
-                        first_prompt = truncate_prompt(text);
-                        break 'outer;
-                    }
+                if let Some(text) = clean_user_prompt(&json) {
+                    first_prompt = truncate_prompt(&text);
+                    break 'outer;
                 }
             }
         }
@@ -1324,7 +1352,7 @@ pub fn import_session(
         error_message: None,
         session_id: Some(thread_id.to_string()),
         result_subtype: None,
-        model: latest_meta.model_provider.clone(),
+        model: None,
         parent_run_id: None,
         name: None,
         remote_host_name: None,
@@ -1338,7 +1366,7 @@ pub fn import_session(
         cli_usage_incomplete: None,
         deleted_at: None,
         no_session_persistence: false,
-        execution_path: Some(ExecutionPath::PipeExec),
+        execution_path: Some(ExecutionPath::SessionActor),
         conversation_ref: Some(ConversationRef::CodexThread(thread_id.to_string())),
         codex_process_seq: Some(0),
         codex_imported_rollouts: None,
@@ -1589,15 +1617,58 @@ mod tests {
     }
 
     #[test]
-    fn response_item_user_message_skipped() {
+    fn summary_reads_appserver_prompt_and_model_without_injected_context() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let records = [
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>context</environment_context>"}]}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Continue my project"}]}}),
+            json!({"type":"turn_context","payload":{"model":"gpt-5.6-luna"}}),
+        ];
+        std::fs::write(
+            file.path(),
+            records
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        let summary = scan_summary_file(file.path());
+        assert_eq!(
+            summary.first_user_message.as_deref(),
+            Some("Continue my project")
+        );
+        assert_eq!(summary.last_model.as_deref(), Some("gpt-5.6-luna"));
+    }
+
+    #[test]
+    fn response_item_user_message_imported_without_injected_context() {
         let mut imp = importer();
-        // role=user → skipped (real prompt comes via event_msg/user_message)
+        // App-server rollouts carry the real user prompt in response_item records.
         let user = imp.handle_response_item(
             Some(&json!({"type": "message", "role": "user",
-                         "content": [{"type": "input_text", "text": "# AGENTS.md ..."}]})),
+                         "content": [{"type": "input_text", "text": "hi"}]})),
             "message",
         );
-        assert!(user.is_empty());
+        assert!(matches!(&user[0], BusEvent::UserMessage { text, .. } if text == "hi"));
+        for text in [
+            "# AGENTS.md instructions for /tmp\n<INSTRUCTIONS>example</INSTRUCTIONS>",
+            "<environment_context>example</environment_context>",
+            "<recommended_plugins>example</recommended_plugins>",
+        ] {
+            let injected = imp.handle_response_item(
+                Some(&json!({"type":"message","role":"user",
+                "content":[{"type":"input_text","text":text}]})),
+                "message",
+            );
+            assert!(injected.is_empty());
+        }
+        // Event-msg + response-item mirrors must produce only one user bubble.
+        let mirrored = imp.handle_event_msg(
+            Some(&json!({"type":"user_message","message":"hi"})),
+            "user_message",
+        );
+        assert!(mirrored.is_empty());
         // role=assistant → still emits MessageComplete
         let asst = imp.handle_response_item(
             Some(&json!({"type": "message", "role": "assistant",

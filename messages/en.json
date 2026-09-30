@@ -481,7 +481,7 @@
   "prompt_permAutoReadDesc": "Auto-approve file edits, ask for others",
   "prompt_permAutoAllLabel": "Bypass",
   "prompt_permAutoAllShort": "Bypass",
-  "prompt_permAutoAllDesc": "Auto-approve all tool calls",
+  "prompt_permAutoAllDesc": "Skip all permission checks; Codex also disables its sandbox",
   "prompt_permPlanLabel": "Plan",
   "prompt_permPlanShort": "Plan",
   "prompt_permPlanDesc": "Read-only analysis, no changes",
@@ -1409,7 +1409,7 @@
   "cliSync_turns": "{count} turns",
   "cliSync_rollouts": "{count} rollouts",
   "cliSync_newRollouts": "Imported {count} new rollout file(s)",
-  "cliSync_title": "Import Claude CLI Sessions",
+  "cliSync_title": "Import CLI Sessions",
   "cliSync_title_claude": "Import Claude CLI Sessions",
   "cliSync_title_codex": "Import Codex CLI Sessions",
   "cliSync_noSessions_claude": "No Claude CLI sessions found for this project",
@@ -1934,5 +1934,11 @@
   "room_requestStatus_rejected": "Rejected",
   "room_requestStatus_changes_requested": "Changes requested",
   "room_requestStatus_verified": "Verified",
-  "room_requestStatus_accepted": "Accepted"
+  "room_requestStatus_accepted": "Accepted",
+  "palette_matrix": "Matrix terminal",
+  "palette_matrixDescription": "Green on black, with terminal typography.",
+  "settings_permissionDefault": "Default agent permissions",
+  "settings_permissionDefaultDesc": "Used by new Claude and Codex sessions, including room agents. Change an existing session in its composer.",
+  "settings_permissionBypass": "Bypass all permissions",
+  "settings_permissionBypassDesc": "Claude: --dangerously-skip-permissions. Codex: --dangerously-bypass-approvals-and-sandbox (approval: never; sandbox: danger-full-access)."
 }

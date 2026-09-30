@@ -1,8 +1,11 @@
 <script lang="ts">
   import { getContext, onMount, tick } from "svelte";
+  import { THEME_CONTEXT, type ThemeController } from "$lib/utils/theme";
   import { t } from "$lib/i18n/index.svelte";
   import {
     PALETTE_FIELDS,
+    MATRIX_PALETTE,
+    isMatrixPalette,
     contrastRatio,
     hslChannelsToHex,
     isHexColor,
@@ -16,6 +19,7 @@
     readonly palette: CustomPalette;
     setPalette(palette: CustomPalette): boolean;
   }
+  const theme = getContext<ThemeController>(THEME_CONTEXT);
   const controller = getContext<PaletteController>("customPalette");
 
   const labels: Record<PaletteField, () => string> = {
@@ -92,6 +96,14 @@
     storageAvailable = controller?.setPalette(next) ?? saveCustomPalette(storage(), next);
   }
 
+  async function applyMatrix() {
+    theme?.setMode("dark");
+    palette = { ...MATRIX_PALETTE };
+    storageAvailable = controller?.setPalette(palette) ?? saveCustomPalette(storage(), palette);
+    await tick();
+    refreshDisplayedColors();
+  }
+
   async function reset() {
     palette = {};
     storageAvailable = controller?.setPalette(palette) ?? saveCustomPalette(storage(), palette);
@@ -103,6 +115,15 @@
 </script>
 
 <div class="space-y-3">
+  <div class="flex flex-wrap items-center gap-3">
+    <button
+      type="button"
+      aria-pressed={isMatrixPalette(palette)}
+      class="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-accent"
+      onclick={applyMatrix}>{t("palette_matrix")}</button
+    >
+    <span class="text-xs text-muted-foreground">{t("palette_matrixDescription")}</span>
+  </div>
   <div class="grid gap-3 sm:grid-cols-2">
     {#each PALETTE_FIELDS as field (field)}
       <label class="flex items-center gap-3 rounded-md border border-border/60 p-3">

@@ -225,6 +225,11 @@ pub async fn send_chat_message(
     // Build unified adapter settings
     let agent_settings = storage::settings::get_agent_settings(&run.agent);
     let user_settings = storage::settings::get_user_settings();
+    // Imported/legacy pipe sessions must retain their recorded model when the
+    // composer sends no override, just like the session-actor resume path.
+    let model = model
+        .filter(|m| !m.is_empty())
+        .or_else(|| run.model.clone());
     let adapter_settings =
         crate::agent::adapter::build_adapter_settings(&agent_settings, &user_settings, model);
 

@@ -168,6 +168,27 @@
     --sidebar-border: 0 0% 18%;
   }
 
+  /* Matrix surfaces complement the editable five-color palette. */
+  :root.theme-matrix {
+    --secondary: 132 26% 9%;
+    --secondary-foreground: 132 80% 85%;
+    --muted: 132 26% 9%;
+    --muted-foreground: 135 30% 60%;
+    --accent: 137 28% 14%;
+    --accent-foreground: 132 80% 85%;
+    --sidebar-accent: 137 28% 14%;
+    --sidebar-accent-foreground: 132 80% 85%;
+    --popover: 132 28% 5%;
+    --popover-foreground: 132 80% 85%;
+    --ansi-green: #3cff88;
+    --ansi-bright-green: #b8f7c5;
+    color-scheme: dark;
+  }
+
+  .theme-matrix body {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  }
+
   /* ── High contrast: intentionally light, independent of the warm/neutral color scheme ── */
   .theme-high-contrast {
     --background: 0 0% 100%;

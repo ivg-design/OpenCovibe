@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   CUSTOM_PALETTE_STORAGE_KEY,
+  MATRIX_PALETTE,
+  isMatrixPalette,
   contrastRatio,
   hslChannelsToHex,
   hexToHslChannels,
@@ -23,6 +25,18 @@ function memoryStorage(): PaletteStorage & { values: Map<string, string> } {
 }
 
 describe("custom palette", () => {
+  it("persists the Matrix preset with readable text and button contrast", () => {
+    const storage = memoryStorage();
+    saveCustomPalette(storage, { ...MATRIX_PALETTE });
+    const restored = readCustomPalette(storage);
+    expect(isMatrixPalette(restored)).toBe(true);
+    expect(contrastRatio(restored.foreground!, restored.background!)).toBeGreaterThan(7);
+    expect(primaryForeground(restored.primary!)).toBe("#000000");
+    expect(isMatrixPalette({ ...restored, primary: "#00FF00" })).toBe(true);
+    expect(isMatrixPalette({ ...restored, style: undefined, background: "#FFFFFF" })).toBe(false);
+    expect(readCustomPalette(storage).style).toBe("matrix");
+  });
+
   it("accepts only six-digit hex and drops unknown or invalid stored values", () => {
     expect(isHexColor("#12aBcF")).toBe(true);
     expect(isHexColor("#abc")).toBe(false);

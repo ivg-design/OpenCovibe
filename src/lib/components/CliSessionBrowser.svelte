@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { getTransport } from "$lib/transport";
   import { t } from "$lib/i18n/index.svelte";
   import { dbg, dbgWarn } from "$lib/utils/debug";
@@ -24,6 +25,7 @@
   let totalSessions = $state(0);
   let truncated = $state(false);
   let loading = $state(true);
+  let discoverySequence = 0;
   let searchQuery = $state("");
   let importingId = $state<string | null>(null);
   let error = $state<string | null>(null);
@@ -37,12 +39,11 @@
   );
 
   function setAgent(next: "claude" | "codex") {
-    if (next === agent) return;
+    if (next === agent || importingId || importingAll) return;
     agent = next;
     if (typeof localStorage !== "undefined") {
       localStorage.setItem("cliImport_agent", next);
     }
-    discoverSessions();
   }
 
   // ── Project filter ──
@@ -73,6 +74,7 @@
       list = list.filter(
         (s) =>
           s.firstPrompt.toLowerCase().includes(q) ||
+          s.sessionId.toLowerCase().includes(q) ||
           (s.model ?? "").toLowerCase().includes(q) ||
           (s.cwd ?? "").toLowerCase().includes(q),
       );
@@ -90,15 +92,26 @@
   // ── Load sessions on mount ──
 
   $effect(() => {
-    discoverSessions();
+    const sourceCwd = cwd;
+    const sourceAgent = agent;
+    untrack(() => void discoverSessions(sourceCwd, sourceAgent));
   });
 
-  async function discoverSessions() {
+  async function discoverSessions(sourceCwd = cwd, sourceAgent = agent) {
+    const sequence = ++discoverySequence;
     loading = true;
+    sessions = [];
+    totalSessions = 0;
+    truncated = false;
+    selectedProject = null;
     error = null;
     dbg("cli-browser", "discovering sessions", { cwd });
     try {
-      const result = await invoke<DiscoverResult>("discover_cli_sessions", { cwd, agent });
+      const result = await invoke<DiscoverResult>("discover_cli_sessions", {
+        cwd: sourceCwd,
+        agent: sourceAgent,
+      });
+      if (sequence !== discoverySequence) return;
       sessions = result.sessions;
       totalSessions = result.total;
       truncated = result.truncated;
@@ -110,9 +123,9 @@
     } catch (e) {
       const msg = String(e);
       dbgWarn("cli-browser", "discover failed", msg);
-      error = msg;
+      if (sequence === discoverySequence) error = msg;
     } finally {
-      loading = false;
+      if (sequence === discoverySequence) loading = false;
     }
   }
 

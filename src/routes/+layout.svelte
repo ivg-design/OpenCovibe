@@ -73,10 +73,12 @@
   } from "$lib/utils/theme";
   import {
     hexToHslChannels,
+    isMatrixPalette,
     primaryForeground,
     readCustomPalette,
     saveCustomPalette,
     type CustomPalette,
+    type PaletteField,
   } from "$lib/utils/custom-palette";
   import {
     t,
@@ -1233,14 +1235,15 @@
   // Apply only validated values to a fixed set of existing theme variables.
   $effect(() => {
     const root = document.documentElement;
-    const tokens: Record<keyof CustomPalette, string[]> = {
+    root.classList.toggle("theme-matrix", isMatrixPalette(customPalette));
+    const tokens: Record<PaletteField, string[]> = {
       primary: ["--primary", "--ring", "--sidebar-primary", "--sidebar-ring"],
       background: ["--background"],
       sidebar: ["--sidebar-background"],
       foreground: ["--foreground", "--sidebar-foreground"],
       border: ["--border", "--input", "--sidebar-border"],
     };
-    for (const [field, variables] of Object.entries(tokens) as [keyof CustomPalette, string[]][]) {
+    for (const [field, variables] of Object.entries(tokens) as [PaletteField, string[]][]) {
       const value = customPalette[field];
       const channels = value ? hexToHslChannels(value) : null;
       for (const variable of variables) {
