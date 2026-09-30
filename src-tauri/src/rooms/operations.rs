@@ -295,6 +295,7 @@ async fn release_claim_with_owner(
                 participant_id: Some(peer.id.clone()),
                 target_participant_id: None,
                 source_event_id: None,
+                sidechat_id: peer.active_sidechat_id.clone(),
             });
         }
         Ok(())

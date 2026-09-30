@@ -6,6 +6,7 @@
     disabled = false,
     class: className = "",
     onkeydown,
+    maxlength,
   }: {
     value?: string;
     placeholder?: string;
@@ -13,10 +14,12 @@
     disabled?: boolean;
     class?: string;
     onkeydown?: (e: KeyboardEvent) => void;
+    maxlength?: number;
   } = $props();
 </script>
 
 <textarea
+  {maxlength}
   {placeholder}
   {rows}
   {disabled}

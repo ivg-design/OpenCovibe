@@ -70,6 +70,13 @@ pub(super) async fn stop_actor(sessions: &ActorSessionMap, run_id: &str) -> Resu
     Ok(true)
 }
 
+pub(crate) async fn stop_room_session_actor(
+    sessions: &ActorSessionMap,
+    run_id: &str,
+) -> Result<bool, String> {
+    stop_actor(sessions, run_id).await
+}
+
 /// Resolve a RemoteHost from RunMeta.
 /// Prefers the snapshot (self-contained), falls back to name lookup for old runs.
 fn resolve_remote_host(meta: &RunMeta) -> Result<Option<RemoteHost>, String> {
@@ -548,6 +555,66 @@ pub(crate) async fn start_session_impl(
     platform_id: Option<String>,
     permission_mode_override: Option<String>,
 ) -> Result<(), String> {
+    start_session_impl_inner(
+        emitter,
+        sessions,
+        spawn_locks,
+        cancel_token,
+        run_id,
+        mode,
+        session_id,
+        initial_message,
+        attachments,
+        platform_id,
+        permission_mode_override,
+        true,
+    )
+    .await
+}
+
+/// Start an actor for a room peer without delivering a message. The room runtime
+/// revalidates time-sensitive deliveries after startup, then sends through the actor.
+pub(crate) async fn start_room_session_actor(
+    emitter: &Arc<BroadcastEmitter>,
+    sessions: &ActorSessionMap,
+    spawn_locks: &SpawnLocks,
+    cancel_token: &CancellationToken,
+    run_id: String,
+    mode: Option<SessionMode>,
+    session_id: Option<String>,
+) -> Result<(), String> {
+    start_session_impl_inner(
+        emitter,
+        sessions,
+        spawn_locks,
+        cancel_token,
+        run_id,
+        mode,
+        session_id,
+        None,
+        None,
+        None,
+        None,
+        false,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn start_session_impl_inner(
+    emitter: &Arc<BroadcastEmitter>,
+    sessions: &ActorSessionMap,
+    spawn_locks: &SpawnLocks,
+    cancel_token: &CancellationToken,
+    run_id: String,
+    mode: Option<SessionMode>,
+    session_id: Option<String>,
+    initial_message: Option<String>,
+    attachments: Option<Vec<AttachmentData>>,
+    platform_id: Option<String>,
+    permission_mode_override: Option<String>,
+    send_initial_prompt: bool,
+) -> Result<(), String> {
     let _guard = spawn_locks.acquire(&run_id).await;
     let session_mode = mode.unwrap_or_default();
     let att_list = attachments.unwrap_or_default();
@@ -832,13 +899,17 @@ pub(crate) async fn start_session_impl(
     // for a brand-new run's first turn. A stopped session re-spawned with a new message
     // passes initial_message (mode defaults to New, but the Codex thread resumes via
     // conversation_ref) — it must send that message, NOT re-run the original prompt.
-    let initial_text = initial_message.clone().or_else(|| {
-        if is_new {
-            Some(meta.prompt.clone())
-        } else {
-            None
-        }
-    });
+    let initial_text = if send_initial_prompt {
+        initial_message.clone().or_else(|| {
+            if is_new {
+                Some(meta.prompt.clone())
+            } else {
+                None
+            }
+        })
+    } else {
+        None
+    };
     if let Some(text) = initial_text {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         cmd_tx
@@ -2079,13 +2150,7 @@ async fn spawn_codex_appserver_process(
         return Err("Codex CLI not found in PATH".to_string());
     }
 
-    let mut args: Vec<String> = vec![
-        "app-server".into(),
-        "--enable".into(),
-        "default_mode_request_user_input".into(),
-        "-c".into(),
-        "suppress_unstable_features_warning=true".into(),
-    ];
+    let mut args = codex_appserver_base_args(settings.web_search);
 
     let room_args = crate::rooms::mcp::codex_args_for_run(run_id)?;
     let is_room = room_args.is_some();
@@ -2137,6 +2202,20 @@ async fn spawn_codex_appserver_process(
     let stdout = child.stdout.take().ok_or("no app-server stdout")?;
     let stderr = child.stderr.take().ok_or("no app-server stderr")?;
     Ok((child, stdin, stdout, stderr))
+}
+
+/// Build the app-server base args with an explicit per-agent web-search setting. Keeping the
+/// config override before the subcommand makes the on/off preference apply to app-server too.
+fn codex_appserver_base_args(web_search: Option<bool>) -> Vec<String> {
+    let mut args = crate::agent::spawn::codex_web_search_config_args(web_search);
+    args.extend([
+        "app-server".into(),
+        "--enable".into(),
+        "default_mode_request_user_input".into(),
+        "-c".into(),
+        "suppress_unstable_features_warning=true".into(),
+    ]);
+    args
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3063,6 +3142,22 @@ mod tests {
             models: None,
             extra_env: None,
         }
+    }
+
+    #[test]
+    fn codex_appserver_base_args_honor_tristate_web_search_preference() {
+        let enabled = codex_appserver_base_args(Some(true));
+        assert_eq!(enabled[..3], ["-c", "web_search=\"live\"", "app-server"]);
+
+        let disabled = codex_appserver_base_args(Some(false));
+        assert_eq!(
+            disabled[..3],
+            ["-c", "web_search=\"disabled\"", "app-server"]
+        );
+
+        let inherited = codex_appserver_base_args(None);
+        assert_eq!(inherited[0], "app-server");
+        assert!(!inherited.iter().any(|arg| arg.starts_with("web_search=")));
     }
 
     #[test]

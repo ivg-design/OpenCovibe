@@ -5,8 +5,8 @@ use crate::{
     rooms::{
         github, github_tasks, governance,
         models::{
-            AddParticipantInput, CreateRoomInput, Participant, ProjectStage, Room, SaveTimerInput,
-            Timer,
+            AddParticipantInput, CreateRoomInput, Participant, ProjectStage, Room, RoomProject,
+            SaveTimerInput, Timer,
         },
         operations,
         store::RoomStore,
@@ -17,6 +17,186 @@ use crate::{
 };
 use std::sync::Arc;
 use tauri::State;
+
+#[derive(serde::Serialize)]
+pub struct RoomSessionSeed {
+    run_id: String,
+    title: String,
+    objective: String,
+    repo_path: String,
+    repository: String,
+    provider: String,
+    existing_room_id: Option<String>,
+    projects: Vec<RoomProject>,
+    project_error: Option<String>,
+}
+
+async fn session_repository(cwd: &str) -> Result<(String, String), String> {
+    async fn git(cwd: &str, args: &[&str]) -> Result<String, String> {
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tokio::process::Command::new("git")
+                .env("PATH", crate::agent::claude_stream::augmented_path())
+                .args(["-C", cwd])
+                .args(args)
+                .stdin(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .map_err(|_| "Repository lookup timed out")?
+        .map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Err("Choose a conversation in an existing Git repository.".into());
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().into())
+    }
+    let root = git(cwd, &["rev-parse", "--show-toplevel"]).await?;
+    let remote = git(cwd, &["remote", "get-url", "origin"])
+        .await
+        .unwrap_or_default();
+    let repository = remote
+        .strip_prefix("https://github.com/")
+        .or_else(|| remote.strip_prefix("git@github.com:"))
+        .unwrap_or("")
+        .trim_end_matches(".git")
+        .trim_end_matches('/')
+        .to_owned();
+    Ok((root, repository))
+}
+
+#[tauri::command]
+pub async fn get_room_session_seed(
+    store: State<'_, Arc<RoomStore>>,
+    run_id: String,
+) -> Result<RoomSessionSeed, String> {
+    let meta = storage::runs::get_run(&run_id).ok_or("Conversation not found")?;
+    let session_id = crate::rooms::session_seed::validate_source(&meta)?;
+    let existing_room_id = store
+        .list()?
+        .into_iter()
+        .find(|room| {
+            room.participants.iter().any(|p| p.run_id == run_id)
+                || room
+                    .origin
+                    .as_ref()
+                    .is_some_and(|o| o.provider == meta.agent && o.session_id == session_id)
+        })
+        .map(|room| room.id);
+    let (repo_path, repository) = session_repository(&meta.cwd).await?;
+    let (projects, project_error) = if repository.is_empty() {
+        (vec![], None)
+    } else {
+        match github::list_repository_projects(&repository).await {
+            Ok(projects) => (projects, None),
+            Err(error) => (vec![], Some(error)),
+        }
+    };
+    Ok(RoomSessionSeed {
+        run_id,
+        title: crate::rooms::session_seed::source_title(&meta),
+        objective: crate::rooms::session_seed::short_text(&meta.prompt, 12_000),
+        repo_path,
+        repository,
+        provider: meta.agent,
+        existing_room_id,
+        projects,
+        project_error,
+    })
+}
+
+#[tauri::command]
+pub async fn create_room_from_session(
+    store: State<'_, Arc<RoomStore>>,
+    emitter: State<'_, Arc<BroadcastEmitter>>,
+    sessions: State<'_, ActorSessionMap>,
+    spawn_locks: State<'_, SpawnLocks>,
+    run_id: String,
+    mut input: CreateRoomInput,
+    project_id: Option<String>,
+) -> Result<Room, String> {
+    let (room, create_project) = {
+        let _guard = spawn_locks.acquire(&run_id).await;
+        let mut meta = storage::runs::get_run(&run_id).ok_or("Conversation not found")?;
+        let session_id = crate::rooms::session_seed::validate_source(&meta)?;
+        if let Some(room) = store.list()?.into_iter().find(|room| {
+            room.participants.iter().any(|p| p.run_id == run_id)
+                || room
+                    .origin
+                    .as_ref()
+                    .is_some_and(|o| o.provider == meta.agent && o.session_id == session_id)
+        }) {
+            return Ok(room);
+        }
+        input.repo_path = session_repository(&meta.cwd).await?.0;
+        if input.title.trim().is_empty()
+            || input.title.chars().count() > 120
+            || input.objective.trim().is_empty()
+            || input.objective.len() > 32_000
+        {
+            return Err(
+                "Enter a room title (up to 120 characters) and objective (up to 32000 bytes)."
+                    .into(),
+            );
+        }
+        github::repository_parts(&input.repository)?;
+        // Existing boards retain their fields and workflow; connecting is read-only.
+        let imported_project = if let Some(project_id) = &project_id {
+            let project = github::list_repository_projects(&input.repository)
+                .await?
+                .into_iter()
+                .find(|project| &project.id == project_id)
+                .ok_or("The selected Project is no longer linked to this repository. Refresh and choose again.")?;
+            let board = github::read_board(&project.id).await?;
+            Some((project, board))
+        } else {
+            None
+        };
+        // All history reads must succeed before changing the source actor or metadata.
+        let seed_meta = meta.clone();
+        let (origin, mut peer, messages) =
+            tokio::task::spawn_blocking(move || crate::rooms::session_seed::build_seed(&seed_meta))
+                .await
+                .map_err(|e| e.to_string())??;
+        if crate::commands::session::stop_actor(sessions.inner(), &run_id).await? {
+            emitter.persist_and_emit(
+                &run_id,
+                &crate::models::BusEvent::RunState {
+                    run_id: run_id.clone(),
+                    state: "stopped".into(),
+                    exit_code: None,
+                    error: None,
+                },
+            );
+            meta.status = RunStatus::Stopped;
+        }
+        // Restart on room delivery so the same provider thread receives room tools.
+        meta.execution_path = Some(ExecutionPath::SessionActor);
+        storage::runs::save_meta(&meta)?;
+        peer.effort = storage::settings::get_agent_settings(&meta.agent).effort;
+        let create_project = input.create_project && imported_project.is_none();
+        let room = store.create_from_session(input, origin, peer, messages)?;
+        let room = if let Some((project, board)) = imported_project {
+            store.update(&room.id, |room| {
+                room.project = Some(project);
+                room.board = board;
+                room.project_stage = ProjectStage::Ready;
+                Ok(())
+            })?
+        } else {
+            room
+        };
+        (room, create_project)
+    };
+    if create_project {
+        match ensure_project(&store, &room.id).await {
+            Ok(room) => Ok(room),
+            Err(_) => store.get(&room.id),
+        }
+    } else {
+        Ok(room)
+    }
+}
 
 #[tauri::command]
 pub fn list_rooms(store: State<'_, Arc<RoomStore>>) -> Result<Vec<Room>, String> {
@@ -263,8 +443,33 @@ pub fn post_room_message(
     id: String,
     body: String,
     target_participant_id: Option<String>,
+    sidechat_id: Option<String>,
 ) -> Result<Room, String> {
-    store.append_message(&id, "Human", body, None, target_participant_id, None)
+    store.append_message_in_sidechat(
+        &id,
+        "Human",
+        body,
+        None,
+        target_participant_id,
+        None,
+        sidechat_id,
+    )
+}
+
+#[tauri::command]
+pub fn create_room_sidechat(
+    store: State<'_, Arc<RoomStore>>,
+    id: String,
+    source_message_id: String,
+    title: String,
+    participant_ids: Option<Vec<String>>,
+) -> Result<Room, String> {
+    store.create_sidechat(
+        &id,
+        &source_message_id,
+        &title,
+        participant_ids.unwrap_or_default(),
+    )
 }
 
 fn validate_participant(input: &AddParticipantInput) -> Result<(), String> {
@@ -352,7 +557,7 @@ async fn add_participant(
         &prompt,
         &cwd,
         &input.provider,
-        RunStatus::Pending,
+        RunStatus::Stopped,
         input.model.clone(),
         None,
         None,
@@ -383,6 +588,9 @@ async fn add_participant(
         event_cursor: 0,
         message_cursor: 0,
         pending_delivery: None,
+        active_sidechat_id: None,
+        read_message_ids: vec![],
+        unread_message_ids: vec![],
         no_progress_turns: 0,
         work_signature: None,
     };
@@ -579,9 +787,11 @@ pub fn save_room_timer(
     if input.interval_seconds > 31_536_000 {
         return Err("timer interval cannot exceed one year".into());
     }
-    if !(1..=200).contains(&input.max_deliveries) {
-        return Err("timer delivery limit must be between 1 and 200".into());
-    }
+    validate_timer_limit(
+        input.max_deliveries,
+        input.ends_at,
+        chrono::Utc::now().timestamp_millis(),
+    )?;
     if input.message.trim().is_empty() || input.message.len() > 32000 {
         return Err("timer message must contain 1–32000 bytes".into());
     }
@@ -602,8 +812,10 @@ pub fn save_room_timer(
             t.idle_only = input.idle_only;
             t.enabled = input.enabled;
             t.max_deliveries = input.max_deliveries;
-            t.next_due_at =
-                chrono::Utc::now().timestamp_millis() + input.interval_seconds as i64 * 1000;
+            t.ends_at = input.ends_at;
+            t.next_due_at = chrono::Utc::now()
+                .timestamp_millis()
+                .saturating_add((input.interval_seconds as i64).saturating_mul(1000));
         } else {
             r.timers.push(Timer {
                 id: uuid::Uuid::new_v4().to_string(),
@@ -612,9 +824,11 @@ pub fn save_room_timer(
                 interval_seconds: input.interval_seconds,
                 idle_only: input.idle_only,
                 enabled: input.enabled,
-                next_due_at: chrono::Utc::now().timestamp_millis()
-                    + input.interval_seconds as i64 * 1000,
+                next_due_at: chrono::Utc::now()
+                    .timestamp_millis()
+                    .saturating_add((input.interval_seconds as i64).saturating_mul(1000)),
                 max_deliveries: input.max_deliveries,
+                ends_at: input.ends_at,
                 delivered_count: 0,
                 queued_at: None,
                 last_error: None,
@@ -622,6 +836,39 @@ pub fn save_room_timer(
         }
         Ok(())
     })
+}
+
+fn validate_timer_limit(
+    max_deliveries: Option<u32>,
+    ends_at: Option<i64>,
+    now_ms: i64,
+) -> Result<(), String> {
+    match (max_deliveries, ends_at) {
+        (Some(count), None) if (1..=200).contains(&count) => Ok(()),
+        (Some(_), None) => Err("timer delivery limit must be between 1 and 200".into()),
+        (None, Some(end)) if end > now_ms => Ok(()),
+        (None, Some(_)) => Err("timer end date must be in the future".into()),
+        _ => Err("set exactly one timer limit: a delivery count or an end date".into()),
+    }
+}
+
+#[cfg(test)]
+mod timer_tests {
+    use super::validate_timer_limit;
+
+    #[test]
+    fn timer_count_and_date_limits_validate_exactly_one_future_limit() {
+        let now = 10_000;
+        assert!(validate_timer_limit(Some(1), None, now).is_ok());
+        assert!(validate_timer_limit(Some(200), None, now).is_ok());
+        assert!(validate_timer_limit(Some(0), None, now).is_err());
+        assert!(validate_timer_limit(Some(201), None, now).is_err());
+        assert!(validate_timer_limit(None, Some(now + 1), now).is_ok());
+        assert!(validate_timer_limit(None, Some(now), now).is_err());
+        assert!(validate_timer_limit(None, Some(now - 1), now).is_err());
+        assert!(validate_timer_limit(None, None, now).is_err());
+        assert!(validate_timer_limit(Some(5), Some(now + 1), now).is_err());
+    }
 }
 #[tauri::command]
 pub fn remove_room_timer(
@@ -814,6 +1061,16 @@ pub fn set_room_concurrency(
         r.max_concurrent = limit;
         Ok(())
     })
+}
+
+#[tauri::command]
+pub fn save_room_instructions(
+    store: State<'_, Arc<RoomStore>>,
+    id: String,
+    instructions: String,
+    expected: String,
+) -> Result<Room, String> {
+    store.save_instructions(&id, instructions, expected)
 }
 
 #[tauri::command]

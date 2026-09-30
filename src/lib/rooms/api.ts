@@ -1,5 +1,11 @@
 import { getTransport } from "$lib/transport";
-import type { AddParticipantInput, CreateRoomInput, Room, SaveTimerInput } from "./types";
+import type {
+  AddParticipantInput,
+  CreateRoomInput,
+  Room,
+  RoomSessionSeed,
+  SaveTimerInput,
+} from "./types";
 
 export function listRooms(): Promise<Room[]> {
   return getTransport().invoke("list_rooms");
@@ -11,6 +17,18 @@ export function getRoom(id: string): Promise<Room> {
 
 export function createRoom(input: CreateRoomInput): Promise<Room> {
   return getTransport().invoke("create_room", { input });
+}
+
+export function getRoomSessionSeed(runId: string): Promise<RoomSessionSeed> {
+  return getTransport().invoke("get_room_session_seed", { runId });
+}
+
+export function createRoomFromSession(
+  runId: string,
+  input: CreateRoomInput,
+  projectId: string | null = null,
+): Promise<Room> {
+  return getTransport().invoke("create_room_from_session", { runId, input, projectId });
 }
 
 export function refreshRoomBoard(id: string): Promise<Room> {
@@ -29,8 +47,23 @@ export function postRoomMessage(
   id: string,
   body: string,
   targetParticipantId: string | null = null,
+  sidechatId: string | null = null,
 ): Promise<Room> {
-  return getTransport().invoke("post_room_message", { id, body, targetParticipantId });
+  return getTransport().invoke("post_room_message", { id, body, targetParticipantId, sidechatId });
+}
+
+export function createRoomSidechat(
+  id: string,
+  sourceMessageId: string,
+  title: string,
+  participantIds: string[],
+): Promise<Room> {
+  return getTransport().invoke("create_room_sidechat", {
+    id,
+    sourceMessageId,
+    title,
+    participantIds,
+  });
 }
 
 export function addRoomParticipant(id: string, input: AddParticipantInput): Promise<Room> {
@@ -97,4 +130,12 @@ export function resolveRoomRequest(
 
 export function approveRoomAgent(id: string, requestId: string): Promise<Room> {
   return getTransport().invoke("approve_room_agent", { id, requestId });
+}
+
+export function saveRoomInstructions(
+  id: string,
+  instructions: string,
+  expected: string,
+): Promise<Room> {
+  return getTransport().invoke("save_room_instructions", { id, instructions, expected });
 }

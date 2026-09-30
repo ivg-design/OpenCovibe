@@ -291,7 +291,7 @@ export interface AgentSettings {
   ignore_user_config?: boolean;
   /** Codex `--ignore-rules` — skip execpolicy .rules files. */
   ignore_rules?: boolean;
-  /** Codex `--search` — enable the native web_search tool (new sessions only). */
+  /** Codex `--search` tri-state: true enables, false disables, and unset inherits config. */
   web_search?: boolean;
   updated_at: string;
 }

@@ -513,7 +513,8 @@
 
   // Navigation items (declared before pageName derivation)
   const navItems = [
-    { path: "/rooms", label: () => t("room_pageTitle"), icon: "message" },
+    { path: "/rooms", label: () => t("room_pageTitle"), icon: "users" },
+    { path: "/board", label: () => t("room_projectBoard"), icon: "board" },
     { path: "/chat", label: () => t("nav_chat"), icon: "message" },
     { path: "/explorer", label: () => t("nav_explorer"), icon: "folder" },
     { path: "/plugins", label: () => t("nav_extend"), icon: "zap" },
@@ -1427,7 +1428,35 @@
               {#if isActive}
                 <span class="absolute left-0 top-1.5 h-5 w-[3px] rounded-r-full bg-primary"></span>
               {/if}
-              {#if item.icon === "message"}
+              {#if item.icon === "users"}
+                <svg
+                  class="h-[18px] w-[18px]"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                  ><path
+                    d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"
+                  /><circle cx="9" cy="7" r="4" /></svg
+                >
+              {:else if item.icon === "board"}
+                <svg
+                  class="h-[18px] w-[18px]"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                  ><rect x="3" y="3" width="18" height="18" rx="2" /><path
+                    d="M9 3v18M15 3v18M5.5 7h1M11.5 7h1M17.5 7h1M5.5 11h1M11.5 11h1"
+                  /></svg
+                >
+              {:else if item.icon === "message"}
                 <svg
                   class="h-[18px] w-[18px]"
                   viewBox="0 0 24 24"
@@ -1670,7 +1699,7 @@
       <!-- B. Content Panel -->
       <div
         class="flex flex-none flex-col overflow-hidden border-r border-sidebar-border relative"
-        style:width="{sidebarWidth}px"
+        style:width="min({sidebarWidth}px, 30vw)"
       >
         <!-- Panel header: Project selector + new chat -->
         <div class="flex h-14 items-center gap-1.5 border-b border-sidebar-border px-3">
@@ -2470,7 +2499,7 @@
     <!-- Page content -->
     <main
       class="min-h-0 min-w-0 flex-1 overflow-y-auto"
-      class:overflow-hidden={currentPath?.startsWith("/rooms")}
+      class:overflow-hidden={currentPath?.startsWith("/rooms") || currentPath?.startsWith("/board")}
     >
       {@render children()}
     </main>

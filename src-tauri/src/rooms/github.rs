@@ -97,8 +97,56 @@ fn required_string(value: &Value, key: &str) -> Result<String, String> {
         .ok_or_else(|| format!("GitHub response missing {key}; check repository/Project access"))
 }
 
+/// List every open ProjectV2 explicitly linked to the repository. Returns candidates in
+/// GitHub's order; callers must not auto-select if more than one result is present.
+pub async fn list_repository_projects(repository: &str) -> Result<Vec<RoomProject>, String> {
+    let (owner, name) = repository_parts(repository)?;
+    let mut after: Option<String> = None;
+    let mut projects = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..100 {
+        let data = graphql(
+            "query($owner:String!,$name:String!,$after:String){repository(owner:$owner,name:$name){projectsV2(first:100,after:$after){nodes{id number title url closed owner{... on User{login} ... on Organization{login}}} pageInfo{hasNextPage endCursor}}}}",
+            json!({"owner": owner, "name": name, "after": after}),
+        )
+        .await?;
+        let connection = &data["repository"]["projectsV2"];
+        if connection.is_null() {
+            return Err("GitHub repository not found or Projects access is unavailable".into());
+        }
+        for project in parse_repository_project_page(connection, repository)? {
+            if seen.insert(project.id.clone()) {
+                projects.push(project);
+            }
+        }
+        if !next_cursor(&connection["pageInfo"], &mut after)? {
+            return Ok(projects);
+        }
+    }
+    Err("Repository Project discovery exceeded its pagination limit".into())
+}
+
+fn parse_repository_project_page(
+    connection: &Value,
+    repository: &str,
+) -> Result<Vec<RoomProject>, String> {
+    let nodes = connection["nodes"]
+        .as_array()
+        .ok_or("GitHub repository Project list unavailable; check Project access")?;
+    let mut projects = Vec::new();
+    for node in nodes {
+        // The repository.projectsV2 connection contains only Projects linked to this repo.
+        // Require an explicit open state so incomplete/private response shapes aren't guessed.
+        if node["closed"].as_bool() != Some(false) {
+            continue;
+        }
+        projects.push(parse_project(node, repository)?);
+    }
+    Ok(projects)
+}
+
 fn parse_project(value: &Value, repository: &str) -> Result<RoomProject, String> {
-    let (owner, _) = repository_parts(repository)?;
+    repository_parts(repository)?;
     Ok(RoomProject {
         id: required_string(value, "id")?,
         number: value["number"]
@@ -106,7 +154,7 @@ fn parse_project(value: &Value, repository: &str) -> Result<RoomProject, String>
             .ok_or("GitHub project number missing")?,
         title: required_string(value, "title")?,
         url: required_string(value, "url")?,
-        owner: owner.into(),
+        owner: required_string(&value["owner"], "login")?,
         repository: repository.into(),
     })
 }
@@ -119,7 +167,7 @@ pub async fn find_project(
     let mut after: Option<String> = None;
     for _ in 0..100 {
         let data = graphql(
-            "query($id:ID!,$after:String){node(id:$id){... on User{projectsV2(first:100,after:$after){nodes{id number title url} pageInfo{hasNextPage endCursor}}} ... on Organization{projectsV2(first:100,after:$after){nodes{id number title url} pageInfo{hasNextPage endCursor}}}}}",
+            "query($id:ID!,$after:String){node(id:$id){... on User{projectsV2(first:100,after:$after){nodes{id number title url owner{... on User{login} ... on Organization{login}}} pageInfo{hasNextPage endCursor}}} ... on Organization{projectsV2(first:100,after:$after){nodes{id number title url owner{... on User{login} ... on Organization{login}}} pageInfo{hasNextPage endCursor}}}}}",
             json!({"id": owner_id, "after": after}),
         ).await?;
         let projects = &data["node"]["projectsV2"];
@@ -145,7 +193,7 @@ pub async fn create_project(
     title: &str,
 ) -> Result<RoomProject, String> {
     let data = graphql(
-        "mutation($owner:ID!,$repo:ID!,$title:String!){createProjectV2(input:{ownerId:$owner,repositoryId:$repo,title:$title}){projectV2{id number title url}}}",
+        "mutation($owner:ID!,$repo:ID!,$title:String!){createProjectV2(input:{ownerId:$owner,repositoryId:$repo,title:$title}){projectV2{id number title url owner{... on User{login} ... on Organization{login}}}}}",
         json!({"owner": owner_id, "repo": repo_id, "title": title}),
     ).await?;
     parse_project(&data["createProjectV2"]["projectV2"], repository)
@@ -214,7 +262,8 @@ fn parse_board_item(node: &Value) -> Result<BoardItem, String> {
         Some("DraftIssue") => "draft",
         _ => "redacted",
     };
-    let mut status = "Backlog".to_string();
+    let mut status = None;
+    let mut generic_status = None;
     let mut priority = None;
     let mut agent = None;
     if let Some(fields) = node["fieldValues"]["nodes"].as_array() {
@@ -228,9 +277,14 @@ fn parse_board_item(node: &Value) -> Result<BoardItem, String> {
                 .map(str::to_ascii_lowercase)
                 .as_deref()
             {
+                Some("remediation status") => {
+                    if status.is_none() {
+                        status = value;
+                    }
+                }
                 Some("status") => {
-                    if let Some(v) = value {
-                        status = v;
+                    if generic_status.is_none() {
+                        generic_status = value;
                     }
                 }
                 Some("priority") => priority = value,
@@ -239,6 +293,9 @@ fn parse_board_item(node: &Value) -> Result<BoardItem, String> {
             }
         }
     }
+    let status = status
+        .or(generic_status)
+        .unwrap_or_else(|| "Backlog".into());
     Ok(BoardItem {
         id: required_string(node, "id")?,
         title: if kind == "redacted" {
@@ -277,11 +334,66 @@ mod tests {
     }
 
     #[test]
+    fn repository_project_candidates_keep_actual_owner_and_only_open_linked_projects() {
+        let connection = json!({
+            "nodes": [
+                {
+                    "id": "PVT_open_1",
+                    "number": 2,
+                    "title": "Nemo Feature Roadmap",
+                    "url": "https://github.com/users/board-owner/projects/2",
+                    "closed": false,
+                    "owner": {"login": "board-owner"}
+                },
+                {
+                    "id": "PVT_open_2",
+                    "number": 7,
+                    "title": "Shared planning",
+                    "url": "https://github.com/orgs/team/projects/7",
+                    "closed": false,
+                    "owner": {"login": "team"}
+                },
+                {
+                    "id": "PVT_closed",
+                    "number": 8,
+                    "title": "Archived board",
+                    "url": "https://github.com/users/board-owner/projects/8",
+                    "closed": true,
+                    "owner": {"login": "board-owner"}
+                }
+            ],
+            "pageInfo": {"hasNextPage": false, "endCursor": "cursor-1"}
+        });
+
+        let candidates = parse_repository_project_page(&connection, "repo-owner/nemo").unwrap();
+        assert_eq!(candidates.len(), 2, "return all linked open choices");
+        assert_eq!(candidates[0].owner, "board-owner");
+        assert_eq!(candidates[0].repository, "repo-owner/nemo");
+        assert_eq!(candidates[0].number, 2);
+        assert_eq!(candidates[1].owner, "team");
+    }
+
+    #[test]
     fn reads_custom_status_priority_and_agent_fields() {
         let item = parse_board_item(&json!({"id":"item", "content":{"__typename":"Issue","title":"Do work","url":"https://github.com/o/r/issues/1"},"fieldValues":{"nodes":[{"name":"Ready","field":{"name":"Status"}},{"name":"P1","field":{"name":"Priority"}},{"text":"Claude review","field":{"name":"Agent"}}]}})).unwrap();
         assert_eq!(item.status, "Ready");
         assert_eq!(item.priority.as_deref(), Some("P1"));
         assert_eq!(item.agent.as_deref(), Some("Claude review"));
+    }
+
+    #[test]
+    fn remediation_status_takes_precedence_over_generic_status() {
+        let item = parse_board_item(&json!({
+            "id": "item",
+            "content": {"__typename": "Issue", "title": "Pivot remediation"},
+            "fieldValues": {"nodes": [
+                {"name": "Backlog", "field": {"name": "Status"}},
+                {"name": "In progress", "field": {"name": "Remediation status"}},
+                {"name": "Review", "field": {"name": "Remediation status"}}
+            ]}
+        }))
+        .unwrap();
+        assert_eq!(item.status, "In progress");
     }
 
     #[test]

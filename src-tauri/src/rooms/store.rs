@@ -1,4 +1,6 @@
-use super::models::{Board, CreateRoomInput, Message, ProjectStage, Room};
+use super::models::{
+    Board, CreateRoomInput, Message, Participant, ProjectStage, Room, RoomOrigin, Sidechat,
+};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use std::path::Path;
 use std::sync::Mutex;
@@ -43,6 +45,24 @@ impl RoomStore {
     }
 
     pub fn create(&self, input: CreateRoomInput) -> Result<Room, String> {
+        self.create_seeded(input, None)
+    }
+
+    pub fn create_from_session(
+        &self,
+        input: CreateRoomInput,
+        origin: RoomOrigin,
+        peer: Participant,
+        messages: Vec<Message>,
+    ) -> Result<Room, String> {
+        self.create_seeded(input, Some((origin, peer, messages)))
+    }
+
+    fn create_seeded(
+        &self,
+        input: CreateRoomInput,
+        seed: Option<(RoomOrigin, Participant, Vec<Message>)>,
+    ) -> Result<Room, String> {
         let title = input.title.trim();
         let objective = input.objective.trim();
         if title.is_empty() || title.chars().count() > 120 {
@@ -57,7 +77,7 @@ impl RoomStore {
             return Err("choose an existing absolute local repository directory".into());
         }
         let now = crate::models::now_iso();
-        let room = Room {
+        let mut room = Room {
             id: uuid::Uuid::new_v4().to_string(),
             title: title.into(),
             objective: objective.into(),
@@ -75,6 +95,7 @@ impl RoomStore {
             board: Board::default(),
             participants: vec![],
             messages: vec![],
+            sidechats: vec![],
             timers: vec![],
             claims: vec![],
             requests: vec![],
@@ -82,9 +103,45 @@ impl RoomStore {
             max_concurrent: 3,
             archived: false,
             runtime_error: None,
+            origin: None,
         };
-        let conn = self.connection.lock().map_err(|e| e.to_string())?;
-        conn.execute(
+        if let Some((origin, peer, messages)) = seed {
+            room.origin = Some(origin);
+            room.participants.push(peer);
+            room.messages = messages;
+        }
+        let mut conn = self.connection.lock().map_err(|e| e.to_string())?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        if let Some(origin) = &room.origin {
+            let existing = {
+                let mut statement = tx
+                    .prepare("SELECT payload FROM rooms")
+                    .map_err(|e| e.to_string())?;
+                let rows = statement
+                    .query_map([], |row| row.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?;
+                let mut found = None;
+                for row in rows {
+                    let saved: Room = serde_json::from_str(&row.map_err(|e| e.to_string())?)
+                        .map_err(|e| e.to_string())?;
+                    if saved.participants.iter().any(|p| p.run_id == origin.run_id)
+                        || saved.origin.as_ref().is_some_and(|o| {
+                            o.provider == origin.provider && o.session_id == origin.session_id
+                        })
+                    {
+                        found = Some(saved);
+                        break;
+                    }
+                }
+                found
+            };
+            if let Some(existing) = existing {
+                return Ok(existing);
+            }
+        }
+        tx.execute(
             "INSERT INTO rooms (id, payload) VALUES (?1, ?2)",
             params![
                 room.id,
@@ -92,6 +149,7 @@ impl RoomStore {
             ],
         )
         .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
         Ok(room)
     }
 
@@ -150,6 +208,28 @@ impl RoomStore {
         Ok(room)
     }
 
+    pub fn save_instructions(
+        &self,
+        id: &str,
+        instructions: String,
+        expected: String,
+    ) -> Result<Room, String> {
+        let instructions = instructions.trim();
+        if instructions.is_empty() || instructions.len() > 32_000 {
+            return Err("Enter room instructions (up to 32000 bytes).".into());
+        }
+        self.update(id, |room| {
+            if room.archived {
+                return Err("room is archived".into());
+            }
+            if room.objective != expected {
+                return Err("Room instructions changed elsewhere. Cancel and reopen the editor to review the latest version.".into());
+            }
+            room.objective = instructions.to_owned();
+            Ok(())
+        })
+    }
+
     pub fn post_message(&self, id: &str, body: String) -> Result<Room, String> {
         self.append_message(id, "Human", body, None, None, None)
     }
@@ -194,11 +274,53 @@ impl RoomStore {
         target_participant_id: Option<String>,
         source_event_id: Option<String>,
     ) -> Result<Room, String> {
+        self.append_message_in_sidechat(
+            id,
+            sender,
+            body,
+            participant_id,
+            target_participant_id,
+            source_event_id,
+            None,
+        )
+    }
+
+    // Retain the existing message entry point while adding an optional conversation scope.
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_message_in_sidechat(
+        &self,
+        id: &str,
+        sender: &str,
+        body: String,
+        participant_id: Option<String>,
+        target_participant_id: Option<String>,
+        source_event_id: Option<String>,
+        sidechat_id: Option<String>,
+    ) -> Result<Room, String> {
         let body = body.trim();
         if body.is_empty() || body.len() > 32_000 {
             return Err("message must contain 1–32000 bytes".into());
         }
         self.update(id, |room| {
+            if let Some(sidechat_id) = sidechat_id.as_deref() {
+                let sidechat = room
+                    .sidechats
+                    .iter()
+                    .find(|s| s.id == sidechat_id)
+                    .ok_or("sidechat not found")?;
+                if participant_id
+                    .as_ref()
+                    .is_some_and(|id| !sidechat.participant_ids.contains(id))
+                {
+                    return Err("sender is not a member of this sidechat".into());
+                }
+                if target_participant_id
+                    .as_ref()
+                    .is_some_and(|id| !sidechat.participant_ids.contains(id))
+                {
+                    return Err("target participant is not a member of this sidechat".into());
+                }
+            }
             if target_participant_id
                 .as_ref()
                 .is_some_and(|target| !room.participants.iter().any(|p| &p.id == target))
@@ -220,7 +342,97 @@ impl RoomStore {
                 participant_id,
                 target_participant_id,
                 source_event_id,
+                sidechat_id,
             });
+            Ok(())
+        })
+    }
+
+    pub fn create_sidechat(
+        &self,
+        room_id: &str,
+        source_message_id: &str,
+        title: &str,
+        participant_ids: Vec<String>,
+    ) -> Result<Room, String> {
+        let title = title.trim();
+        if title.is_empty() || title.chars().count() > 120 {
+            return Err("sidechat title must contain 1–120 characters".into());
+        }
+        self.update(room_id, |room| {
+            if room.archived {
+                return Err("room is archived".into());
+            }
+            let source = room
+                .messages
+                .iter()
+                .find(|m| m.id == source_message_id)
+                .ok_or("source message not found in this room")?;
+            let mut allowed_ids = if let Some(source_sidechat_id) = source.sidechat_id.as_deref() {
+                room.sidechats
+                    .iter()
+                    .find(|s| s.id == source_sidechat_id)
+                    .ok_or("source sidechat not found")?
+                    .participant_ids
+                    .clone()
+            } else if source.target_participant_id.is_some() {
+                [
+                    source.participant_id.clone(),
+                    source.target_participant_id.clone(),
+                ]
+                .into_iter()
+                .flatten()
+                .collect()
+            } else {
+                room.participants
+                    .iter()
+                    .map(|p| p.id.clone())
+                    .collect::<Vec<_>>()
+            };
+            if source.sidechat_id.is_some() && source.target_participant_id.is_some() {
+                allowed_ids.retain(|id| {
+                    source.participant_id.as_ref() == Some(id)
+                        || source.target_participant_id.as_ref() == Some(id)
+                });
+            }
+            let ids = if participant_ids.is_empty() {
+                allowed_ids.clone()
+            } else {
+                participant_ids.clone()
+            };
+            let mut unique = Vec::new();
+            for id in ids {
+                if !unique.contains(&id) {
+                    unique.push(id);
+                }
+            }
+            if unique.is_empty()
+                || unique.iter().any(|id| {
+                    !room.participants.iter().any(|p| &p.id == id) || !allowed_ids.contains(id)
+                })
+            {
+                return Err(
+                    "sidechat participants must be room members who can see the source message"
+                        .into(),
+                );
+            }
+            let id = uuid::Uuid::new_v4().to_string();
+            room.sidechats.push(Sidechat {
+                id,
+                title: title.into(),
+                source_message_id: source_message_id.into(),
+                participant_ids: unique,
+                created_at: crate::models::now_iso(),
+            });
+            for peer in room.participants.iter_mut().filter(|p| {
+                room.sidechats
+                    .last()
+                    .is_some_and(|s| s.participant_ids.contains(&p.id))
+            }) {
+                if !peer.read_message_ids.contains(&source.id) {
+                    peer.read_message_ids.push(source.id.clone());
+                }
+            }
             Ok(())
         })
     }
@@ -392,6 +604,105 @@ mod tests {
         assert!(recovered.paused);
         assert_eq!(recovered.messages[0].body, "Keep the same board");
         assert_eq!(recovered.project_title(), room.project_title());
+    }
+    #[test]
+    fn edited_instructions_persist_without_overwriting_newer_room_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("rooms.db");
+        let store = RoomStore::open(&path).unwrap();
+        let room = store.create(input(temp.path())).unwrap();
+        store
+            .post_message(&room.id, "New room update".into())
+            .unwrap();
+        let saved = store
+            .save_instructions(
+                &room.id,
+                " Follow repository rules and use bounded local subagents. ".into(),
+                room.objective.clone(),
+            )
+            .unwrap();
+        assert_eq!(saved.messages.len(), 1);
+        assert_eq!(
+            saved.objective,
+            "Follow repository rules and use bounded local subagents."
+        );
+        assert!(store
+            .save_instructions(&room.id, "Stale edit".into(), room.objective)
+            .is_err());
+        assert!(store
+            .save_instructions(&room.id, " ".into(), saved.objective.clone())
+            .is_err());
+        drop(store);
+        let store = RoomStore::open(&path).unwrap();
+        assert_eq!(store.get(&room.id).unwrap().objective, saved.objective);
+        store
+            .update(&room.id, |r| {
+                r.archived = true;
+                Ok(())
+            })
+            .unwrap();
+        assert!(store
+            .save_instructions(&room.id, "Archived edit".into(), saved.objective)
+            .is_err());
+    }
+
+    #[test]
+    fn conversation_room_creation_is_atomic_idempotent_and_survives_reopen() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("rooms.db");
+        let store = RoomStore::open(&path).unwrap();
+        let origin = RoomOrigin {
+            run_id: "existing-run".into(),
+            provider: "codex".into(),
+            session_id: "same-thread".into(),
+            title: "Nemo conversation".into(),
+            message_count: 100,
+            context: "Original context".into(),
+        };
+        let peer = Participant {
+            id: "original-peer".into(),
+            run_id: origin.run_id.clone(),
+            provider: "codex".into(),
+            name: "Original Codex".into(),
+            paused: true,
+            model: Some("gpt-6.1-sol".into()),
+            event_cursor: 999,
+            message_cursor: 1,
+            ..Default::default()
+        };
+        let message = Message {
+            id: "original-message".into(),
+            sender: peer.name.clone(),
+            body: "Existing work".into(),
+            created_at: "yesterday".into(),
+            participant_id: Some(peer.id.clone()),
+            target_participant_id: None,
+            source_event_id: Some("existing-run:998".into()),
+            sidechat_id: None,
+        };
+        let room = store
+            .create_from_session(
+                input(temp.path()),
+                origin.clone(),
+                peer.clone(),
+                vec![message],
+            )
+            .unwrap();
+        assert!(room.paused);
+        assert_eq!(room.participants[0].run_id, "existing-run");
+        let mut alias = origin.clone();
+        alias.run_id = "second-import-of-same-provider-thread".into();
+        let second = store
+            .create_from_session(input(temp.path()), alias, peer, vec![])
+            .unwrap();
+        assert_eq!(room.id, second.id);
+        assert_eq!(store.list().unwrap().len(), 1);
+        drop(store);
+        let store = RoomStore::open(&path).unwrap();
+        let recovered = store.get(&room.id).unwrap();
+        assert_eq!(recovered.origin.unwrap().session_id, "same-thread");
+        assert_eq!(recovered.participants[0].event_cursor, 999);
+        assert_eq!(recovered.messages[0].body, "Existing work");
     }
 
     #[test]

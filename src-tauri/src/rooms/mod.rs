@@ -6,5 +6,6 @@ pub mod models;
 pub mod operations;
 pub mod runtime;
 pub mod scheduler;
+pub mod session_seed;
 pub mod store;
 pub mod worktrees;

@@ -16,6 +16,8 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 const DB_NAME: &str = "rooms.sqlite3";
 pub const ROOM_TOOL_NAMES: &[&str] = &[
     "snapshot",
+    "create_sidechat",
+    "read_sidechat",
     "post_message",
     "read_task",
     "create_task",
@@ -218,6 +220,73 @@ async fn call_tool(
         .ok_or("participant is not in this room")?;
     match name {
         "snapshot" => Ok(snapshot(&room, peer)),
+        "create_sidechat" => {
+            operations::active_peer(&room, participant_id)?;
+            let source_message_id = required_string(args, "source_message_id")?;
+            let title = required_string(args, "title")?;
+            let ids: Vec<String> = args
+                .get("participant_ids")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let source = room
+                .messages
+                .iter()
+                .find(|m| m.id == source_message_id)
+                .ok_or("source message not found in this room")?;
+            let source_visible = source
+                .target_participant_id
+                .as_deref()
+                .is_none_or(|target| {
+                    target == participant_id
+                        || source.participant_id.as_deref() == Some(participant_id)
+                })
+                && source
+                    .sidechat_id
+                    .as_ref()
+                    .is_none_or(|source_sidechat_id| {
+                        room.sidechats.iter().any(|s| {
+                            &s.id == source_sidechat_id && s.participant_ids.contains(&peer.id)
+                        })
+                    });
+            if !source_visible {
+                return Err("source message is not visible to this participant".into());
+            }
+            let updated = store.create_sidechat(room_id, source_message_id, title, ids)?;
+            Ok(json!({"sidechat":updated.sidechats.last()}))
+        }
+        "read_sidechat" => {
+            let id = required_string(args, "sidechat_id")?;
+            let sidechat = room
+                .sidechats
+                .iter()
+                .find(|s| s.id == id)
+                .ok_or("sidechat not found")?;
+            if !sidechat.participant_ids.contains(&peer.id) {
+                return Err("participant is not a member of this sidechat".into());
+            }
+            let source = room
+                .messages
+                .iter()
+                .find(|m| m.id == sidechat.source_message_id)
+                .ok_or("sidechat source message is unavailable")?;
+            let messages = room
+                .messages
+                .iter()
+                .filter(|m| {
+                    m.sidechat_id.as_deref() == Some(id)
+                        && m.target_participant_id
+                            .as_deref()
+                            .is_none_or(|target| target == peer.id)
+                })
+                .collect::<Vec<_>>();
+            Ok(json!({"sidechat":sidechat,"source":source,"messages":messages}))
+        }
         "read_task" => {
             let project = room.project.as_ref().ok_or("room has no GitHub Project")?;
             let task_id = required_string(args, "task_id")?;
@@ -233,15 +302,41 @@ async fn call_tool(
                 .get("target_participant_id")
                 .and_then(Value::as_str)
                 .map(str::to_owned);
-            let updated = store.append_message(
+            let sidechat_id = match args.get("sidechat_id") {
+                Some(Value::Null) => None,
+                Some(v) => Some(
+                    v.as_str()
+                        .ok_or("sidechat_id must be a string or null")?
+                        .to_owned(),
+                ),
+                None => peer.active_sidechat_id.clone(),
+            };
+            if let Some(ref id) = sidechat_id {
+                let sc = room
+                    .sidechats
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .ok_or("sidechat not found")?;
+                if !sc.participant_ids.contains(&peer.id) {
+                    return Err("participant is not a member of this sidechat".into());
+                }
+                if target_id
+                    .as_ref()
+                    .is_some_and(|target| !sc.participant_ids.contains(target))
+                {
+                    return Err("target participant is not a member of this sidechat".into());
+                }
+            }
+            let updated = store.append_message_in_sidechat(
                 room_id,
                 &peer.name,
                 body.to_owned(),
                 Some(participant_id.to_owned()),
                 target_id,
                 None,
+                sidechat_id,
             )?;
-            Ok(json!({"message_posted":true,"message_count":updated.messages.len()}))
+            Ok(json!({"message_posted":true,"message":updated.messages.last()}))
         }
         "create_task" => {
             operations::active_peer(&room, participant_id)?;
@@ -444,19 +539,26 @@ fn snapshot(room: &Room, peer: &Participant) -> Value {
         .iter()
         .rev()
         .filter(|message| {
-            message
-                .target_participant_id
-                .as_deref()
-                .is_none_or(|target| target == peer.id)
+            (message.sidechat_id.is_none()
+                || message.sidechat_id.as_ref().is_some_and(|id| {
+                    room.sidechats
+                        .iter()
+                        .any(|s| &s.id == id && s.participant_ids.contains(&peer.id))
+                }))
+                && message
+                    .target_participant_id
+                    .as_deref()
+                    .is_none_or(|target| target == peer.id)
         })
         .take(100)
         .collect::<Vec<_>>();
     messages.reverse();
     json!({
-        "room": {"id":room.id,"title":room.title,"objective":room.objective,"repository":room.repository,"paused":room.paused,"archived":room.archived,"project":room.project,"board":room.board},
+        "room": {"id":room.id,"title":room.title,"objective":room.objective,"repository":room.repository,"paused":room.paused,"archived":room.archived,"project":room.project,"board":room.board,"starting_conversation":room.origin,"sidechats":room.sidechats.iter().filter(|s|s.participant_ids.contains(&peer.id)).collect::<Vec<_>>()},
         "participant": {"id":peer.id,"name":peer.name,"provider":peer.provider,"paused":peer.paused,"state":peer.state,"wake_count":peer.wake_count,"max_turns":peer.max_turns,"branch":peer.branch,"last_error":peer.last_error,"pending_delivery":peer.pending_delivery.as_ref().map(|delivery| json!({"id":delivery.id,"reason":delivery.reason,"state":delivery.state,"created_at":delivery.created_at,"task_id":delivery.task_id,"timer_id":delivery.timer_id}))},
         "participants":room.participants.iter().map(|p| json!({"id":p.id,"name":p.name,"provider":p.provider,"paused":p.paused,"state":p.state,"branch":p.branch})).collect::<Vec<_>>(),
         "messages":messages,
+        "active_sidechat_id":peer.active_sidechat_id,
         "claims":room.claims,
         "timers":room.timers,
         "requests":room.requests,
@@ -476,7 +578,9 @@ fn tool_definitions() -> Value {
     };
     json!([
         make("snapshot","Read the scoped room snapshot, board, participants, visible shared messages, and claims.",&[],json!({})),
-        make("post_message","Post a room-scoped message, optionally addressed to one participant.",&["body"],json!({"body":{"type":"string"},"target_participant_id":{"type":["string","null"]}})),
+        make("create_sidechat","Create a sidechat from a visible room message, including a message in another sidechat; this never wakes participants.",&["source_message_id","title"],json!({"source_message_id":{"type":"string"},"title":{"type":"string"},"participant_ids":{"type":"array","items":{"type":"string"}}})),
+        make("read_sidechat","Read a sidechat, its visible source message, and its messages.",&["sidechat_id"],json!({"sidechat_id":{"type":"string"}})),
+        make("post_message","Post to the main room or a sidechat; omitted sidechat_id uses the active sidechat.",&["body"],json!({"body":{"type":"string"},"target_participant_id":{"type":["string","null"]},"sidechat_id":{"type":["string","null"],"description":"Omit to use your active sidechat; explicit null posts to the main conversation."}})),
         make("read_task","Read a task that belongs to the room's GitHub Project.",&["task_id"],json!({"task_id":{"type":"string"}})),
         make("create_task","Create or find an exact-title draft task on the room's GitHub Project, then refresh its board.",&["title","body"],json!({"title":{"type":"string"},"body":{"type":"string"}})),
         make("claim_task","Atomically claim an eligible room board task and update GitHub.",&["task_id"],json!({"task_id":{"type":"string"}})),
@@ -626,11 +730,119 @@ mod tests {
             .iter()
             .filter(|a| a.contains("approval_mode="))
             .collect();
-        assert_eq!(approvals.len(), 13);
+        assert_eq!(approvals.len(), ROOM_TOOL_NAMES.len());
         assert!(approvals.iter().all(|a| a.ends_with("=\"approve\"")));
         assert!(!args
             .iter()
             .any(|a| a.starts_with("approval_policy=") || a.starts_with("sandbox_mode=")));
+    }
+
+    #[tokio::test]
+    async fn sidechat_tools_enforce_membership_and_return_visible_context() {
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = temp.path().join("data");
+        let store = RoomStore::open(&data_dir.join(DB_NAME)).unwrap();
+        let room = store
+            .create(crate::rooms::models::CreateRoomInput {
+                title: "Sidechat scope".into(),
+                objective: "Keep branches private".into(),
+                repo_path: temp.path().display().to_string(),
+                repository: "owner/repo".into(),
+                create_project: false,
+            })
+            .unwrap();
+        store
+            .update(&room.id, |r| {
+                r.paused = false;
+                for id in ["a", "b", "c"] {
+                    r.participants.push(Participant {
+                        id: id.into(),
+                        name: id.into(),
+                        paused: false,
+                        ..Default::default()
+                    });
+                }
+                Ok(())
+            })
+            .unwrap();
+        let source = store
+            .append_message(&room.id, "Human", "Shared source".into(), None, None, None)
+            .unwrap()
+            .messages
+            .last()
+            .unwrap()
+            .id
+            .clone();
+        let created = call_tool(
+            &data_dir,
+            &room.id,
+            "a",
+            "create_sidechat",
+            &json!({"source_message_id":source,"title":"Small group","participant_ids":["a","b"]}),
+        )
+        .await
+        .unwrap();
+        let id = created["sidechat"]["id"].as_str().unwrap().to_owned();
+        store
+            .append_message_in_sidechat(
+                &room.id,
+                "a",
+                "Private detail".into(),
+                Some("a".into()),
+                None,
+                None,
+                Some(id.clone()),
+            )
+            .unwrap();
+        let read = call_tool(
+            &data_dir,
+            &room.id,
+            "b",
+            "read_sidechat",
+            &json!({"sidechat_id":id}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(read["source"]["body"], "Shared source");
+        assert_eq!(read["messages"][0]["body"], "Private detail");
+        assert!(call_tool(
+            &data_dir,
+            &room.id,
+            "c",
+            "read_sidechat",
+            &json!({"sidechat_id":id})
+        )
+        .await
+        .unwrap_err()
+        .contains("not a member"));
+        let source_message = store
+            .get(&room.id)
+            .unwrap()
+            .messages
+            .last()
+            .unwrap()
+            .id
+            .clone();
+        let nested = call_tool(
+            &data_dir,
+            &room.id,
+            "a",
+            "create_sidechat",
+            &json!({"source_message_id":source_message,"title":"Nested","participant_ids":["a"]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(nested["sidechat"]["participant_ids"], json!(["a"]));
+        let after_create = store.get(&room.id).unwrap();
+        assert!(after_create
+            .participants
+            .iter()
+            .all(|p| p.pending_delivery.is_none()));
+        drop(store);
+        let reopened = RoomStore::open(&data_dir.join(DB_NAME)).unwrap();
+        let persisted = reopened.get(&room.id).unwrap();
+        assert_eq!(persisted.sidechats.len(), 2);
+        assert_eq!(persisted.sidechats[1].participant_ids, vec!["a"]);
     }
 
     #[tokio::test]
@@ -786,6 +998,8 @@ mod tests {
             names,
             [
                 "snapshot",
+                "create_sidechat",
+                "read_sidechat",
                 "post_message",
                 "read_task",
                 "create_task",
@@ -841,6 +1055,7 @@ mod tests {
             board: Default::default(),
             participants: vec![],
             messages: vec![],
+            sidechats: vec![],
             timers: vec![],
             claims: vec![],
             requests: vec![],
@@ -848,6 +1063,7 @@ mod tests {
             max_concurrent: 3,
             archived: false,
             runtime_error: None,
+            origin: None,
         };
         let peer = Participant {
             id: "peer-id".into(),

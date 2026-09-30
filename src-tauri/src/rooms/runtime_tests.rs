@@ -94,9 +94,13 @@ fn older_room_records_get_runtime_field_defaults() {
     let fixture = Fixture::new();
     let mut value = serde_json::to_value(&fixture.room).unwrap();
     value.as_object_mut().unwrap().remove("max_concurrent");
+    value.as_object_mut().unwrap().remove("sidechats");
     for peer in value["participants"].as_array_mut().unwrap() {
         peer.as_object_mut().unwrap().remove("no_progress_turns");
         peer.as_object_mut().unwrap().remove("work_signature");
+        peer.as_object_mut().unwrap().remove("active_sidechat_id");
+        peer.as_object_mut().unwrap().remove("read_message_ids");
+        peer.as_object_mut().unwrap().remove("unread_message_ids");
     }
     value["timers"] = serde_json::json!([{
         "id":"timer-old", "participant_id":"peer-a", "message":"hello",
@@ -109,6 +113,94 @@ fn older_room_records_get_runtime_field_defaults() {
     assert_eq!(restored.participants[0].no_progress_turns, 0);
     assert_eq!(restored.participants[0].work_signature, None);
     assert_eq!(restored.timers[0].queued_at, None);
+    assert_eq!(restored.timers[0].max_deliveries, Some(2));
+    assert_eq!(restored.timers[0].ends_at, None);
+    assert!(restored.sidechats.is_empty());
+    assert_eq!(restored.participants[0].active_sidechat_id, None);
+}
+
+#[test]
+fn sidechat_delivery_acknowledges_only_its_branch_and_retains_other_unread_messages() {
+    let fixture = Fixture::new();
+    let source = fixture
+        .store
+        .append_message(
+            &fixture.room.id,
+            "Human",
+            "Start a focused discussion".into(),
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+        .messages
+        .last()
+        .unwrap()
+        .id
+        .clone();
+    let room = fixture
+        .store
+        .create_sidechat(
+            &fixture.room.id,
+            &source,
+            "Focused discussion",
+            vec!["peer-a".into(), "peer-b".into()],
+        )
+        .unwrap();
+    let sidechat_id = room.sidechats[0].id.clone();
+    fixture
+        .store
+        .append_message_in_sidechat(
+            &room.id,
+            "Human",
+            "Sidechat question".into(),
+            None,
+            None,
+            None,
+            Some(sidechat_id.clone()),
+        )
+        .unwrap();
+    fixture
+        .store
+        .append_message(
+            &room.id,
+            "Human",
+            "Separate main question".into(),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    let current = fixture.store.get(&room.id).unwrap();
+    let peer = current
+        .participants
+        .iter()
+        .find(|p| p.id == "peer-a")
+        .unwrap()
+        .clone();
+    let delivery = plan(&current, &peer, fixture.now()).unwrap();
+    assert_eq!(delivery.sidechat_id.as_deref(), Some(sidechat_id.as_str()));
+    reserve_delivery(&fixture.store, &room.id, &peer.id, delivery, fixture.now()).unwrap();
+    let reserved = fixture.store.get(&room.id).unwrap();
+    let reserved_peer = reserved
+        .participants
+        .iter()
+        .find(|p| p.id == "peer-a")
+        .unwrap();
+    assert!(reserved_peer.active_sidechat_id.as_deref() == Some(sidechat_id.as_str()));
+    assert!(reserved_peer.read_message_ids.iter().any(|id| reserved
+        .messages
+        .iter()
+        .any(|m| &m.id == id && m.sidechat_id.as_deref() == Some(sidechat_id.as_str()))));
+    assert!(!reserved_peer.read_message_ids.iter().any(|id| reserved
+        .messages
+        .iter()
+        .any(|m| &m.id == id && m.body == "Separate main question")));
+    let mut idle_peer = reserved_peer.clone();
+    idle_peer.state = "idle".into();
+    idle_peer.pending_delivery = None;
+    let next = plan(&reserved, &idle_peer, fixture.now()).unwrap();
+    assert!(next.sidechat_id.is_none());
 }
 
 fn claim(task_id: &str, participant_id: &str, state: &str) -> Claim {
@@ -131,6 +223,8 @@ fn delivery(reason: &str, timer_id: Option<&str>, created_at: i64) -> Delivery {
         state: "prepared".into(),
         task_id: None,
         timer_id: timer_id.map(str::to_owned),
+        sidechat_id: None,
+        message_id: None,
     }
 }
 
@@ -144,7 +238,8 @@ fn timer(id: &str, participant_id: &str, now: i64) -> Timer {
         enabled: true,
         next_due_at: now - 1,
         queued_at: None,
-        max_deliveries: 2,
+        max_deliveries: Some(2),
+        ends_at: None,
         delivered_count: 0,
         last_error: None,
     }
@@ -236,6 +331,39 @@ fn human_broadcast_and_direct_message_wake_but_untargeted_agent_message_does_not
 }
 
 #[test]
+fn seeded_history_never_replays_as_new_work_for_joining_peers() {
+    let fixture = Fixture::new();
+    let peer = fixture.peer("peer-b");
+    let mut room = fixture.room.clone();
+    room.auto_continue = false;
+    room.origin = Some(crate::rooms::models::RoomOrigin {
+        run_id: "original-run".into(),
+        provider: "codex".into(),
+        session_id: "original-thread".into(),
+        title: "Earlier work".into(),
+        message_count: 1,
+        context: "Earlier request".into(),
+    });
+    room.messages.push(crate::rooms::models::Message {
+        id: "historical-message".into(),
+        sender: "Human".into(),
+        body: "An old request that must not be replayed".into(),
+        created_at: crate::models::now_iso(),
+        participant_id: None,
+        target_participant_id: None,
+        source_event_id: Some("original-run:12".into()),
+        sidechat_id: None,
+    });
+    assert!(plan(&room, &peer, fixture.now()).is_none());
+    let mut new_message = room.messages[0].clone();
+    new_message.id = "new-message".into();
+    new_message.source_event_id = None;
+    new_message.body = "A new request".into();
+    room.messages.push(new_message);
+    assert_eq!(plan(&room, &peer, fixture.now()).unwrap().reason, "message");
+}
+
+#[test]
 fn paused_archived_busy_waiting_pending_and_budget_exhausted_peers_never_plan() {
     let fixture = Fixture::new();
     let peer = fixture.peer("peer-a");
@@ -280,8 +408,10 @@ fn concurrent_limit_is_checked_during_planning_and_atomic_reservation() {
     let planned_a = plan(&fixture.room, &peer_a, now).unwrap();
     let planned_b = plan(&fixture.room, &peer_b, now).unwrap();
 
-    reserve_delivery(&fixture.store, &fixture.room.id, &peer_a.id, planned_a).unwrap();
-    assert!(reserve_delivery(&fixture.store, &fixture.room.id, &peer_b.id, planned_b).is_err());
+    reserve_delivery(&fixture.store, &fixture.room.id, &peer_a.id, planned_a, now).unwrap();
+    assert!(
+        reserve_delivery(&fixture.store, &fixture.room.id, &peer_b.id, planned_b, now).is_err()
+    );
     let after = fixture.store.get(&fixture.room.id).unwrap();
     assert_eq!(
         after
@@ -321,6 +451,7 @@ fn parallel_delivery_reservations_never_exceed_room_limit() {
                 &room_id,
                 &peer_id,
                 delivery("message", None, created_at),
+                created_at,
             )
             .is_ok()
         }));
@@ -388,10 +519,161 @@ fn busy_timer_is_durably_coalesced_and_delivered_once_after_long_gap() {
     let peer = idle.participants.iter().find(|p| p.id == "peer-a").unwrap();
     let planned = plan(&idle, peer, now + 600_000).unwrap();
     assert_eq!(planned.timer_id.as_deref(), Some("timer-a"));
-    let delivered = reserve_delivery(&fixture.store, &fixture.room.id, "peer-a", planned).unwrap();
+    let planned_id = planned.id.clone();
+    let reserved = reserve_delivery(
+        &fixture.store,
+        &fixture.room.id,
+        "peer-a",
+        planned,
+        now + 600_000,
+    )
+    .unwrap();
+    assert_eq!(reserved.timers[0].delivered_count, 0);
+    let delivered = fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            super::mark_delivery_accepted(room, "peer-a", &planned_id, now + 600_000)
+        })
+        .unwrap();
     assert_eq!(delivered.timers[0].delivered_count, 1);
     assert_eq!(delivered.timers[0].queued_at, None);
     assert_eq!(delivered.timers[0].next_due_at, now + 630_000);
+}
+
+#[test]
+fn expired_date_timer_queued_while_busy_is_never_planned_reserved_or_dispatched() {
+    let fixture = Fixture::new();
+    let now = fixture.now();
+    fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            let mut timer = timer("timer-a", "peer-a", now - 1);
+            timer.idle_only = false;
+            timer.max_deliveries = None;
+            timer.ends_at = Some(now + 100);
+            room.timers.push(timer);
+            let peer = room
+                .participants
+                .iter_mut()
+                .find(|peer| peer.id == "peer-a")
+                .unwrap();
+            peer.state = "busy".into();
+            peer.pending_delivery = Some(delivery("task", None, now - 10));
+            Ok(())
+        })
+        .unwrap();
+
+    queue_due_timers(&fixture.store, &fixture.room.id, "peer-a", now).unwrap();
+    assert_eq!(
+        fixture.store.get(&fixture.room.id).unwrap().timers[0].queued_at,
+        Some(now)
+    );
+
+    // A permission wait can outlive the due timer. The queued delivery expires while the peer
+    // is waiting and must be cleared before that peer returns to idle.
+    fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            let peer = room
+                .participants
+                .iter_mut()
+                .find(|peer| peer.id == "peer-a")
+                .unwrap();
+            peer.state = "waiting".into();
+            Ok(())
+        })
+        .unwrap();
+    queue_due_timers(&fixture.store, &fixture.room.id, "peer-a", now + 100).unwrap();
+    let expired_while_waiting = fixture.store.get(&fixture.room.id).unwrap();
+    assert_eq!(expired_while_waiting.timers[0].queued_at, None);
+
+    let idle = fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            room.auto_continue = false;
+            for item in &mut room.board.items {
+                item.status = "Blocked".into();
+            }
+            let peer = room
+                .participants
+                .iter_mut()
+                .find(|peer| peer.id == "peer-a")
+                .unwrap();
+            peer.state = "idle".into();
+            peer.pending_delivery = None;
+            Ok(())
+        })
+        .unwrap();
+    let peer = idle
+        .participants
+        .iter()
+        .find(|peer| peer.id == "peer-a")
+        .unwrap();
+    assert!(plan(&idle, peer, now + 100).is_none());
+
+    let stale_delivery = delivery("timer", Some("timer-a"), now + 100);
+    assert!(reserve_delivery(
+        &fixture.store,
+        &fixture.room.id,
+        "peer-a",
+        stale_delivery,
+        now + 100,
+    )
+    .is_err());
+    assert!(!super::timer_delivery_is_dispatchable(
+        &idle,
+        "peer-a",
+        "timer-a",
+        now + 100,
+    ));
+    assert_eq!(idle.timers[0].delivered_count, 0);
+}
+
+#[test]
+fn dispatch_preflight_cancels_a_timer_that_expires_after_reservation() {
+    let fixture = Fixture::new();
+    let now = fixture.now();
+    let room = fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            room.auto_continue = false;
+            for item in &mut room.board.items {
+                item.status = "Blocked".into();
+            }
+            let mut timer = timer("timer-a", "peer-a", now - 1);
+            timer.max_deliveries = None;
+            timer.ends_at = Some(now + 100);
+            room.timers.push(timer);
+            Ok(())
+        })
+        .unwrap();
+    let peer = room
+        .participants
+        .iter()
+        .find(|peer| peer.id == "peer-a")
+        .unwrap();
+    let planned = plan(&room, peer, now).unwrap();
+    let reserved = reserve_delivery(&fixture.store, &room.id, &peer.id, planned, now).unwrap();
+    assert_eq!(reserved.timers[0].delivered_count, 0);
+    assert!(reserved.participants[0].pending_delivery.is_some());
+
+    // The first preflight succeeds before a cold actor startup. Simulate startup lasting
+    // through the timer deadline, then run the same production preflight used immediately
+    // before enqueueing. At the inclusive end boundary, no payload is returned for delivery.
+    assert!(
+        super::prepare_dispatch(&fixture.store, &room.id, "peer-a", now)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        super::prepare_dispatch(&fixture.store, &room.id, "peer-a", now + 100)
+            .unwrap()
+            .is_none()
+    );
+    let after = fixture.store.get(&room.id).unwrap();
+    assert_eq!(after.timers[0].delivered_count, 0);
+    assert!(after.participants[0].pending_delivery.is_none());
+    assert_eq!(after.participants[0].wake_count, 0);
 }
 
 #[test]
@@ -526,7 +808,7 @@ fn waiting_permission_and_quota_events_have_explicit_state() {
 }
 
 #[test]
-fn timer_reservation_consumes_delivery_budget_before_wire_and_cannot_reserve_twice() {
+fn timer_reservation_consumes_delivery_budget_only_after_acceptance() {
     let fixture = Fixture::new();
     let peer = fixture.peer("peer-a");
     let now = fixture.now();
@@ -543,9 +825,10 @@ fn timer_reservation_consumes_delivery_budget_before_wire_and_cannot_reserve_twi
         &fixture.room.id,
         &peer.id,
         timer_delivery.clone(),
+        now,
     )
     .unwrap();
-    assert_eq!(reserved.timers[0].delivered_count, 1);
+    assert_eq!(reserved.timers[0].delivered_count, 0);
     assert_eq!(reserved.participants[0].wake_count, 1);
     assert_eq!(
         reserved.participants[0]
@@ -556,11 +839,26 @@ fn timer_reservation_consumes_delivery_budget_before_wire_and_cannot_reserve_twi
         "prepared"
     );
 
-    let duplicate = reserve_delivery(&fixture.store, &fixture.room.id, &peer.id, timer_delivery);
+    let duplicate = reserve_delivery(
+        &fixture.store,
+        &fixture.room.id,
+        &peer.id,
+        timer_delivery.clone(),
+        now,
+    );
     assert!(duplicate.is_err());
     let after = fixture.store.get(&fixture.room.id).unwrap();
-    assert_eq!(after.timers[0].delivered_count, 1);
+    assert_eq!(after.timers[0].delivered_count, 0);
     assert_eq!(after.participants[0].wake_count, 1);
+
+    let accepted = fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            super::mark_delivery_accepted(room, &peer.id, &timer_delivery.id, now + 1)
+        })
+        .unwrap();
+    assert_eq!(accepted.timers[0].delivered_count, 1);
+    assert_eq!(accepted.timers[0].next_due_at, now + 30_001);
 }
 
 #[test]
@@ -575,7 +873,14 @@ fn timer_edit_between_planning_and_reservation_uses_current_recipient_and_messag
         })
         .unwrap();
     let planned = delivery("timer", Some("timer-a"), now);
-    assert!(reserve_delivery(&fixture.store, &fixture.room.id, "peer-a", planned.clone()).is_err());
+    assert!(reserve_delivery(
+        &fixture.store,
+        &fixture.room.id,
+        "peer-a",
+        planned.clone(),
+        now
+    )
+    .is_err());
     let after = fixture.store.get(&fixture.room.id).unwrap();
     assert_eq!(after.timers[0].delivered_count, 0);
     assert_eq!(after.participants[0].wake_count, 0);
@@ -588,7 +893,8 @@ fn timer_edit_between_planning_and_reservation_uses_current_recipient_and_messag
             Ok(())
         })
         .unwrap();
-    let reserved = reserve_delivery(&fixture.store, &fixture.room.id, "peer-a", planned).unwrap();
+    let reserved =
+        reserve_delivery(&fixture.store, &fixture.room.id, "peer-a", planned, now).unwrap();
     assert!(reserved.participants[0]
         .pending_delivery
         .as_ref()
@@ -775,7 +1081,14 @@ fn reservation_captures_current_recipient_history_without_acknowledging_future_m
             )
             .unwrap();
     }
-    let reserved = reserve_delivery(&fixture.store, &fixture.room.id, "peer-a", planned).unwrap();
+    let reserved = reserve_delivery(
+        &fixture.store,
+        &fixture.room.id,
+        "peer-a",
+        planned,
+        fixture.now(),
+    )
+    .unwrap();
     let peer = reserved
         .participants
         .iter()
@@ -855,7 +1168,8 @@ fn last_reserved_turn_can_write_governance_but_cannot_start_an_extra_turn() {
         })
         .unwrap();
     let planned = plan(&room, &room.participants[0], fixture.now()).unwrap();
-    let reserved = reserve_delivery(&fixture.store, &room.id, "peer-a", planned).unwrap();
+    let reserved =
+        reserve_delivery(&fixture.store, &room.id, "peer-a", planned, fixture.now()).unwrap();
     assert_eq!(reserved.participants[0].wake_count, 1);
     assert_eq!(
         reserved.participants[0]

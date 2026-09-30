@@ -924,6 +924,9 @@ fn apply_agent_patch(settings: &mut AgentSettings, patch: &serde_json::Value) {
     if let Some(v) = patch.get("ignore_rules") {
         settings.ignore_rules = if v.is_null() { None } else { v.as_bool() };
     }
+    if let Some(v) = patch.get("web_search") {
+        settings.web_search = if v.is_null() { None } else { v.as_bool() };
+    }
 }
 
 pub fn update_agent_settings(
@@ -1141,8 +1144,9 @@ mod tests {
         assert_eq!(s.profile, None);
         assert_eq!(s.ignore_user_config, None);
         assert_eq!(s.ignore_rules, None);
+        assert_eq!(s.web_search, None);
 
-        // Set all four
+        // Set all five
         apply_agent_patch(
             &mut s,
             &serde_json::json!({
@@ -1150,14 +1154,17 @@ mod tests {
                 "profile": "dev",
                 "ignore_user_config": true,
                 "ignore_rules": true,
+                "web_search": true,
             }),
         );
         assert_eq!(s.ephemeral, Some(true));
         assert_eq!(s.profile.as_deref(), Some("dev"));
         assert_eq!(s.ignore_user_config, Some(true));
         assert_eq!(s.ignore_rules, Some(true));
+        assert_eq!(s.web_search, Some(true));
 
-        // Clear booleans with false (explicit off), profile with null
+        // Clear booleans with false (explicit off), profile with null.
+        // The web_search false value must remain distinct from unset.
         apply_agent_patch(
             &mut s,
             &serde_json::json!({
@@ -1165,12 +1172,18 @@ mod tests {
                 "profile": null,
                 "ignore_user_config": false,
                 "ignore_rules": false,
+                "web_search": false,
             }),
         );
         assert_eq!(s.ephemeral, Some(false));
         assert_eq!(s.profile, None);
         assert_eq!(s.ignore_user_config, Some(false));
         assert_eq!(s.ignore_rules, Some(false));
+        assert_eq!(s.web_search, Some(false));
+
+        // Clear web_search to return to the user's Codex config.toml preference.
+        apply_agent_patch(&mut s, &serde_json::json!({ "web_search": null }));
+        assert_eq!(s.web_search, None);
 
         // Clear profile with empty string
         apply_agent_patch(&mut s, &serde_json::json!({ "profile": "ci" }));
@@ -1182,6 +1195,7 @@ mod tests {
         apply_agent_patch(&mut s, &serde_json::json!({ "ephemeral": true }));
         apply_agent_patch(&mut s, &serde_json::json!({ "model": "gpt-5" }));
         assert_eq!(s.ephemeral, Some(true));
+        assert_eq!(s.web_search, None);
     }
 
     #[test]

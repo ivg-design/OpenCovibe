@@ -6,6 +6,7 @@
  */
 
 import type { TaskRun } from "$lib/types";
+import { roomChatTitle } from "$lib/utils/room-presentation";
 
 // ── Public types ──
 
@@ -125,7 +126,10 @@ export function buildProjectFolders(
       sessionRuns.sort((a, b) => b.started_at.localeCompare(a.started_at));
       const latestRun = sessionRuns[0];
       const earliestRun = sessionRuns[sessionRuns.length - 1];
-      const title = latestRun.name?.trim() || earliestRun.prompt?.trim() || "Untitled";
+      const title = roomChatTitle(
+        latestRun.name?.trim() || earliestRun.prompt?.trim() || "Untitled",
+        earliestRun.prompt,
+      );
       const isFavorite = sessionRuns.some((r) => favoriteRunIds.has(r.id));
       const totalMessages = sessionRuns.reduce((sum, r) => sum + (r.message_count ?? 0), 0);
 
@@ -141,7 +145,7 @@ export function buildProjectFolders(
 
     // Standalone runs (no session_id)
     for (const run of standalone) {
-      const title = run.name?.trim() || run.prompt?.trim() || "Untitled";
+      const title = roomChatTitle(run.name?.trim() || run.prompt?.trim() || "Untitled", run.prompt);
       conversations.push({
         groupKey: `r:${run.id}`,
         runs: [run],

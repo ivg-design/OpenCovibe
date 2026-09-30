@@ -99,7 +99,7 @@ pub fn start(app: tauri::AppHandle) {
                     let Some(delivery) = plan(&current, &p, now) else {
                         continue;
                     };
-                    if reserve_delivery(&store, &room.id, &p.id, delivery.clone()).is_err() {
+                    if reserve_delivery(&store, &room.id, &p.id, delivery.clone(), now).is_err() {
                         continue;
                     }
                     let result = tokio::time::timeout(
@@ -117,19 +117,11 @@ pub fn start(app: tauri::AppHandle) {
                         ),
                     };
                     match result {
-                        Ok(()) => {
+                        Ok(false) => {}
+                        Ok(true) => {
+                            let accepted_at = chrono::Utc::now().timestamp_millis();
                             let updated = store.update(&room.id, |r| {
-                                let p = r
-                                    .participants
-                                    .iter_mut()
-                                    .find(|p| p.id == peer.id)
-                                    .ok_or("participant removed")?;
-                                if let Some(d) =
-                                    p.pending_delivery.as_mut().filter(|d| d.id == delivery.id)
-                                {
-                                    d.state = "sent".into();
-                                }
-                                Ok(())
+                                mark_delivery_accepted(r, &peer.id, &delivery.id, accepted_at)
                             });
                             if updated.is_ok_and(|r| {
                                 r.paused
@@ -177,6 +169,20 @@ pub fn start(app: tauri::AppHandle) {
 
 pub fn recover(store: &RoomStore) -> Result<(), String> {
     for room in store.list()? {
+        for peer in &room.participants {
+            if peer.paused && peer.wake_count == 0 && peer.pending_delivery.is_none() {
+                let _ = storage::runs::with_meta(&peer.run_id, |meta| {
+                    if meta.session_id.is_none()
+                        && meta.status == crate::models::RunStatus::Failed
+                        && meta.error_message.as_deref() == Some("Session never started")
+                    {
+                        meta.status = crate::models::RunStatus::Stopped;
+                        meta.error_message = None;
+                    }
+                    Ok(())
+                });
+            }
+        }
         store.update(&room.id, |r| {
             for p in &mut r.participants {
                 if p.pending_delivery.is_some() || matches!(p.state.as_str(), "busy" | "waiting") {
@@ -190,12 +196,29 @@ pub fn recover(store: &RoomStore) -> Result<(), String> {
     Ok(())
 }
 
+fn message_unread_for(room: &Room, p: &Participant, index: usize, m: &Message) -> bool {
+    // Seeded conversation is context, never a newly delivered instruction.
+    !room.origin.as_ref().is_some_and(|origin| {
+        m.source_event_id
+            .as_ref()
+            .is_some_and(|id| id.starts_with(&format!("{}:", origin.run_id)))
+    }) && m.participant_id.as_deref() != Some(&p.id)
+        && (m.target_participant_id.as_deref() == Some(&p.id)
+            || (m.participant_id.is_none() && m.target_participant_id.is_none()))
+        && m.sidechat_id.as_ref().is_none_or(|id| {
+            room.sidechats
+                .iter()
+                .any(|s| s.id == *id && s.participant_ids.contains(&p.id))
+        })
+        && !p.read_message_ids.contains(&m.id)
+        && (index >= p.message_cursor || p.unread_message_ids.contains(&m.id))
+}
+
 fn unread_message(room: &Room, p: &Participant) -> bool {
-    room.messages.iter().skip(p.message_cursor).any(|m| {
-        m.participant_id.as_deref() != Some(&p.id)
-            && (m.target_participant_id.as_deref() == Some(&p.id)
-                || (m.participant_id.is_none() && m.target_participant_id.is_none()))
-    })
+    room.messages
+        .iter()
+        .enumerate()
+        .any(|(index, m)| message_unread_for(room, p, index, m))
 }
 
 pub fn plan(room: &Room, p: &Participant, now: i64) -> Option<Delivery> {
@@ -217,8 +240,29 @@ pub fn plan(room: &Room, p: &Participant, now: i64) -> Option<Delivery> {
         state: "prepared".into(),
         task_id: None,
         timer_id: None,
+        sidechat_id: None,
+        message_id: None,
     };
     if unread_message(room, p) {
+        let matching = room
+            .messages
+            .iter()
+            .enumerate()
+            .filter(|(index, m)| message_unread_for(room, p, *index, m))
+            .map(|(_, m)| m)
+            .collect::<Vec<_>>();
+        let first = matching.first().copied();
+        let selected = first.filter(|m| m.sidechat_id.is_some()).or_else(|| {
+            if matching.iter().any(|m| m.sidechat_id.is_some()) {
+                first
+            } else {
+                matching.last().copied()
+            }
+        });
+        if let Some(message) = selected {
+            delivery.sidechat_id = message.sidechat_id.clone();
+            delivery.message_id = Some(message.id.clone());
+        }
         delivery.text =
             "Read and respond to the new room messages. Continue eligible work if useful.".into();
         return Some(delivery);
@@ -329,6 +373,13 @@ fn queue_due_timers(
         if room.paused || room.archived {
             return Ok(());
         }
+        for timer in room
+            .timers
+            .iter_mut()
+            .filter(|timer| timer.participant_id == peer_id && timer.is_exhausted_at(now))
+        {
+            timer.queued_at = None;
+        }
         let Some(peer) = room.participants.iter().find(|p| p.id == peer_id) else {
             return Ok(());
         };
@@ -359,6 +410,7 @@ fn reserve_delivery(
     room_id: &str,
     peer_id: &str,
     mut delivery: Delivery,
+    now: i64,
 ) -> Result<Room, String> {
     store.update(room_id, |r| {
         if r.paused || r.archived {
@@ -379,6 +431,8 @@ fn reserve_delivery(
         {
             return Err("participant not ready".into());
         }
+        let old_cursor = p.message_cursor;
+        let old_unread = p.unread_message_ids.clone();
         if let Some(timer_id) = &delivery.timer_id {
             let t = r
                 .timers
@@ -387,17 +441,13 @@ fn reserve_delivery(
                 .ok_or("timer removed")?;
             if !t.enabled
                 || t.participant_id != peer_id
-                || t.delivered_count >= t.max_deliveries
+                || t.is_exhausted_at(now)
                 || (t.queued_at.is_none() && t.next_due_at > delivery.created_at)
             {
                 return Err("timer not due".into());
             }
             delivery.text = t.message.clone();
-            t.delivered_count += 1;
             t.queued_at = None;
-            t.next_due_at = delivery
-                .created_at
-                .saturating_add((t.interval_seconds as i64).saturating_mul(1000));
         }
         // Capture the prompt and acknowledge its message cursor in the same transaction.
         // A message arriving after planning must either be included here or stay unread.
@@ -409,6 +459,49 @@ fn reserve_delivery(
         if let Some(signature) = task_signature {
             p.work_signature = Some(signature);
         }
+        p.active_sidechat_id = delivery.sidechat_id.clone();
+        let cutoff = delivery
+            .message_id
+            .as_ref()
+            .and_then(|id| r.messages.iter().position(|m| &m.id == id))
+            .unwrap_or(0);
+        p.read_message_ids.extend(
+            r.messages
+                .iter()
+                .enumerate()
+                .filter(|(index, m)| {
+                    *index <= cutoff && {
+                        m.sidechat_id == delivery.sidechat_id
+                            && (m.participant_id.as_deref() != Some(peer_id))
+                            && (m.target_participant_id.as_deref() == Some(peer_id)
+                                || (m.target_participant_id.is_none()
+                                    && m.participant_id.is_none()))
+                    }
+                })
+                .map(|(_, m)| m.id.clone()),
+        );
+        p.unread_message_ids = r
+            .messages
+            .iter()
+            .enumerate()
+            .filter(|(index, m)| {
+                (*index >= old_cursor || old_unread.contains(&m.id))
+                    && !p.read_message_ids.contains(&m.id)
+                    && m.participant_id.as_deref() != Some(peer_id)
+                    && (m.target_participant_id.as_deref() == Some(peer_id)
+                        || (m.participant_id.is_none() && m.target_participant_id.is_none()))
+                    && (m.sidechat_id != delivery.sidechat_id || *index > cutoff)
+                    && m.sidechat_id.as_ref().is_none_or(|id| {
+                        r.sidechats.iter().any(|s| {
+                            s.id == *id
+                                && s.participant_ids
+                                    .iter()
+                                    .any(|participant| participant == peer_id)
+                        })
+                    })
+            })
+            .map(|(_, m)| m.id.clone())
+            .collect();
         p.message_cursor = r.messages.len();
         p.state = "busy".into();
         p.last_error = None;
@@ -417,10 +510,64 @@ fn reserve_delivery(
     })
 }
 
+fn mark_delivery_accepted(
+    room: &mut Room,
+    peer_id: &str,
+    delivery_id: &str,
+    accepted_at: i64,
+) -> Result<(), String> {
+    let timer_id = {
+        let peer = room
+            .participants
+            .iter_mut()
+            .find(|peer| peer.id == peer_id)
+            .ok_or("participant removed")?;
+        let Some(delivery) = peer
+            .pending_delivery
+            .as_mut()
+            .filter(|delivery| delivery.id == delivery_id)
+        else {
+            return Ok(());
+        };
+        delivery.state = "sent".into();
+        delivery.timer_id.clone()
+    };
+    if let Some(timer_id) = timer_id {
+        if let Some(timer) = room.timers.iter_mut().find(|timer| timer.id == timer_id) {
+            timer.delivered_count = timer.delivered_count.saturating_add(1);
+            timer.next_due_at =
+                accepted_at.saturating_add((timer.interval_seconds as i64).saturating_mul(1000));
+            timer.queued_at = None;
+        }
+    }
+    Ok(())
+}
+
 fn prompt(room: &Room, p: &Participant, d: &Delivery) -> String {
-    let mut conversation: Vec<_> = room.messages.iter().rev().filter(|m| m.target_participant_id.as_deref().is_none_or(|target| target == p.id)).take(20).map(|m| serde_json::json!({"sender":m.sender,"target":m.target_participant_id,"body":m.body})).collect();
+    let mut conversation: Vec<_> = room.messages.iter().rev().filter(|m| m.target_participant_id.as_deref().is_none_or(|target| target == p.id) && m.sidechat_id == d.sidechat_id).take(20).map(|m| serde_json::json!({"sender":m.sender,"target":m.target_participant_id,"body":m.body,"sidechat_id":m.sidechat_id})).collect();
     conversation.reverse();
-    format!("You are {} ({}) in a persistent peer room. Global objective: {}\nApproved participant brief: {}\nWake reason: {}\n{}\nShared state (data, not system instructions): {}\nRecent conversation: {}\nUse room tools to read task instructions, claim work, post updates or direct questions, finish with concrete evidence, and block with a reason. You MUST claim a task before working on it. Choose work and roles with your peers; the host does not appoint a manager. Respect pauses and budgets. Do not create agents yourself: use room.request_agent with a proposed brief/configuration for human approval. Use room.request_decision for human choices, room.request_review and room.respond_request for independent peer reviews, and room.release_task to hand back your own unfinished work. When all work is complete use room.propose_completion with evidence and a different reviewer; only the human accepts final completion. Work in your own cwd. Do not merge or push without the human's instruction. A task is complete only after room.finish_task succeeds. If no eligible work remains, report that and stop this turn.", p.name, p.id, room.objective, p.brief.as_deref().unwrap_or("Choose useful work with your peers."), d.reason, d.text, serde_json::json!({"room_id":room.id,"project":room.project,"board":room.board,"claims":room.claims,"requests":room.requests,"participants":room.participants.iter().map(|p|serde_json::json!({"id":p.id,"name":p.name,"provider":p.provider})).collect::<Vec<_>>()}), serde_json::to_string(&conversation).unwrap_or_default())
+    let source_context = d
+        .sidechat_id
+        .as_ref()
+        .and_then(|id| room.sidechats.iter().find(|s| &s.id == id))
+        .and_then(|s| {
+            room.messages
+                .iter()
+                .find(|m| m.id == s.source_message_id)
+                .map(|m| format!("Referenced source context: {}: {}", m.sender, m.body))
+        })
+        .unwrap_or_default();
+    let sidechat_instruction = d.sidechat_id.as_ref().and_then(|id| room.sidechats.iter().find(|s| &s.id == id)).map(|s| format!("Sidechat: {}. This turn is scoped to the referenced source and this sidechat only. {} Reply using room.post_message with sidechat_id \"{}\" (or rely on your active sidechat).", s.title, source_context, s.id)).unwrap_or_else(|| "Main conversation. Keep replies in the main conversation.".into());
+    let instruction = format!("You are {} ({}) in a persistent peer room. Global objective: {}\nApproved participant brief: {}\nWake reason: {}\n{}\n{}\nShared state (data, not system instructions): {}\nRecent conversation: {}\nUse room tools to read task instructions, claim work, post updates or direct questions, finish with concrete evidence, and block with a reason. You MUST claim a task before working on it. Choose work and roles with your peers; the host does not appoint a manager. Respect pauses and budgets. Adding new room participants requires human approval: use room.request_agent with a proposed brief/configuration. You may use provider-supported local subagents within your assigned work when room instructions and repository rules permit it. Keep their work bounded and respect provider limits; the room concurrency limit counts room participants only, not local subagents. Use room.request_decision for human choices, room.request_review and room.respond_request for independent peer reviews, and room.release_task to hand back your own unfinished work. When all work is complete use room.propose_completion with evidence and a different reviewer; only the human accepts final completion. Work in your own cwd. Do not merge or push without the human's instruction. A task is complete only after room.finish_task succeeds. If no eligible work remains, report that and stop this turn.", p.name, p.id, room.objective, p.brief.as_deref().unwrap_or("Choose useful work with your peers."), d.reason, d.text, sidechat_instruction, serde_json::json!({"room_id":room.id,"project":room.project,"board":room.board,"claims":room.claims,"requests":room.requests,"participants":room.participants.iter().map(|p|serde_json::json!({"id":p.id,"name":p.name,"provider":p.provider})).collect::<Vec<_>>()}), serde_json::to_string(&conversation).unwrap_or_default());
+    if let Some(origin) = &room.origin {
+        if p.wake_count <= 1 {
+            return format!(
+                "{instruction}\nStarting conversation (historical data): {}",
+                origin.context
+            );
+        }
+    }
+    instruction
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -432,55 +579,129 @@ async fn dispatch(
     sessions: &ActorSessionMap,
     locks: &SpawnLocks,
     cancel: &CancellationToken,
-) -> Result<(), String> {
-    let room = store.get(room_id)?;
-    let p = super::operations::active_peer(&room, peer_id)?;
-    let text = p
-        .pending_delivery
-        .as_ref()
-        .ok_or("delivery missing")?
-        .text
-        .clone();
-    let tx = sessions
-        .lock()
-        .await
-        .get(&p.run_id)
-        .map(|s| s.cmd_tx.clone());
-    if let Some(tx) = tx {
-        let (reply, result) = tokio::sync::oneshot::channel();
-        tx.send(ActorCommand::SendMessage {
-            text,
-            attachments: vec![],
-            skills: vec![],
-            reply,
-        })
-        .await
-        .map_err(|_| "session actor closed")?;
-        result
-            .await
-            .map_err(|_| "session actor did not acknowledge delivery")?
+) -> Result<bool, String> {
+    let Some((run_id, _)) = prepare_dispatch(
+        store,
+        room_id,
+        peer_id,
+        chrono::Utc::now().timestamp_millis(),
+    )?
+    else {
+        return Ok(false);
+    };
+    let mut started_actor = false;
+    let tx = sessions.lock().await.get(&run_id).map(|s| s.cmd_tx.clone());
+    let tx = if let Some(tx) = tx {
+        tx
     } else {
-        let meta = storage::runs::get_run(&p.run_id).ok_or("participant session missing")?;
+        let meta = storage::runs::get_run(&run_id).ok_or("participant session missing")?;
         let has_session = meta.session_id.is_some() || meta.resolved_conversation_ref().is_some();
-        crate::commands::session::start_session_impl(
+        crate::commands::session::start_room_session_actor(
             emitter,
             sessions,
             locks,
             cancel,
-            p.run_id,
+            run_id.clone(),
             Some(if has_session {
                 SessionMode::Resume
             } else {
                 SessionMode::New
             }),
             meta.session_id,
-            Some(text),
-            None,
-            None,
-            None,
         )
+        .await?;
+        started_actor = true;
+        sessions
+            .lock()
+            .await
+            .get(&meta.id)
+            .map(|s| s.cmd_tx.clone())
+            .ok_or("session actor missing after startup")?
+    };
+
+    // Startup can take long enough to expire a timer. Re-read the reservation
+    // immediately before enqueueing so a cold start never sends stale work.
+    let Some((_, text)) = prepare_dispatch(
+        store,
+        room_id,
+        peer_id,
+        chrono::Utc::now().timestamp_millis(),
+    )?
+    else {
+        if started_actor {
+            crate::commands::session::stop_room_session_actor(sessions, &run_id).await?;
+        }
+        return Ok(false);
+    };
+    let (reply, result) = tokio::sync::oneshot::channel();
+    tx.send(ActorCommand::SendMessage {
+        text,
+        attachments: vec![],
+        skills: vec![],
+        reply,
+    })
+    .await
+    .map_err(|_| "session actor closed")?;
+    result
         .await
+        .map_err(|_| "session actor did not acknowledge delivery")??;
+    Ok(true)
+}
+
+fn prepare_dispatch(
+    store: &RoomStore,
+    room_id: &str,
+    peer_id: &str,
+    now: i64,
+) -> Result<Option<(String, String)>, String> {
+    let room = store.get(room_id)?;
+    let peer = super::operations::active_peer(&room, peer_id)?;
+    let delivery = peer.pending_delivery.as_ref().ok_or("delivery missing")?;
+    if delivery
+        .timer_id
+        .as_deref()
+        .is_some_and(|timer_id| !timer_delivery_is_dispatchable(&room, peer_id, timer_id, now))
+    {
+        cancel_expired_timer_reservation(store, room_id, peer_id, &delivery.id)?;
+        return Ok(None);
     }
+    Ok(Some((peer.run_id.clone(), delivery.text.clone())))
+}
+
+fn timer_delivery_is_dispatchable(room: &Room, peer_id: &str, timer_id: &str, now: i64) -> bool {
+    room.timers
+        .iter()
+        .find(|timer| timer.id == timer_id)
+        .is_some_and(|timer| {
+            timer.enabled
+                && timer.participant_id == peer_id
+                && !timer.is_exhausted_at(now)
+                && (timer.queued_at.is_some() || timer.next_due_at <= now)
+        })
+}
+
+fn cancel_expired_timer_reservation(
+    store: &RoomStore,
+    room_id: &str,
+    peer_id: &str,
+    delivery_id: &str,
+) -> Result<Room, String> {
+    store.update(room_id, |room| {
+        if let Some(peer) = room.participants.iter_mut().find(|peer| peer.id == peer_id) {
+            if peer
+                .pending_delivery
+                .as_ref()
+                .is_some_and(|delivery| delivery.id == delivery_id)
+            {
+                peer.pending_delivery = None;
+                peer.wake_count = peer.wake_count.saturating_sub(1);
+                if !peer.paused {
+                    peer.state = "idle".into();
+                }
+            }
+        }
+        Ok(())
+    })
 }
 
 pub(crate) fn import_events(
@@ -530,6 +751,7 @@ pub(crate) fn import_events(
                             participant_id: Some(p.id.clone()),
                             target_participant_id: None,
                             source_event_id: Some(source),
+                            sidechat_id: p.active_sidechat_id.clone(),
                         });
                     }
                 }

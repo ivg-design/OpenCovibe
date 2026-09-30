@@ -3,6 +3,7 @@
   import Card from "$lib/components/Card.svelte";
   import Input from "$lib/components/Input.svelte";
   import { t } from "$lib/i18n/index.svelte";
+  import { roomAgentStateLabel } from "$lib/rooms/state-label";
   import type { RoomParticipant } from "$lib/rooms/types";
 
   let {
@@ -60,27 +61,24 @@
     <h2 class="text-base font-semibold">{t("room_participants")}</h2>
     <span class="text-xs text-muted-foreground">{participants.length}</span>
   </div>
-  <form
-    class="grid gap-2 rounded-lg border bg-card p-3 sm:grid-cols-2 lg:grid-cols-3"
-    onsubmit={submit}
-  >
-    <label class="space-y-1 text-xs text-muted-foreground"
+  <form class="room-form grid gap-2 rounded-lg border bg-card p-3" onsubmit={submit}>
+    <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
       ><span>{t("room_participantName")}</span><Input bind:value={name} /></label
     >
-    <label class="space-y-1 text-xs text-muted-foreground"
+    <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
       ><span>{t("room_provider")}</span><select
         class="h-9 rounded-md border bg-background px-2 text-sm text-foreground"
         bind:value={provider}
         ><option value="codex">Codex</option><option value="claude">Claude</option></select
       ></label
     >
-    <label class="space-y-1 text-xs text-muted-foreground"
+    <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
       ><span>{t("room_modelOptional")}</span><Input
         bind:value={model}
         placeholder={t("room_modelPlaceholder")}
       /></label
     >
-    <label class="space-y-1 text-xs text-muted-foreground"
+    <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
       ><span>{t("room_effortOptional")}</span><Input
         bind:value={effort}
         placeholder={provider === "codex"
@@ -88,7 +86,7 @@
           : "low / medium / high"}
       /></label
     >
-    <label class="space-y-1 text-xs text-muted-foreground"
+    <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
       ><span>{t("room_maxTurns")}</span><Input type="number" bind:value={maxTurns} /></label
     >
     <label class="flex items-center gap-2 text-sm"
@@ -103,7 +101,7 @@
   {#if participants.length === 0}<Card variant="subtle" class="p-4 text-sm text-muted-foreground"
       >{t("room_noParticipants")}</Card
     >{/if}
-  <div class="grid gap-3 xl:grid-cols-2">
+  <div class="room-peer-grid grid gap-3">
     {#each participants as participant, index (participant.id)}
       {@const isActive = active(participant)}
       {@const claimsOwned = claims.filter(
@@ -126,7 +124,9 @@
                 t("room_defaultEffort")}
             </p>
           </div>
-          <span class="rounded bg-muted px-2 py-1 text-xs">{participant.state}</span>
+          <span class="rounded bg-muted px-2 py-1 text-xs"
+            >{roomAgentStateLabel(participant.state)}</span
+          >
         </div>
         <div class="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
           <div>
@@ -186,7 +186,7 @@
           >
         </div>
         <form
-          class="flex gap-2"
+          class="flex flex-wrap gap-2"
           onsubmit={(event) => {
             event.preventDefault();
             const message = wakeMessages[participant.id]?.trim();

@@ -50,7 +50,15 @@ async fn fields(project: &RoomProject) -> Result<Vec<Value>, String> {
 fn status_field(fs: &[Value]) -> Result<(String, Vec<Value>), String> {
     let f = fs
         .iter()
-        .find(|f| f["name"].as_str().is_some_and(|n| norm(n) == "status"))
+        .find(|f| {
+            f["name"]
+                .as_str()
+                .is_some_and(|n| norm(n) == "remediationstatus")
+        })
+        .or_else(|| {
+            fs.iter()
+                .find(|f| f["name"].as_str().is_some_and(|n| norm(n) == "status"))
+        })
         .ok_or("Required GitHub Project field 'Status' is missing")?;
     let opts = f["options"]
         .as_array()
@@ -370,6 +378,34 @@ mod tests {
             option_id(&f[0]["options"].as_array().unwrap(), "Todo").unwrap(),
             "1"
         );
+    }
+    #[test]
+    fn remediation_workflow_updates_the_same_field_as_the_board_reader() {
+        let fields = vec![
+            json!({"id":"generic","name":"Status","options":[{"id":"todo","name":"To do"},{"id":"active","name":"In progress"},{"id":"shipped","name":"Already there"}]}),
+            json!({"id":"remediation","name":"Remediation status","options":[{"id":"ready","name":"Ready"},{"id":"working","name":"In progress"},{"id":"review","name":"Review"},{"id":"done","name":"Done"}]}),
+        ];
+        let (field, options) = status_field(&fields).unwrap();
+        assert_eq!(field, "remediation");
+        assert_eq!(
+            option_id(&options, status_target("ready").unwrap()).unwrap(),
+            "ready"
+        );
+        assert_eq!(
+            option_id(&options, status_target("active").unwrap()).unwrap(),
+            "working"
+        );
+        assert_eq!(
+            option_id(&options, status_target("done").unwrap()).unwrap(),
+            "done"
+        );
+
+        // A malformed canonical workflow must not silently update the generic field.
+        let fields = vec![
+            json!({"id":"generic","name":"Status","options":[{"id":"1","name":"Todo"},{"id":"2","name":"Doing"},{"id":"3","name":"Done"}]}),
+            json!({"id":"remediation","name":"Remediation status","options":[]}),
+        ];
+        assert!(status_field(&fields).is_err());
     }
     #[test]
     fn task_parser_checks_project_and_returns_body_for_each_supported_kind() {

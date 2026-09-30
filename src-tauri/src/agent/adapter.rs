@@ -38,8 +38,9 @@ pub struct AdapterSettings {
     pub profile: Option<String>,
     pub ignore_user_config: bool,
     pub ignore_rules: bool,
-    /// Codex `--search` — enable the native web_search tool. New sessions only.
-    pub web_search: bool,
+    /// Per-agent override for Codex's native web_search mode. `Some(true)` enables live search,
+    /// `Some(false)` disables it, and `None` leaves the user's Codex config mode unchanged.
+    pub web_search: Option<bool>,
     /// Codex third-party provider (OpenAI Responses API). Injected as `-c model_providers.*`
     /// overrides + an env var at spawn. None = plain `codex login`. Codex-only.
     pub codex_provider: Option<crate::models::CodexProviderCredential>,
@@ -163,7 +164,9 @@ pub fn build_adapter_settings(
     let profile = agent.profile.clone().filter(|s| !s.is_empty());
     let ignore_user_config = agent.ignore_user_config.unwrap_or(false);
     let ignore_rules = agent.ignore_rules.unwrap_or(false);
-    let web_search = agent.web_search.unwrap_or(false);
+    // Preserve the tri-state so an explicit Off can override a user's Codex config, while an
+    // unset per-agent preference continues to honor config.toml (including cached mode).
+    let web_search = agent.web_search;
     // Codex third-party provider only applies to the codex agent.
     let codex_provider = if agent.agent == "codex" {
         user.codex_provider.clone()
@@ -177,7 +180,7 @@ pub fn build_adapter_settings(
     }
 
     log::debug!(
-        "[adapter] build_adapter_settings: model={:?}, perm={:?}, allowed={}, disallowed={}, budget={:?}, fallback={:?}, sys_prompt={}chars, append_sys={}chars, tool_set={:?}, add_dirs={}, json_schema={}, partial={}, debug={:?}, no_persist={}, max_turns={:?}, effort={:?}, betas={}, agents_json={}, codex_flags={{ephemeral={}, profile={:?}, ignore_user_config={}, ignore_rules={}, web_search={}}}",
+        "[adapter] build_adapter_settings: model={:?}, perm={:?}, allowed={}, disallowed={}, budget={:?}, fallback={:?}, sys_prompt={}chars, append_sys={}chars, tool_set={:?}, add_dirs={}, json_schema={}, partial={}, debug={:?}, no_persist={}, max_turns={:?}, effort={:?}, betas={}, agents_json={}, codex_flags={{ephemeral={}, profile={:?}, ignore_user_config={}, ignore_rules={}, web_search={:?}}}",
         model,
         permission_mode,
         allowed_tools.len(),
@@ -416,7 +419,7 @@ mod tests {
             profile: None,
             ignore_user_config: false,
             ignore_rules: false,
-            web_search: false,
+            web_search: None,
             codex_provider: None,
         }
     }
@@ -769,7 +772,7 @@ mod tests {
         assert_eq!(adapter.profile.as_deref(), Some("dev"));
         assert!(adapter.ignore_user_config);
         assert!(adapter.ignore_rules);
-        assert!(adapter.web_search);
+        assert_eq!(adapter.web_search, Some(true));
     }
 
     #[test]
@@ -781,7 +784,7 @@ mod tests {
         assert_eq!(adapter.profile, None);
         assert!(!adapter.ignore_user_config);
         assert!(!adapter.ignore_rules);
-        assert!(!adapter.web_search);
+        assert_eq!(adapter.web_search, None);
     }
 
     #[test]

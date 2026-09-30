@@ -1972,26 +1972,25 @@
             <CustomPaletteEditor />
           </div>
           <div class="border-t border-border/50"></div>
-          <div class="flex items-center justify-between gap-4">
-            <div>
+          <div class="flex flex-wrap items-center justify-between gap-4">
+            <div class="min-w-0">
               <p class="text-sm font-medium">{t("settings_general_uiZoom")}</p>
               <p class="text-xs text-muted-foreground">{t("settings_general_uiZoomDesc")}</p>
             </div>
-            <div class="flex items-center gap-3">
-              <input
-                type="range"
-                min="0.75"
-                max="1.5"
-                step="0.05"
-                value={zoomPreview}
-                class="w-28 accent-primary"
-                oninput={(e) => previewZoom(parseFloat((e.target as HTMLInputElement).value))}
-                onchange={(e) => commitZoom(parseFloat((e.target as HTMLInputElement).value))}
-              />
-              <span class="text-xs text-muted-foreground w-10 text-right">
-                {Math.round(zoomPreview * 100)}%
-              </span>
-            </div>
+            <select
+              aria-label={t("settings_general_uiZoom")}
+              value={zoomPreview}
+              class="min-h-9 max-w-full rounded-md border bg-background px-3 text-sm"
+              onchange={(e) => {
+                const factor = Number(e.currentTarget.value);
+                previewZoom(factor);
+                void commitZoom(factor);
+              }}
+            >
+              {#each Array.from({ length: 16 }, (_, i) => (75 + i * 5) / 100) as factor}
+                <option value={factor}>{Math.round(factor * 100)}%</option>
+              {/each}
+            </select>
           </div>
         </Card>
 

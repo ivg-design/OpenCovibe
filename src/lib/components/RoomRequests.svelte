@@ -167,7 +167,7 @@
                   ? t("room_requestsRetryAgent")
                   : t("room_requestsApproveAgent")}</Button
               >
-              <div class="flex min-w-56 flex-1 gap-2">
+              <div class="flex flex-wrap min-w-0 flex-1 gap-2">
                 <label class="min-w-0 flex-1"
                   ><span class="sr-only">{t("room_requestsRejectReason")}</span><Input
                     bind:value={
@@ -187,7 +187,7 @@
               </p>{/if}
           {:else if request.kind === "decision" && request.status === "pending"}
             <div class="flex flex-wrap gap-2">
-              <label class="min-w-56 flex-1"
+              <label class="min-w-0 flex-1"
                 ><span class="sr-only">{t("room_requestsAnswer")}</span><Textarea
                   bind:value={
                     () => replies[request.id] ?? "", (value) => (replies[request.id] = value)
@@ -211,7 +211,7 @@
             {#if request.status === "changes_requested"}<p class="text-sm text-muted-foreground">
                 {t("room_requestsReviewChangesRequested")}
               </p>{/if}
-            <div class="flex gap-2">
+            <div class="flex flex-wrap gap-2">
               <label class="min-w-0 flex-1"
                 ><span class="sr-only">{t("room_requestsCancelReason")}</span><Input
                   bind:value={
@@ -254,7 +254,7 @@
                 >
               </div>{/if}
             {#if ["pending", "verified", "changes_requested"].includes(request.status)}<div
-                class="flex gap-2"
+                class="flex flex-wrap gap-2"
               >
                 <label class="min-w-0 flex-1"
                   ><span class="sr-only">{t("room_requestsRejectReason")}</span><Input

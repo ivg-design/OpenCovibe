@@ -74,6 +74,15 @@ export interface RoomMessage {
   participant_id: string | null;
   target_participant_id: string | null;
   source_event_id: string | null;
+  sidechat_id?: string | null;
+}
+
+export interface RoomSidechat {
+  id: string;
+  title: string;
+  source_message_id: string;
+  participant_ids: string[];
+  created_at: string;
 }
 
 export interface RoomTimer {
@@ -84,7 +93,8 @@ export interface RoomTimer {
   idle_only: boolean;
   enabled: boolean;
   next_due_at: number;
-  max_deliveries: number;
+  max_deliveries: number | null;
+  ends_at?: number | null;
   delivered_count: number;
   queued_at: number | null;
   last_error: string | null;
@@ -103,6 +113,7 @@ export interface Room {
   board: RoomBoard;
   participants: RoomParticipant[];
   messages: RoomMessage[];
+  sidechats?: RoomSidechat[];
   timers: RoomTimer[];
   claims: RoomClaim[];
   requests: RoomRequest[];
@@ -110,6 +121,26 @@ export interface Room {
   max_concurrent: number;
   archived: boolean;
   runtime_error: string | null;
+  origin?: {
+    run_id: string;
+    provider: string;
+    session_id: string;
+    title: string;
+    message_count: number;
+    context: string;
+  } | null;
+}
+
+export interface RoomSessionSeed {
+  run_id: string;
+  title: string;
+  objective: string;
+  repo_path: string;
+  repository: string;
+  provider: string;
+  existing_room_id: string | null;
+  projects: RoomProject[];
+  project_error: string | null;
 }
 
 export interface AddParticipantInput {
@@ -162,7 +193,8 @@ export interface SaveTimerInput {
   interval_seconds: number;
   idle_only: boolean;
   enabled: boolean;
-  max_deliveries: number;
+  max_deliveries: number | null;
+  ends_at?: number | null;
 }
 
 export interface CreateRoomInput {

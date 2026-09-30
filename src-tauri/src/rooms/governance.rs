@@ -633,6 +633,7 @@ fn push_message(
         participant_id: participant_id.map(str::to_owned),
         target_participant_id: target.map(str::to_owned),
         source_event_id: None,
+        sidechat_id: None,
     });
 }
 
@@ -929,6 +930,8 @@ mod tests {
                     state: "queued".into(),
                     task_id: None,
                     timer_id: None,
+                    sidechat_id: None,
+                    message_id: None,
                 });
                 Ok(())
             })
@@ -985,6 +988,8 @@ mod tests {
                     state: "sent".into(),
                     task_id: None,
                     timer_id: None,
+                    sidechat_id: None,
+                    message_id: None,
                 });
                 Ok(())
             })

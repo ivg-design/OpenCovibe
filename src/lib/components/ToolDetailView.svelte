@@ -17,6 +17,7 @@
   import TeamToolDetail from "$lib/components/TeamToolDetail.svelte";
   import hljs from "highlight.js";
   import { structuredPatch } from "diff";
+  import { readableProtocolData, readableProtocolOutput } from "$lib/utils/room-presentation";
 
   const TEAM_TOOLS = new Set([
     "TeamCreate",
@@ -184,7 +185,7 @@
 
   // ── Derived data ──
 
-  let outputText = $derived(extractOutputText(tool.output));
+  let outputText = $derived(readableProtocolOutput(extractOutputText(tool.output)));
   let imageBlocks = $derived(extractImageBlocks(tool.output));
   let filePath = $derived((tool.input?.file_path as string) ?? (tool.input?.path as string) ?? "");
   let lang = $derived(getLanguageFromPath(filePath));
@@ -1495,7 +1496,7 @@
   {:else if isTeamTool(tool.tool_name)}
     <TeamToolDetail {tool} />
   {:else}
-    <!-- Default: JSON input, plain text output -->
+    <!-- Protocol details are presented as readable labels and values. -->
     {#if tool.input && Object.keys(tool.input).length > 0}
       <div class="rounded bg-muted p-2 max-h-40 overflow-y-auto relative group/copy">
         <div class="text-[10px] font-medium text-muted-foreground/60 mb-1 uppercase tracking-wider">
@@ -1503,14 +1504,12 @@
               class="inline-block w-1.5 h-3 ml-1 bg-muted-foreground/40 animate-pulse align-middle"
             ></span>{/if}
         </div>
-        <pre
-          class="text-xs font-mono whitespace-pre-wrap break-all text-muted-foreground">{@html highlightBlock(
-            JSON.stringify(tool.input, null, 2),
-            "json",
-          )}</pre>
+        <p class="text-sm whitespace-pre-wrap break-words text-muted-foreground">
+          {readableProtocolData(tool.input)}
+        </p>
         <button
           class="absolute top-1.5 right-1.5 text-[10px] text-muted-foreground hover:text-foreground opacity-0 group-hover/copy:opacity-100 transition-opacity"
-          onclick={() => handleCopy(JSON.stringify(tool.input, null, 2))}
+          onclick={() => handleCopy(readableProtocolData(tool.input))}
           >{copyFeedback ?? t("common_copy")}</button
         >
       </div>
@@ -1524,11 +1523,13 @@
         <div class="text-[10px] font-medium text-muted-foreground/60 mb-1 uppercase tracking-wider">
           {t("tool_output")}
         </div>
-        <pre
-          class="text-xs font-mono whitespace-pre-wrap break-all text-muted-foreground">{outputText}</pre>
+        <p class="text-sm whitespace-pre-wrap break-words text-muted-foreground">
+          {readableProtocolOutput(outputText)}
+        </p>
         <button
           class="absolute top-1.5 right-1.5 text-[10px] text-muted-foreground hover:text-foreground opacity-0 group-hover/copy:opacity-100 transition-opacity"
-          onclick={() => handleCopy(outputText)}>{copyFeedback ?? t("common_copy")}</button
+          onclick={() => handleCopy(readableProtocolOutput(outputText))}
+          >{copyFeedback ?? t("common_copy")}</button
         >
         {@render truncateOverlay(needsExpand)}
       </div>

@@ -6,7 +6,7 @@ GitHub Project, independent peers, and a continuous shared conversation.
 
 ## Use
 
-1. Open Rooms and create a room with an existing local Git repository and owner/repository.
+1. Open Rooms for the group chat, Room settings for configuration, and the sidebar Project board for progress. Create a room with an existing local Git repository and owner/repository.
    Project creation is enabled by default. A saved room always reuses its Project. If a network
    write is uncertain, use Retry Project setup to reconcile it, or attach its existing number.
 2. Add named Codex or Claude peers with individual model, effort, turn budget and optional
@@ -18,7 +18,9 @@ GitHub Project, independent peers, and a continuous shared conversation.
 4. Peers choose work and roles themselves. The host offers fresh eligible work after an idle
    turn, with a cooldown; atomic claims prevent two peers owning the same task. A peer owns
    at most one unfinished task. Blocked or uncertain claims require explicit resolution.
-5. Add custom timed messages with an interval, participant and delivery limit. Due messages
+5. In Room settings, add custom timed messages with an interval and participant. Choose either a maximum
+   delivery count or an end date/time in your local timezone. Expired queued messages are
+   discarded before dispatch. Due messages
    coalesce while busy and deliver after the current turn; approval waits never get interrupted.
 6. Open a peer's session to inspect tools, answer approval requests or send provider controls.
    The room board is read-only: inspect task bodies/evidence, filter titles/priority/agents, and
@@ -35,6 +37,29 @@ GitHub Project, independent peers, and a continuous shared conversation.
    keeps the room, Project, conversation and worktrees. Removing a peer requires releasing its
    unfinished claims. Worktrees are retained; Merge is explicit and requires clean checkouts.
 9. Settings → Appearance includes persistent custom colors with reset and contrast handling.
+10. To continue an existing conversation as a room, import its CLI session if needed, open
+    the chat, and choose **Create room from session**. The original agent retains its provider
+    session identity. Recent history is shared as context, with a link to the full transcript.
+    The primary Git repository is detected from its working folder. A single linked open
+    GitHub Project is selected automatically; multiple candidates require a choice. Existing
+    board fields are preserved. Add new agents, then explicitly resume when ready.
+11. The sidebar **Project board** opens the selected room's board directly. Room briefings,
+    automation envelopes, and generic protocol outputs render as readable summaries.
+
+Room settings includes **Edit room instructions**. The saved instructions are included in new
+wakeups for every peer. Running or already reserved turns keep their existing prompt. Saving an
+outdated edit reports a conflict instead of overwriting a newer edit. **Maximum active room
+agents** is the number of top-level peers allowed to work simultaneously; it does not count
+provider-supported local subagents. Local delegation follows the room instructions, repository
+rules and provider limits. Adding a persistent room participant still requires human approval.
+
+Choose **Start side chat** on a message to name a focused conversation and choose existing peers.
+The conversation selector switches between the main room and its side chats. Agents can use
+create_sidechat/read_sidechat and post_message to do the same. Side chats retain the source message,
+shared instructions, repository and project; they do not create new provider sessions or worktrees.
+Peers keep their existing provider context. Messages and wakeups are routed to the selected
+conversation, and creating a side chat alone never wakes a peer. Human messages appear on the
+right and agent replies on the left. The composer stays visible while history scrolls.
 
 ## Runtime boundaries
 
@@ -45,11 +70,12 @@ configuration and brief, answers decisions and accepts final completion. These a
 available through agent MCP tools. Completion approval preserves the peer review evidence and
 checks that the board, claims and peer roster still match the reviewed snapshot.
 
-Every delivery reserves its budget and timer count in SQLite before sending. On an interrupted
+Every delivery reserves its turn budget in SQLite before sending. Timer delivery counts increase
+only after the provider accepts dispatch. On an interrupted
 or ambiguous delivery, startup pauses that participant and does not replay the message. Inspect
 its session before explicitly resuming. Network failures preserve uncertain task claims; refresh
-and reconcile or release them before continuing. A reserved count means an attempted delivery,
-including an interrupted attempt, rather than proof of a provider response.
+and reconcile or release them before continuing. An accepted delivery does not by itself prove
+that the provider completed a response.
 
 Pause, blockers, provider errors, quota rejection, pending interactions and exhausted budgets
 prevent autonomous continuation. The board must be fresh and readable for automatic task
@@ -57,7 +83,7 @@ wakeups. Timers and human messages can wake an idle participant without a fresh 
 claiming work still requires a fresh snapshot. The host runs while the desktop app is alive,
 including when hidden in the tray; it does not schedule work after Quit.
 
-Room-scoped stdio MCP tools provide snapshot, post_message, read_task, create_task, claim_task,
+Room-scoped stdio MCP tools provide snapshot, post_message, create_sidechat, read_sidechat, read_task, create_task, claim_task,
 finish_task, block_task, release_task, request_agent, request_decision, request_review,
 respond_request and propose_completion. They bind one room and participant and check ownership,
 pauses and finite turn budgets for governance writes. Repeated identical request creation returns
@@ -66,7 +92,7 @@ Finishing requires a summary and evidence; the proof is stored on GitHub before 
 Exact task-creation intents are persisted to avoid blindly repeating uncertain writes. Creation
 waits for the new task to appear in the claimable Project snapshot. In-flight board reads cannot
 overwrite a task change or newer refresh committed while the read was pending.
-Codex approvals are configured only for the thirteen app-owned room tools using per-process
+Codex approvals are configured only for the app-owned room tools using per-process
 [per-tool overrides](https://learn.chatgpt.com/docs/config-file/config-reference).
 Other permission requests keep the provider's normal approval behavior.
 
@@ -89,5 +115,11 @@ The local bundle uses identifier `design.ivg.opencovibe.local` and defaults to
 that profile for isolated acceptance. Provider login remains in the CLI's normal location.
 The current artifact is an unsigned development build, not a notarized release.
 
+Session conversion connects the primary repository only; additional working folders and
+repositories are not discovered from prose. The original app's external automation remains
+separate from OpenCovibe scheduling. End-date timers are checked before dispatch; an already
+started turn is not cancelled at expiry.
+
 Verification and real mixed-provider results are recorded in
-[the live acceptance record](LOCAL_AGENT_ROOM_LIVE_ACCEPTANCE.md).
+[the live acceptance record](LOCAL_AGENT_ROOM_LIVE_ACCEPTANCE.md) and
+[session-room and side-chat acceptance](SESSION_ROOM_ACCEPTANCE_2026-09-30.md).

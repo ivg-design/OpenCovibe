@@ -102,9 +102,12 @@
     CONTEXT_CLEARED_MARKER,
     parseRalphArgs,
     VIRTUAL_COMMANDS,
+    supportsVirtualAction,
   } from "$lib/utils/slash-commands";
   import { executeAddDir } from "$lib/utils/add-dir";
+  import { setRoomParticipantPaused } from "$lib/rooms/api";
   import { CODEX_INIT_PROMPT } from "$lib/utils/codex-init-prompt";
+  import { readableProtocolOutput } from "$lib/utils/room-presentation";
   import {
     CODEX_REVIEW_UNCOMMITTED_PROMPT,
     codexReviewBasePrompt,
@@ -1516,7 +1519,7 @@
     let selfHealDone = false;
     let selfHealInFlight = false;
     // Codex model catalog (live from app-server). Fire-and-forget; 5min TTL cache.
-    void loadCodexModels();
+    void loadCodexModels(true);
     loadCliInfo().then(() => {
       // Self-heal: detect and fix contaminated default_model
       if (settings?.default_model && !selfHealDone && !selfHealInFlight) {
@@ -3119,8 +3122,7 @@
     // history replay, and tests can still reach here).
     const vDef = VIRTUAL_COMMANDS.find((v) => v["_action"] === action);
     if (vDef) {
-      const excluded = vDef["_excludeAgents"];
-      if (Array.isArray(excluded) && excluded.includes(effectiveAgent)) {
+      if (!supportsVirtualAction(action, effectiveAgent)) {
         dbg("chat", "virtualCommand blocked for agent", { action, agent: effectiveAgent });
         appendCommandOutput(
           t("slash_notSupportedForAgent", {
@@ -3445,6 +3447,19 @@
         return;
       }
 
+      if (roomRunSettings) {
+        try {
+          await setRoomParticipantPaused(
+            roomRunSettings.room_id,
+            roomRunSettings.participant_id,
+            true,
+          );
+        } catch (cause) {
+          store.error = String(cause);
+          return;
+        }
+      }
+
       if (store.useStreamSession) {
         // Claude: stop active session actor
         dbg("chat", "clear-context: stopping Claude session", { runId: store.run.id });
@@ -3460,7 +3475,10 @@
         dbg("chat", "clear-context: leaving Codex run", { runId: store.run.id });
       }
 
-      goto("/chat", { replaceState: true });
+      goto(
+        `/chat?agent=${effectiveAgent}&cwd=${encodeURIComponent(store.effectiveCwd || store.run.cwd)}`,
+        { replaceState: true },
+      );
       window.dispatchEvent(new Event("ocv:runs-changed"));
     } else if (action === "rewind") {
       if (!store.run) {
@@ -4622,6 +4640,22 @@
       onEndSession={handleStop}
       onFork={forkOverlay ? undefined : () => handleResume("fork")}
       onModelChange={isRoomSettingsScope ? undefined : handleModelChange}
+      onModelRefresh={() => {
+        if (effectiveAgent === "codex") void loadCodexModels(true);
+        else void loadCliInfo(true);
+      }}
+      onCreateRoom={store.run &&
+      !store.isRunning &&
+      !store.run.remote_host_name &&
+      store.run.session_id
+        ? () =>
+            goto(
+              roomRunSettings
+                ? `/rooms?room=${encodeURIComponent(roomRunSettings.room_id)}`
+                : `/rooms?fromSession=${encodeURIComponent(store.run!.id)}`,
+            )
+        : undefined}
+      roomExists={!!roomRunSettings}
       effort={statusBarEffort}
       onEffortChange={store.features.effortSelector && !isRoomSettingsScope
         ? handleEffortChange
@@ -5168,7 +5202,7 @@
                                   entry.content,
                                 )}</pre>
                             {:else}
-                              <MarkdownContent text={entry.content} />
+                              <MarkdownContent text={readableProtocolOutput(entry.content)} />
                             {/if}
                             {#if entry.historyContent && store.run && store.historySummary}
                               <HistoryContentPager
@@ -5388,7 +5422,10 @@
                       >
                     </div>
                     <div class="pl-7 prose-chat">
-                      <MarkdownContent text={store.streamingText} streaming={true} />
+                      <MarkdownContent
+                        text={readableProtocolOutput(store.streamingText)}
+                        streaming={true}
+                      />
                     </div>
                   </div>
                 </div>
@@ -5759,7 +5796,10 @@
             {#if btwState.error}
               <p class="text-destructive">{btwState.error}</p>
             {:else if btwState.answer}
-              <MarkdownContent text={btwState.answer} streaming={btwState.loading} />
+              <MarkdownContent
+                text={readableProtocolOutput(btwState.answer)}
+                streaming={btwState.loading}
+              />
             {/if}
             {#if btwState.loading}
               <span class="inline-block w-2 h-4 bg-blue-400 animate-pulse rounded-sm"></span>

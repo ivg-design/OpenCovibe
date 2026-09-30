@@ -63,6 +63,12 @@ pub struct Participant {
     #[serde(default)]
     pub pending_delivery: Option<Delivery>,
     #[serde(default)]
+    pub active_sidechat_id: Option<String>,
+    #[serde(default)]
+    pub read_message_ids: Vec<String>,
+    #[serde(default)]
+    pub unread_message_ids: Vec<String>,
+    #[serde(default)]
     pub no_progress_turns: u32,
     #[serde(default)]
     pub work_signature: Option<String>,
@@ -90,6 +96,10 @@ pub struct Delivery {
     pub state: String,
     pub task_id: Option<String>,
     pub timer_id: Option<String>,
+    #[serde(default)]
+    pub sidechat_id: Option<String>,
+    #[serde(default)]
+    pub message_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +124,17 @@ pub struct Message {
     pub target_participant_id: Option<String>,
     #[serde(default)]
     pub source_event_id: Option<String>,
+    #[serde(default)]
+    pub sidechat_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Sidechat {
+    pub id: String,
+    pub title: String,
+    pub source_message_id: String,
+    pub participant_ids: Vec<String>,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,9 +148,21 @@ pub struct Timer {
     pub next_due_at: i64,
     #[serde(default)]
     pub queued_at: Option<i64>,
-    pub max_deliveries: u32,
+    #[serde(default)]
+    pub max_deliveries: Option<u32>,
+    #[serde(default)]
+    pub ends_at: Option<i64>,
     pub delivered_count: u32,
     pub last_error: Option<String>,
+}
+
+impl Timer {
+    /// Whether this timer has reached its configured delivery-count or date limit.
+    pub fn is_exhausted_at(&self, now_ms: i64) -> bool {
+        self.max_deliveries
+            .is_some_and(|limit| self.delivered_count >= limit)
+            || self.ends_at.is_some_and(|ends_at| now_ms >= ends_at)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -158,6 +191,8 @@ pub struct Room {
     pub board: Board,
     pub participants: Vec<Participant>,
     pub messages: Vec<Message>,
+    #[serde(default)]
+    pub sidechats: Vec<Sidechat>,
     pub timers: Vec<Timer>,
     #[serde(default)]
     pub claims: Vec<Claim>,
@@ -169,8 +204,20 @@ pub struct Room {
     pub archived: bool,
     #[serde(default)]
     pub runtime_error: Option<String>,
+    #[serde(default)]
+    pub origin: Option<RoomOrigin>,
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoomOrigin {
+    pub run_id: String,
+    pub provider: String,
+    pub session_id: String,
+    pub title: String,
+    pub message_count: usize,
+    pub context: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -200,7 +247,10 @@ pub struct SaveTimerInput {
     pub interval_seconds: u64,
     pub idle_only: bool,
     pub enabled: bool,
-    pub max_deliveries: u32,
+    #[serde(default)]
+    pub max_deliveries: Option<u32>,
+    #[serde(default)]
+    pub ends_at: Option<i64>,
 }
 
 impl Room {

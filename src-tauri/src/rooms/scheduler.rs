@@ -90,7 +90,7 @@ pub fn timed_message(
         || timer.message.trim().is_empty()
         || timer.interval_seconds < 30
         || (timer.queued_at.is_none() && now_ms < timer.next_due_at)
-        || timer.delivered_count >= timer.max_deliveries
+        || timer.is_exhausted_at(now_ms)
         || matches!(state, PeerState::Waiting | PeerState::Offline)
     {
         return WakeDecision::Wait;
@@ -226,7 +226,8 @@ mod tests {
             enabled: true,
             next_due_at: now - 1000,
             queued_at: None,
-            max_deliveries: 3,
+            max_deliveries: Some(3),
+            ends_at: None,
             delivered_count: 0,
             last_error: None,
         };
@@ -242,6 +243,38 @@ mod tests {
         timer.delivered_count = 3;
         assert_eq!(
             timed_message(&room, &peer, &timer, PeerState::Idle, now),
+            WakeDecision::Wait
+        );
+    }
+
+    #[test]
+    fn date_limited_timer_is_live_before_end_and_expired_at_boundary_even_when_queued() {
+        let (room, peer, now) = setup();
+        let timer = Timer {
+            id: "date-timer".into(),
+            participant_id: peer.id.clone(),
+            message: "Review the board".into(),
+            interval_seconds: 60,
+            idle_only: false,
+            enabled: true,
+            next_due_at: now - 1000,
+            queued_at: Some(now - 500),
+            max_deliveries: None,
+            ends_at: Some(now + 1),
+            delivered_count: 0,
+            last_error: None,
+        };
+
+        assert_eq!(
+            timed_message(&room, &peer, &timer, PeerState::Idle, now),
+            WakeDecision::Timer("date-timer".into())
+        );
+        assert_eq!(
+            timed_message(&room, &peer, &timer, PeerState::Idle, now + 1),
+            WakeDecision::Wait
+        );
+        assert_eq!(
+            timed_message(&room, &peer, &timer, PeerState::Busy, now + 1),
             WakeDecision::Wait
         );
     }

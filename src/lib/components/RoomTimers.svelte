@@ -4,6 +4,7 @@
   import Input from "$lib/components/Input.svelte";
   import { t } from "$lib/i18n/index.svelte";
   import type { RoomParticipant, RoomTimer, SaveTimerInput } from "$lib/rooms/types";
+  import { timerStopInput, toLocalDateTimeInput, type TimerStopMode } from "$lib/rooms/timer-stop";
 
   let {
     timers,
@@ -25,14 +26,32 @@
   let message = $state("");
   let interval = $state("300");
   let maxDeliveries = $state("10");
+  let stopMode = $state<TimerStopMode>("count");
+  let endsAt = $state("");
   let idleOnly = $state(true);
   let enabled = $state(true);
+  let now = $state(Date.now());
+  let stopValue = $derived(timerStopInput(stopMode, maxDeliveries, endsAt, now));
+  let formValid = $derived(
+    !!participantId &&
+      !!message.trim() &&
+      Number.isFinite(Number(interval)) &&
+      Number(interval) >= 30 &&
+      stopValue !== null,
+  );
+
+  $effect(() => {
+    const timer = window.setInterval(() => (now = Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  });
 
   function reset() {
     editing = null;
     message = "";
     interval = "300";
     maxDeliveries = "10";
+    stopMode = "count";
+    endsAt = "";
     idleOnly = true;
     enabled = true;
   }
@@ -41,19 +60,21 @@
     participantId = timer.participant_id;
     message = timer.message;
     interval = String(timer.interval_seconds);
-    maxDeliveries = String(timer.max_deliveries);
+    stopMode = timer.ends_at != null ? "date" : "count";
+    maxDeliveries = String(timer.max_deliveries ?? 10);
+    endsAt = timer.ends_at != null ? toLocalDateTimeInput(timer.ends_at) : "";
     idleOnly = timer.idle_only;
     enabled = timer.enabled;
   }
   function submit(event: SubmitEvent) {
     event.preventDefault();
+    const stop = timerStopInput(stopMode, maxDeliveries, endsAt, Date.now());
     if (
       !participantId ||
       !message.trim() ||
       !Number.isFinite(Number(interval)) ||
       Number(interval) < 30 ||
-      !Number.isFinite(Number(maxDeliveries)) ||
-      Number(maxDeliveries) < 1
+      !stop
     )
       return;
     onSave({
@@ -63,9 +84,17 @@
       interval_seconds: Number(interval),
       idle_only: idleOnly,
       enabled,
-      max_deliveries: Number(maxDeliveries),
+      ...stop,
     });
     reset();
+  }
+
+  function localExpiration(epochMs: number): string {
+    return new Date(epochMs).toLocaleString();
+  }
+
+  function isExpired(timer: RoomTimer): boolean {
+    return timer.ends_at != null && timer.ends_at <= now;
   }
 </script>
 
@@ -76,8 +105,8 @@
   {#if participants.length === 0}<Card variant="subtle" class="p-4 text-sm text-muted-foreground"
       >{t("room_timersNeedParticipant")}</Card
     >{:else}
-    <form class="grid gap-2 rounded-lg border bg-card p-3 md:grid-cols-2" onsubmit={submit}>
-      <label class="space-y-1 text-xs text-muted-foreground"
+    <form class="room-form grid gap-2 rounded-lg border bg-card p-3" onsubmit={submit}>
+      <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
         ><span>{t("room_timerParticipant")}</span><select
           class="h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground"
           bind:value={participantId}
@@ -85,21 +114,49 @@
           >{#each participants as p (p.id)}<option value={p.id}>{p.name}</option>{/each}</select
         ></label
       >
-      <label class="space-y-1 text-xs text-muted-foreground"
+      <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
         ><span>{t("room_timerMessage")}</span><Input bind:value={message} /></label
       >
-      <label class="space-y-1 text-xs text-muted-foreground"
+      <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
         ><span>{t("room_intervalSeconds")}</span><Input
           type="number"
           bind:value={interval}
         /></label
       >
-      <label class="space-y-1 text-xs text-muted-foreground"
-        ><span>{t("room_maxDeliveries")}</span><Input
-          type="number"
-          bind:value={maxDeliveries}
-        /></label
+      <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
+        ><span>{t("room_timerStopAfter")}</span><select
+          class="h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground"
+          bind:value={stopMode}
+          ><option value="count">{t("room_timerStopAfterCount")}</option><option value="date"
+            >{t("room_timerStopAfterDate")}</option
+          ></select
+        ></label
       >
+      {#if stopMode === "count"}
+        <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
+          ><span>{t("room_maxDeliveries")}</span><input
+            type="number"
+            min="1"
+            max="200"
+            step="1"
+            bind:value={maxDeliveries}
+            class="h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm"
+          /></label
+        >
+      {:else}
+        <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
+          ><span>{t("room_timerEndDateTime")}</span><input
+            type="datetime-local"
+            bind:value={endsAt}
+            class="h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm"
+          /></label
+        >
+        {#if endsAt && !stopValue}
+          <p class="text-xs text-destructive md:col-span-2" role="alert">
+            {t("room_timerFutureDateRequired")}
+          </p>
+        {/if}
+      {/if}
       <div class="flex flex-wrap gap-4 md:col-span-2">
         <label class="flex items-center gap-2 text-sm"
           ><input type="checkbox" bind:checked={idleOnly} />{t("room_idleOnly")}</label
@@ -108,15 +165,8 @@
         >
       </div>
       <p class="text-xs text-muted-foreground md:col-span-2">{t("room_timerModeHelp")}</p>
-      <div class="flex gap-2 md:col-span-2">
-        <Button
-          disabled={disabled ||
-            !participantId ||
-            !Number.isFinite(Number(interval)) ||
-            Number(interval) < 30 ||
-            !Number.isFinite(Number(maxDeliveries)) ||
-            Number(maxDeliveries) < 1}
-          loading={busyAction === "save-timer"}
+      <div class="flex flex-wrap gap-2 md:col-span-2">
+        <Button disabled={disabled || !formValid} loading={busyAction === "save-timer"}
           >{editing ? t("common_save") : t("room_addTimer")}</Button
         >{#if editing}<button
             type="button"
@@ -128,7 +178,7 @@
     {#if timers.length === 0}<Card variant="subtle" class="p-4 text-sm text-muted-foreground"
         >{t("room_noTimers")}</Card
       >{/if}
-    <div class="grid gap-2 md:grid-cols-2">
+    <div class="room-peer-grid grid gap-2">
       {#each timers as timer (timer.id)}<Card class="space-y-2 p-3"
           ><div class="flex items-start justify-between gap-2">
             <div>
@@ -143,12 +193,25 @@
             >
           </div>
           <p class="text-xs text-muted-foreground">
-            {t("room_timerStats", {
-              interval: String(timer.interval_seconds),
-              count: String(timer.delivered_count),
-              max: String(timer.max_deliveries),
-              mode: timer.idle_only ? t("room_idleOnly") : t("room_anyState"),
-            })}
+            {#if timer.ends_at != null}
+              {t("room_timerStatsUntil", {
+                interval: String(timer.interval_seconds),
+                count: String(timer.delivered_count),
+                date: localExpiration(timer.ends_at),
+              })}
+              {#if isExpired(timer)}
+                <span class="ml-1 rounded bg-muted px-1.5 py-0.5" role="status">
+                  {t("room_timerExpired")}
+                </span>
+              {/if}
+            {:else}
+              {t("room_timerStats", {
+                interval: String(timer.interval_seconds),
+                count: String(timer.delivered_count),
+                max: String(timer.max_deliveries ?? "—"),
+                mode: timer.idle_only ? t("room_idleOnly") : t("room_anyState"),
+              })}
+            {/if}
           </p>
           {#if timer.queued_at}<p class="text-xs text-muted-foreground" role="status">
               {t("room_timerQueued")}
@@ -156,7 +219,7 @@
           {#if timer.last_error}<p class="text-xs text-destructive" role="status">
               {timer.last_error}
             </p>{/if}
-          <div class="flex gap-2">
+          <div class="flex flex-wrap gap-2">
             <Button size="sm" variant="outline" {disabled} onclick={() => edit(timer)}
               >{t("common_edit")}</Button
             ><Button
@@ -172,6 +235,7 @@
                   idle_only: timer.idle_only,
                   enabled: !timer.enabled,
                   max_deliveries: timer.max_deliveries,
+                  ends_at: timer.ends_at ?? null,
                 })}>{timer.enabled ? t("room_disableTimer") : t("room_enableTimer")}</Button
             ><Button size="sm" variant="outline" {disabled} onclick={() => onDelete(timer)}
               >{t("room_deleteTimer")}</Button

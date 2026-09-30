@@ -132,7 +132,7 @@
     </div>
   {/if}
 
-  <div class="grid gap-2 sm:grid-cols-3">
+  <div class="room-form grid gap-2">
     <label class="space-y-1 text-xs text-muted-foreground">
       <span>{tr("room_filterTitle")}</span>
       <Input bind:value={titleFilter} />
@@ -150,7 +150,7 @@
   {#if filteredGroups.length === 0}
     <Card variant="subtle" class="p-5 text-sm text-muted-foreground">{tr("room_boardEmpty")}</Card>
   {:else}
-    <div class="grid gap-3 xl:grid-cols-3">
+    <div class="room-board-grid grid gap-3">
       {#each filteredGroups as group (group.status)}
         {@const hidden = group.status === "__hidden__"}
         <section
