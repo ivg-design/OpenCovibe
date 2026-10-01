@@ -948,7 +948,7 @@
               {submitMessage}
             />
           {/if}
-          {#if (boardOnly || settingsOnly) && selected.claims.length > 0}<Card class="p-4"
+          {#if settingsOnly && selected.claims.length > 0}<Card class="p-4"
               ><h2 class="mb-3 text-base font-semibold">{tr("room_claims")}</h2>
               <div class="space-y-2">
                 {#each selected.claims as claim (claim.task_id)}{@const owner =

@@ -54,7 +54,8 @@ marker checks; deliberately injected live network-loss testing was not performed
   Clippy checks passed with warnings denied.
 - Native macOS left-half tiling worked on the updated isolated app; the window was restored
   and the acceptance app closed. All test peers remain paused.
-- The updated local desktop bundle is built. The running production-profile app has an
-  active RAV turn, so it is not forcibly restarted. A temporary hold used to wait for a safe
-  restart was removed; the room's original automatic-continuation setting is restored.
-  The updated build takes effect on the next safe app restart.
+- The updated Local desktop bundle was opened safely after the RAV turn completed. The
+  room's original automatic-continuation setting is restored. The new board was observed
+  in the actual RAV room: 14 tasks, 13 complete and one blocked, with live ownership,
+  evidence summaries, filters, and tracking rules. Claim-release management remains in
+  Room settings instead of duplicating the task list below the board.
