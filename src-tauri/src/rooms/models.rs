@@ -19,6 +19,18 @@ pub struct BoardItem {
     pub priority: Option<String>,
     pub agent: Option<String>,
     pub kind: String,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub number: Option<u64>,
+    #[serde(default)]
+    pub assignees: Vec<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub linked_prs: Vec<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

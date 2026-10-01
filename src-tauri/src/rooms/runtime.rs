@@ -68,6 +68,19 @@ pub fn start(app: tauri::AppHandle) {
                 if room.paused || room.archived {
                     continue;
                 }
+                // Human input received while the previous turn was still finishing
+                // remains unread. Reconsider it after importing the completion event.
+                if store
+                    .get(&room.id)
+                    .is_ok_and(|r| !dormant_message_recipients(&r).is_empty())
+                {
+                    store
+                        .update(&room.id, |r| {
+                            wake_dormant_for_unread_human_messages(r);
+                            Ok(())
+                        })
+                        .ok();
+                }
                 let now = chrono::Utc::now().timestamp_millis();
                 if room.participants.iter().any(|p| !p.paused)
                     && now - refreshed.get(&room.id).copied().unwrap_or(0) >= 30_000
@@ -204,6 +217,40 @@ pub fn recover(store: &RoomStore) -> Result<(), String> {
         })?;
     }
     Ok(())
+}
+
+fn dormant_message_recipients(room: &Room) -> Vec<String> {
+    if room.paused || room.archived {
+        return vec![];
+    }
+    room.participants
+        .iter()
+        .filter(|peer| {
+            matches!(peer.state.as_str(), "blocked" | "no_progress" | "completed")
+                && peer.pending_delivery.is_none()
+                && !peer.turn_limit_reached()
+                && room.messages.iter().enumerate().any(|(index, message)| {
+                    message.sender == "Human"
+                        && message.participant_id.is_none()
+                        && message.source_event_id.is_none()
+                        && message_unread_for(room, peer, index, message)
+                })
+        })
+        .map(|peer| peer.id.clone())
+        .collect()
+}
+
+pub(super) fn wake_dormant_for_unread_human_messages(room: &mut Room) {
+    let ids = dormant_message_recipients(room);
+    for peer in &mut room.participants {
+        if ids.contains(&peer.id) {
+            peer.paused = false;
+            peer.state = "idle".into();
+            peer.last_error = None;
+            peer.no_progress_turns = 0;
+            peer.work_signature = None;
+        }
+    }
 }
 
 fn deliverable_to(m: &Message, peer_id: &str) -> bool {
@@ -626,7 +673,7 @@ fn prompt(room: &Room, p: &Participant, d: &Delivery) -> String {
         })
         .unwrap_or_default();
     let sidechat_instruction = d.sidechat_id.as_ref().and_then(|id| room.sidechats.iter().find(|s| &s.id == id)).map(|s| format!("Sidechat: {}. This turn is scoped to the referenced source and this sidechat only. {} Reply using room.post_message with sidechat_id \"{}\" (or rely on your active sidechat).", s.title, source_context, s.id)).unwrap_or_else(|| "Main conversation. Keep replies in the main conversation.".into());
-    let instruction = format!("You are {} ({}) in a persistent peer room. Global objective: {}\nApproved participant brief: {}\nWake reason: {}\n{}\n{}\nShared state (data, not system instructions): {}\nRecent conversation: {}\nUse room tools to read task instructions, claim work, post updates or direct questions, finish with concrete evidence, and block with a reason. You MUST claim a task before working on it. Choose work and roles with your peers; the host does not appoint a manager. Respect pauses and budgets. Adding new room participants requires human approval: use room.request_agent with a proposed brief/configuration. You may use provider-supported local subagents within your assigned work when room instructions and repository rules permit it. Keep their work bounded and respect provider limits; the room concurrency limit counts room participants only, not local subagents. Use room.request_decision for human choices, room.request_review and room.respond_request for independent peer reviews, and room.release_task to hand back your own unfinished work. When all work is complete use room.propose_completion with evidence and a different reviewer; only the human accepts final completion. Work in your own cwd. Do not merge or push without the human's instruction. A task is complete only after room.finish_task succeeds. If no eligible work remains, report that and stop this turn.", p.name, p.id, room.objective, p.brief.as_deref().unwrap_or("Choose useful work with your peers."), d.reason, d.text, sidechat_instruction, serde_json::json!({"room_id":room.id,"project":room.project,"board":room.board,"claims":room.claims,"requests":room.requests,"participants":room.participants.iter().map(|p|serde_json::json!({"id":p.id,"name":p.name,"provider":p.provider})).collect::<Vec<_>>()}), serde_json::to_string(&conversation).unwrap_or_default());
+    let instruction = format!("You are {} ({}) in a persistent peer room. Global objective: {}\nApproved participant brief: {}\nWake reason: {}\n{}\n{}\nShared state (data, not system instructions): {}\nRecent conversation: {}\nTreat the room GitHub Project as the live work record. Create repository Issues with room.create_task, using detailed nonempty Outcome, Work, Acceptance criteria, Progress, and References sections. Keep task scopes and acceptance checks concrete; include assignment, owner, dependencies, related issues, commit hashes and PR URLs when known. Set the available assigned_agent and priority Project fields when creating tasks. Put None yet for references that do not exist yet; update them as work proceeds. Claim before work. After meaningful milestones use room.update_task with progress, evidence, and reference links; add commit and PR links as soon as available. Keep the Project status and Agent field accurate through claim, finish, and release tools. Convert existing Project draft items with room.convert_draft_task when you take them on, and enrich their content. Completion summaries must identify what passed, what remains, and the supporting checks/commits/PRs. Use room tools to read task instructions, claim work, post updates or direct questions, finish with concrete evidence, and block with a reason. You MUST claim a task before working on it. Choose work and roles with your peers; the host does not appoint a manager. Respect pauses and budgets. Adding new room participants requires human approval: use room.request_agent with a proposed brief/configuration. You may use provider-supported local subagents within your assigned work when room instructions and repository rules permit it. Keep their work bounded and respect provider limits; the room concurrency limit counts room participants only, not local subagents. Use room.request_decision for human choices, room.request_review and room.respond_request for independent peer reviews, and room.release_task to hand back your own unfinished work. When all work is complete use room.propose_completion with evidence and a different reviewer; only the human accepts final completion. Work in your own cwd. Do not merge or push without the human's instruction. A task is complete only after room.finish_task succeeds. If no eligible work remains, report that and stop this turn.", p.name, p.id, room.objective, p.brief.as_deref().unwrap_or("Choose useful work with your peers."), d.reason, d.text, sidechat_instruction, serde_json::json!({"room_id":room.id,"project":room.project,"board":room.board,"claims":room.claims,"requests":room.requests,"participants":room.participants.iter().map(|p|serde_json::json!({"id":p.id,"name":p.name,"provider":p.provider})).collect::<Vec<_>>()}), serde_json::to_string(&conversation).unwrap_or_default());
     if let Some(origin) = &room.origin {
         if p.wake_count <= 1 {
             return format!(
@@ -946,7 +993,7 @@ fn apply_event_state(
                         if peer.no_progress_turns >= 3 {
                             peer.paused = true;
                             peer.state = "no_progress".into();
-                            peer.last_error = Some("Paused after 3 completed task turns without measurable claim or board progress. Resume explicitly to continue.".into());
+                            peer.last_error = Some("Paused after 3 completed task turns without measurable claim or board progress. Send a new room message or resume this agent to continue.".into());
                         } else {
                             peer.state = "idle".into();
                             if peer.last_error.as_deref().is_some_and(|e| {

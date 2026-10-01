@@ -384,7 +384,7 @@ impl RoomStore {
             }) {
                 return Ok(());
             }
-            room.messages.push(Message {
+            let message = Message {
                 id: uuid::Uuid::new_v4().to_string(),
                 sender: sender.into(),
                 body: body.into(),
@@ -395,7 +395,9 @@ impl RoomStore {
                 source_event_id,
                 sidechat_id,
                 attachments,
-            });
+            };
+            room.messages.push(message);
+            super::runtime::wake_dormant_for_unread_human_messages(room);
             Ok(())
         })
     }

@@ -73,6 +73,12 @@ fn item(id: &str) -> BoardItem {
         priority: None,
         agent: None,
         kind: "issue".into(),
+        body: None,
+        number: None,
+        assignees: vec![],
+        labels: vec![],
+        linked_prs: vec![],
+        updated_at: None,
     }
 }
 
@@ -278,6 +284,272 @@ fn other_owned_uncertain_and_blocked_tasks_are_skipped() {
     let peer = fixture.peer("peer-a");
     let decision = plan(&fixture.room, &peer, fixture.now()).unwrap();
     assert_eq!(decision.task_id.as_deref(), Some("task-d"));
+}
+
+#[test]
+fn human_everyone_revives_dormant_peers_and_delivers_without_releasing_blocked_claims() {
+    let fixture = Fixture::new();
+    fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            room.auto_continue = false;
+            room.claims.push(claim("task-a", "peer-a", "blocked"));
+            for (peer, state) in room.participants.iter_mut().zip(["blocked", "no_progress"]) {
+                peer.paused = true;
+                peer.state = state.into();
+                peer.no_progress_turns = 3;
+                peer.last_error = Some("Earlier task needs input".into());
+            }
+            Ok(())
+        })
+        .unwrap();
+    let room = fixture
+        .store
+        .post_message(
+            &fixture.room.id,
+            "@everyone please review the new requirements".into(),
+        )
+        .unwrap();
+    assert_eq!(room.claims[0].state, "blocked");
+    for peer in &room.participants {
+        assert!(!peer.paused);
+        assert_eq!(peer.state, "idle");
+        assert_eq!(peer.no_progress_turns, 0);
+        let next = plan(&room, peer, fixture.now()).unwrap();
+        assert_eq!(next.reason, "message");
+        let reserved =
+            reserve_delivery(&fixture.store, &room.id, &peer.id, next, fixture.now()).unwrap();
+        let delivery = reserved
+            .participants
+            .iter()
+            .find(|p| p.id == peer.id)
+            .unwrap()
+            .pending_delivery
+            .as_ref()
+            .unwrap();
+        assert!(delivery
+            .text
+            .contains("@everyone please review the new requirements"));
+        assert!(delivery
+            .text
+            .contains("Treat the room GitHub Project as the live work record"));
+        assert!(delivery.text.contains("room.update_task"));
+    }
+    let reopened = RoomStore::open(&fixture._temp.path().join("rooms.sqlite3"))
+        .unwrap()
+        .get(&room.id)
+        .unwrap();
+    assert!(reopened
+        .participants
+        .iter()
+        .all(|p| p.pending_delivery.is_some()));
+}
+
+#[test]
+fn everyone_received_during_a_finishing_blocked_turn_wakes_after_completion() {
+    let fixture = Fixture::new();
+    fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            room.auto_continue = false;
+            let peer = &mut room.participants[0];
+            peer.paused = true;
+            peer.state = "blocked".into();
+            peer.pending_delivery = Some(delivery("task", None, fixture.now()));
+            Ok(())
+        })
+        .unwrap();
+    let room = fixture
+        .store
+        .append_message(
+            &fixture.room.id,
+            "Human",
+            "@Codex new input after your blocker".into(),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    assert!(room.participants[0].paused);
+    let completed = fixture
+        .store
+        .update(&room.id, |room| {
+            room.participants[0].pending_delivery = None;
+            super::wake_dormant_for_unread_human_messages(room);
+            Ok(())
+        })
+        .unwrap();
+    assert!(!completed.participants[0].paused);
+    assert_eq!(
+        plan(&completed, &completed.participants[0], fixture.now())
+            .unwrap()
+            .reason,
+        "message"
+    );
+}
+
+#[test]
+fn human_messages_revive_only_addressed_dormant_peers() {
+    for (body, target) in [
+        ("@Codex new instructions", None),
+        ("New instructions", Some("peer-a")),
+        ("@Codex @Claude new instructions", None),
+        ("New instructions for everyone", None),
+    ] {
+        let fixture = Fixture::new();
+        fixture
+            .store
+            .update(&fixture.room.id, |room| {
+                for peer in &mut room.participants {
+                    peer.paused = true;
+                    peer.state = "blocked".into();
+                }
+                Ok(())
+            })
+            .unwrap();
+        let room = fixture
+            .store
+            .append_message(
+                &fixture.room.id,
+                "Human",
+                body.into(),
+                None,
+                target.map(str::to_owned),
+                None,
+            )
+            .unwrap();
+        assert!(!room.participants[0].paused);
+        let everyone = body.contains("@Claude") || (target.is_none() && !body.contains('@'));
+        assert_eq!(room.participants[1].paused, !everyone);
+    }
+}
+
+#[test]
+fn everyone_respects_manual_pauses_permission_waits_limits_and_inflight_deliveries() {
+    for (state, pending, exhausted) in [
+        ("paused", false, false),
+        ("waiting", false, false),
+        ("quota", false, false),
+        ("failed", false, false),
+        ("budget_exhausted", false, false),
+        ("busy", true, false),
+        ("blocked", true, false),
+        ("no_progress", false, true),
+    ] {
+        let fixture = Fixture::new();
+        fixture
+            .store
+            .update(&fixture.room.id, |room| {
+                let peer = &mut room.participants[0];
+                peer.state = state.into();
+                peer.paused = true;
+                if pending {
+                    peer.pending_delivery = Some(delivery("message", None, fixture.now()));
+                }
+                if exhausted {
+                    peer.wake_count = peer.max_turns;
+                }
+                Ok(())
+            })
+            .unwrap();
+        let room = fixture
+            .store
+            .post_message(&fixture.room.id, "@everyone respond".into())
+            .unwrap();
+        assert!(room.participants[0].paused, "state {state}");
+        assert_eq!(room.participants[0].state, state);
+        assert!(plan(&room, &room.participants[0], fixture.now()).is_none());
+    }
+}
+
+#[test]
+fn historical_and_agent_everyone_messages_do_not_revive_dormant_peers() {
+    for (sender, peer, source) in [
+        ("Human", None, Some("seed:history")),
+        ("Claude", Some("peer-b"), None),
+    ] {
+        let fixture = Fixture::new();
+        fixture
+            .store
+            .update(&fixture.room.id, |room| {
+                room.participants[0].paused = true;
+                room.participants[0].state = "blocked".into();
+                Ok(())
+            })
+            .unwrap();
+        let room = fixture
+            .store
+            .append_message(
+                &fixture.room.id,
+                sender,
+                "@everyone respond".into(),
+                peer.map(str::to_owned),
+                None,
+                source.map(str::to_owned),
+            )
+            .unwrap();
+        assert!(room.participants[0].paused);
+    }
+}
+
+#[test]
+fn everyone_does_not_revive_a_paused_room_or_nonmembers_of_a_sidechat() {
+    let fixture = Fixture::new();
+    let source = fixture
+        .store
+        .post_message(&fixture.room.id, "Discuss here".into())
+        .unwrap()
+        .messages[0]
+        .id
+        .clone();
+    let room = fixture
+        .store
+        .create_sidechat(
+            &fixture.room.id,
+            &source,
+            "Codex only",
+            vec!["peer-a".into()],
+        )
+        .unwrap();
+    fixture
+        .store
+        .update(&room.id, |r| {
+            for peer in &mut r.participants {
+                peer.paused = true;
+                peer.state = "blocked".into();
+                peer.message_cursor = r.messages.len();
+            }
+            Ok(())
+        })
+        .unwrap();
+    let scoped = fixture
+        .store
+        .append_message_in_sidechat(
+            &room.id,
+            "Human",
+            "@everyone respond".into(),
+            None,
+            None,
+            None,
+            Some(room.sidechats[0].id.clone()),
+        )
+        .unwrap();
+    assert!(!scoped.participants[0].paused);
+    assert!(scoped.participants[1].paused);
+    fixture
+        .store
+        .update(&room.id, |r| {
+            r.paused = true;
+            r.participants[0].paused = true;
+            r.participants[0].state = "blocked".into();
+            Ok(())
+        })
+        .unwrap();
+    let paused = fixture
+        .store
+        .post_message(&room.id, "@everyone respond".into())
+        .unwrap();
+    assert!(paused.participants.iter().all(|p| p.paused));
 }
 
 #[test]

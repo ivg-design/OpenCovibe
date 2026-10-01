@@ -777,7 +777,18 @@ pub async fn set_room_participant_paused(
         });
     }
     if existing.paused {
-        return Ok(room);
+        // Preserve an explicit human pause even if automatic task dormancy
+        // already paused the peer. Fresh messages may wake blocked peers.
+        return store.update(&id, |r| {
+            let p = r
+                .participants
+                .iter_mut()
+                .find(|p| p.id == participant_id)
+                .ok_or("participant not found")?;
+            p.paused = true;
+            p.state = "paused".into();
+            Ok(())
+        });
     }
     store.update(&id, |r| {
         let p = r
@@ -1155,7 +1166,7 @@ pub async fn read_room_task(
 ) -> Result<serde_json::Value, String> {
     let room = store.get(&id)?;
     let project = room.project.ok_or("room has no GitHub Project")?;
-    github_tasks::read_task(&project, &task_id).await
+    github_tasks::read_task_with_progress(&project, &task_id).await
 }
 
 #[tauri::command]

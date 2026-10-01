@@ -15,6 +15,12 @@ export interface RoomBoardItem {
   priority: string | null;
   agent: string | null;
   kind: "issue" | "pull_request" | "draft" | "redacted";
+  body?: string | null;
+  number?: number | null;
+  assignees?: string[];
+  labels?: string[];
+  linked_prs?: string[];
+  updated_at?: string | null;
 }
 
 export interface RoomBoard {

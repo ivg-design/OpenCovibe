@@ -21,6 +21,8 @@ pub const ROOM_TOOL_NAMES: &[&str] = &[
     "post_message",
     "read_task",
     "create_task",
+    "update_task",
+    "convert_draft_task",
     "claim_task",
     "finish_task",
     "block_task",
@@ -203,6 +205,42 @@ fn required_string<'a>(args: &'a Value, name: &str) -> Result<&'a str, String> {
         .filter(|s| !s.is_empty())
         .ok_or_else(|| format!("{name} is required"))
 }
+fn task_references(args: &Value) -> Result<Vec<String>, String> {
+    let Some(items) = args.get("references") else {
+        return Ok(vec![]);
+    };
+    let items = items
+        .as_array()
+        .ok_or("references must be an array of strings")?;
+    if items.len() > 30 {
+        return Err("at most 30 references are allowed".into());
+    }
+    items
+        .iter()
+        .map(|item| {
+            let value = item.as_str().ok_or("references must be strings")?.trim();
+            if value.is_empty() || value.len() > 500 {
+                return Err("each reference must contain 1–500 bytes".into());
+            }
+            Ok(value.to_owned())
+        })
+        .collect()
+}
+fn with_references(text: &str, references: &[String]) -> String {
+    if references.is_empty() {
+        text.to_owned()
+    } else {
+        format!(
+            "{}\n\nReferences:\n{}",
+            text,
+            references
+                .iter()
+                .map(|reference| format!("- {reference}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    }
+}
 
 async fn call_tool(
     data_dir: &Path,
@@ -283,7 +321,7 @@ async fn call_tool(
             if !room.board.items.iter().any(|item| item.id == task_id) {
                 return Err("task is not present on this room's board".into());
             }
-            github_tasks::read_task(project, task_id).await
+            github_tasks::read_task_with_progress(project, task_id).await
         }
         "post_message" => {
             operations::active_peer(&room, participant_id)?;
@@ -333,35 +371,32 @@ async fn call_tool(
             let project = room.project.as_ref().ok_or("room has no GitHub Project")?;
             let title = required_string(args, "title")?;
             let body = required_string(args, "body")?;
+            let assigned_agent = args.get("assigned_agent").and_then(Value::as_str);
+            if assigned_agent
+                .is_some_and(|name| !room.participants.iter().any(|peer| peer.name == name))
+            {
+                return Err("assigned_agent must name a current room participant".into());
+            }
+            let priority = args.get("priority").and_then(Value::as_str);
             if title.chars().count() > 200 || body.len() > 32_000 {
                 return Err(
                     "task title must be at most 200 characters and body at most 32000 bytes".into(),
                 );
             }
+            github_tasks::validate_creation_input(project, body, assigned_agent, priority).await?;
             let first_attempt = store.begin_task_creation(room_id, title, body)?;
             let existing_id = store.created_task_id(room_id, title)?;
+            let already_recorded = existing_id.is_some();
             let task_id = if let Some(id) = existing_id {
                 github_tasks::read_task(project, &id).await?;
                 id
-            } else if !first_attempt {
-                let board = github::read_board(&project.id).await?;
-                let matching = board
-                    .items
-                    .iter()
-                    .filter(|item| item.title == title)
-                    .collect::<Vec<_>>();
-                if matching.len() != 1 {
-                    return Err("Previous task creation is unconfirmed or its title is ambiguous. No duplicate was created. Reconcile the GitHub Project before trying a different task title.".into());
-                }
-                let id = &matching[0].id;
-                let existing = github_tasks::read_task(project, id).await?;
-                if existing["body"].as_str() != Some(body) {
-                    return Err("The unconfirmed task's body changed. Inspect the existing task before resolving its creation intent; no replacement was created.".into());
-                }
-                id.clone()
             } else {
-                github_tasks::create_task(project, title, body).await?
+                github_tasks::create_task(project, title, body, first_attempt).await?
             };
+            if !already_recorded {
+                github_tasks::set_task_metadata(project, &task_id, assigned_agent, priority)
+                    .await?;
+            }
             store.complete_task_creation(room_id, title, &task_id)?;
             let before = store.get(room_id)?.board;
             match github::read_board_containing(&project.id, &task_id).await {
@@ -379,6 +414,71 @@ async fn call_tool(
             }
             Ok(json!({"task_id":task_id,"title":title}))
         }
+        "update_task" => {
+            operations::active_peer(&room, participant_id)?;
+            let project = room.project.as_ref().ok_or("room has no GitHub Project")?;
+            let task_id = required_string(args, "task_id")?;
+            let claim = room
+                .claims
+                .iter()
+                .find(|claim| {
+                    claim.task_id == task_id
+                        && claim.participant_id == participant_id
+                        && matches!(claim.state.as_str(), "active" | "reserved" | "completing")
+                })
+                .ok_or("this participant must hold an active claim before updating a task")?;
+            let progress = required_string(args, "progress")?;
+            let evidence = required_string(args, "evidence")?;
+            let references = task_references(args)?;
+            github_tasks::record_progress(project, task_id, progress, evidence, &references)
+                .await?;
+            let visible_evidence = with_references(evidence, &references);
+            store.update(room_id, |room| {
+                let claim = room
+                    .claims
+                    .iter_mut()
+                    .find(|claim| {
+                        claim.task_id == task_id
+                            && claim.participant_id == participant_id
+                            && matches!(claim.state.as_str(), "active" | "reserved" | "completing")
+                    })
+                    .ok_or("claim changed while recording progress; GitHub comment was saved")?;
+                claim.summary = Some(progress.to_owned());
+                claim.evidence = Some(visible_evidence.clone());
+                claim.updated_at = crate::models::now_iso();
+                Ok(())
+            })?;
+            let before = store.get(room_id)?.board;
+            let board = github::read_board(&project.id).await?;
+            store.apply_board_snapshot(room_id, &before, board)?;
+            Ok(json!({"task_id":task_id,"claim_state":claim.state,"progress_recorded":true}))
+        }
+        "convert_draft_task" => {
+            operations::active_peer(&room, participant_id)?;
+            let project = room.project.as_ref().ok_or("room has no GitHub Project")?;
+            let task_id = required_string(args, "task_id")?;
+            let body = required_string(args, "body")?;
+            if !room.claims.iter().any(|claim| {
+                claim.task_id == task_id
+                    && claim.participant_id == participant_id
+                    && matches!(claim.state.as_str(), "active" | "reserved")
+            }) {
+                return Err("claim this task before converting its draft Issue".into());
+            }
+            if !room
+                .board
+                .items
+                .iter()
+                .any(|item| item.id == task_id && matches!(item.kind.as_str(), "draft" | "issue"))
+            {
+                return Err("task is not a visible draft or Issue on this room board".into());
+            }
+            github_tasks::convert_draft_task(project, task_id, body).await?;
+            let before = store.get(room_id)?.board;
+            let board = github::read_board_containing(&project.id, task_id).await?;
+            store.apply_board_snapshot(room_id, &before, board)?;
+            Ok(json!({"task_id":task_id,"converted":true}))
+        }
         "claim_task" => {
             operations::active_peer(&room, participant_id)?;
             let task_id = required_string(args, "task_id")?;
@@ -390,15 +490,25 @@ async fn call_tool(
         "finish_task" => {
             operations::active_peer(&room, participant_id)?;
             let task_id = required_string(args, "task_id")?;
+            if room
+                .board
+                .items
+                .iter()
+                .any(|item| item.id == task_id && item.kind == "draft")
+            {
+                return Err("convert and enrich this Project draft before finishing it".into());
+            }
             let summary = required_string(args, "summary")?;
             let evidence = required_string(args, "evidence")?;
+            let references = task_references(args)?;
+            let evidence = with_references(evidence, &references);
             let updated = operations::finish_task(
                 &store,
                 room_id,
                 participant_id,
                 task_id,
                 summary,
-                evidence,
+                &evidence,
             )
             .await?;
             Ok(
@@ -408,10 +518,44 @@ async fn call_tool(
         "block_task" => {
             operations::active_peer(&room, participant_id)?;
             let task_id = required_string(args, "task_id")?;
+            if !room.claims.iter().any(|claim| {
+                claim.task_id == task_id
+                    && claim.participant_id == participant_id
+                    && !matches!(claim.state.as_str(), "done" | "released")
+            }) {
+                return Err(
+                    "this participant does not own an unfinished claim for the task".into(),
+                );
+            }
             let reason = required_string(args, "reason")?;
-            let updated = operations::block_task(&store, room_id, participant_id, task_id, reason)?;
+            let references = task_references(args)?;
+            let tracking_error = if room
+                .board
+                .items
+                .iter()
+                .any(|item| item.id == task_id && item.kind == "issue")
+            {
+                let project = room.project.as_ref().ok_or("room has no GitHub Project")?;
+                github_tasks::record_progress(
+                    project,
+                    task_id,
+                    "Blocked; waiting for the stated dependency or decision.",
+                    reason,
+                    &references,
+                )
+                .await
+                .err()
+            } else {
+                None
+            };
+            let reason = with_references(reason, &references);
+            let updated =
+                operations::block_task(&store, room_id, participant_id, task_id, &reason)?;
+            if let Some(error) = tracking_error.as_ref() {
+                store.update(room_id, |room| { room.board.error = Some(format!("Blocker was saved locally, but GitHub tracking needs reconciliation: {error}")); Ok(()) })?;
+            }
             Ok(
-                json!({"task_id":task_id,"claim":updated.claims.iter().find(|c| c.task_id == task_id)}),
+                json!({"task_id":task_id,"claim":updated.claims.iter().find(|c| c.task_id == task_id),"github_tracking_error":tracking_error}),
             )
         }
         "request_agent" | "request_decision" | "request_review" | "propose_completion" => {
@@ -569,10 +713,12 @@ fn tool_definitions() -> Value {
         make("read_sidechat","Read a sidechat, its visible source message, and its messages.",&["sidechat_id"],json!({"sidechat_id":{"type":"string"}})),
         make("post_message","Post to the main room or a sidechat; omitted sidechat_id uses the active sidechat.",&["body"],json!({"body":{"type":"string"},"target_participant_id":{"type":["string","null"]},"sidechat_id":{"type":["string","null"],"description":"Omit to use your active sidechat; explicit null posts to the main conversation."}})),
         make("read_task","Read a task that belongs to the room's GitHub Project.",&["task_id"],json!({"task_id":{"type":"string"}})),
-        make("create_task","Create or find an exact-title draft task on the room's GitHub Project, then refresh its board.",&["title","body"],json!({"title":{"type":"string"},"body":{"type":"string"}})),
+        make("create_task","Create an idempotent repository Issue linked to this room's GitHub Project. The detailed body must include nonempty ## Outcome, ## Work, ## Acceptance criteria, ## Progress, and ## References sections; use 'None yet' for references still pending. Set assigned_agent and priority when known and available.",&["title","body"],json!({"title":{"type":"string"},"body":{"type":"string","minLength":160},"assigned_agent":{"type":"string"},"priority":{"type":"string"}})),
+        make("update_task","Record an idempotent Issue progress update with evidence and commit, PR, assignment, or other references. Requires your active claim.",&["task_id","progress","evidence"],json!({"task_id":{"type":"string"},"progress":{"type":"string"},"evidence":{"type":"string"},"references":{"type":"array","items":{"type":"string"},"maxItems":30}})),
+        make("convert_draft_task","After claiming a visible Project draft, enrich it with a detailed body and convert it to a repository Issue while preserving its Project item. The body needs the same five sections as create_task.",&["task_id","body"],json!({"task_id":{"type":"string"},"body":{"type":"string","minLength":160}})),
         make("claim_task","Atomically claim an eligible room board task and update GitHub.",&["task_id"],json!({"task_id":{"type":"string"}})),
-        make("finish_task","Mark a task owned by this participant complete with summary and evidence.",&["task_id","summary","evidence"],json!({"task_id":{"type":"string"},"summary":{"type":"string"},"evidence":{"type":"string"}})),
-        make("block_task","Mark a task owned by this participant blocked and pause the participant.",&["task_id","reason"],json!({"task_id":{"type":"string"},"reason":{"type":"string"}})),
+        make("finish_task","Mark your claimed task complete with summary, evidence, and available commit, PR, or other references.",&["task_id","summary","evidence"],json!({"task_id":{"type":"string"},"summary":{"type":"string"},"evidence":{"type":"string"},"references":{"type":"array","items":{"type":"string"},"maxItems":30}})),
+        make("block_task","Record the blocker on its repository Issue and pause the participant, with available references.",&["task_id","reason"],json!({"task_id":{"type":"string"},"reason":{"type":"string"},"references":{"type":"array","items":{"type":"string"},"maxItems":30}})),
         make("request_agent","Request a new local peer for HUMAN approval. This never creates a peer or runs a model. Exact retries return the same request.",&["title","reason","brief","proposal"],json!({"title":{"type":"string"},"reason":{"type":"string"},"brief":{"type":"string"},"proposal":{"type":"object","properties":{"name":{"type":"string"},"provider":{"enum":["codex","claude"]},"model":{"type":["string","null"]},"effort":{"type":["string","null"]},"use_worktree":{"type":"boolean"},"max_turns":{"type":"integer","minimum":0,"maximum":200,"description":"Optional total room turn limit; 0 disables it. Separate from each timer delivery limit."}},"required":["name","provider","use_worktree","max_turns"],"additionalProperties":false}})),
         make("request_decision","Ask the human a durable question with optional choices and evidence. The answer wakes the requester when eligible.",&["title","question"],json!({"title":{"type":"string"},"question":{"type":"string"},"options":{"type":"array","items":{"type":"string"},"maxItems":5},"evidence":{"type":["string","null"]}})),
         make("request_review","Ask another room peer to review evidence. The requester cannot approve their own review.",&["title","instructions","evidence","reviewer_id"],json!({"title":{"type":"string"},"instructions":{"type":"string"},"evidence":{"type":"string"},"reviewer_id":{"type":"string"},"task_id":{"type":["string","null"]}})),
@@ -990,6 +1136,8 @@ mod tests {
                 "post_message",
                 "read_task",
                 "create_task",
+                "update_task",
+                "convert_draft_task",
                 "claim_task",
                 "finish_task",
                 "block_task",

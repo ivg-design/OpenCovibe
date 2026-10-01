@@ -90,6 +90,24 @@ pub async fn repository_ids(repository: &str) -> Result<(String, String), String
     ))
 }
 
+pub async fn require_repository_issues(repository: &str) -> Result<(), String> {
+    let (owner, name) = repository_parts(repository)?;
+    let data = graphql(
+        "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){hasIssuesEnabled}}",
+        json!({"owner":owner,"name":name}),
+    )
+    .await?;
+    check_repository_issues(&data["repository"], repository)
+}
+
+fn check_repository_issues(value: &Value, repository: &str) -> Result<(), String> {
+    match value["hasIssuesEnabled"].as_bool() {
+        Some(true) => Ok(()),
+        Some(false) => Err(format!("GitHub Issues are disabled for {repository}. Enable Issues in the repository settings before creating room tasks.")),
+        None => Err(format!("Could not verify whether GitHub Issues are enabled for {repository}; task creation was not started.")),
+    }
+}
+
 fn required_string(value: &Value, key: &str) -> Result<String, String> {
     value[key]
         .as_str()
@@ -217,7 +235,7 @@ pub async fn read_board(project_id: &str) -> Result<Board, String> {
     let mut total_count = 0;
     for _ in 0..100 {
         let data = graphql(
-            "query($id:ID!,$after:String){node(id:$id){... on ProjectV2{items(first:100,after:$after){totalCount pageInfo{hasNextPage endCursor} nodes{id content{__typename ... on Issue{title url} ... on PullRequest{title url} ... on DraftIssue{title}} fieldValues(first:100){nodes{... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}} ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2FieldCommon{name}}}}}}}}}}",
+            "query($id:ID!,$after:String){node(id:$id){... on ProjectV2{items(first:100,after:$after){totalCount pageInfo{hasNextPage endCursor} nodes{id content{__typename ... on Issue{title url body number updatedAt assignees(first:20){nodes{login}} labels(first:20){nodes{name}} closedByPullRequestsReferences(first:20){nodes{url}}} ... on PullRequest{title url body number updatedAt assignees(first:20){nodes{login}} labels(first:20){nodes{name}}} ... on DraftIssue{title body}} fieldValues(first:100){nodes{... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}} ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2FieldCommon{name}}}}}}}}}}",
             json!({"id": project_id, "after": after}),
         ).await?;
         let connection = &data["node"]["items"];
@@ -240,7 +258,7 @@ pub async fn read_board(project_id: &str) -> Result<Board, String> {
     Err("GitHub board pagination limit reached; previous complete board retained".into())
 }
 
-// Project item connections can lag a successful draft mutation. Do not report the
+// Project item connections can lag a successful add mutation. Do not report the
 // new task as usable until it is visible in the same snapshot used for claiming.
 pub async fn read_board_containing(project_id: &str, task_id: &str) -> Result<Board, String> {
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
@@ -312,12 +330,54 @@ fn parse_board_item(node: &Value) -> Result<BoardItem, String> {
         priority,
         agent,
         kind: kind.into(),
+        body: content["body"].as_str().map(str::to_owned),
+        number: content["number"].as_u64(),
+        assignees: content["assignees"]["nodes"]
+            .as_array()
+            .map(|nodes| {
+                nodes
+                    .iter()
+                    .filter_map(|v| v["login"].as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        labels: content["labels"]["nodes"]
+            .as_array()
+            .map(|nodes| {
+                nodes
+                    .iter()
+                    .filter_map(|v| v["name"].as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        linked_prs: content["closedByPullRequestsReferences"]["nodes"]
+            .as_array()
+            .map(|nodes| {
+                nodes
+                    .iter()
+                    .filter_map(|v| v["url"].as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        updated_at: content["updatedAt"].as_str().map(str::to_owned),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn issue_creation_preflight_reports_disabled_or_unverifiable_repositories() {
+        assert!(check_repository_issues(&json!({"hasIssuesEnabled":true}), "owner/repo").is_ok());
+        let disabled =
+            check_repository_issues(&json!({"hasIssuesEnabled":false}), "owner/repo").unwrap_err();
+        assert!(disabled.contains("Enable Issues in the repository settings"));
+        assert!(disabled.contains("owner/repo"));
+        assert!(check_repository_issues(&Value::Null, "owner/repo")
+            .unwrap_err()
+            .contains("task creation was not started"));
+    }
 
     #[test]
     fn rejects_urls_and_extra_path_segments_without_shell_interpolation() {
@@ -375,10 +435,15 @@ mod tests {
 
     #[test]
     fn reads_custom_status_priority_and_agent_fields() {
-        let item = parse_board_item(&json!({"id":"item", "content":{"__typename":"Issue","title":"Do work","url":"https://github.com/o/r/issues/1"},"fieldValues":{"nodes":[{"name":"Ready","field":{"name":"Status"}},{"name":"P1","field":{"name":"Priority"}},{"text":"Claude review","field":{"name":"Agent"}}]}})).unwrap();
+        let item = parse_board_item(&json!({"id":"item", "content":{"__typename":"Issue","title":"Do work","url":"https://github.com/o/r/issues/1","body":"## Outcome\nDone","number":1,"updatedAt":"2026-10-01T00:00:00Z","assignees":{"nodes":[{"login":"coder"}]},"labels":{"nodes":[{"name":"urgent"}]},"closedByPullRequestsReferences":{"nodes":[{"url":"https://github.com/o/r/pull/4"}]}},"fieldValues":{"nodes":[{"name":"Ready","field":{"name":"Status"}},{"name":"P1","field":{"name":"Priority"}},{"text":"Claude review","field":{"name":"Agent"}}]}})).unwrap();
         assert_eq!(item.status, "Ready");
         assert_eq!(item.priority.as_deref(), Some("P1"));
         assert_eq!(item.agent.as_deref(), Some("Claude review"));
+        assert_eq!(item.body.as_deref(), Some("## Outcome\nDone"));
+        assert_eq!(item.number, Some(1));
+        assert_eq!(item.assignees, ["coder"]);
+        assert_eq!(item.labels, ["urgent"]);
+        assert_eq!(item.linked_prs, ["https://github.com/o/r/pull/4"]);
     }
 
     #[test]

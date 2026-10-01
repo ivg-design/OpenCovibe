@@ -146,7 +146,14 @@ export function mergeRoomWorktree(id: string, participantId: string): Promise<Ro
 export function readRoomTask(
   id: string,
   taskId: string,
-): Promise<{ id: string; title: string; body: string; url: string | null; kind: string }> {
+): Promise<{
+  id: string;
+  title: string;
+  body: string;
+  url: string | null;
+  kind: string;
+  progress_updates?: { body: string; url: string; created_at: string; author: string }[];
+}> {
   return getTransport().invoke("read_room_task", { id, taskId });
 }
 

@@ -132,6 +132,12 @@ mod tests {
             priority: None,
             agent: None,
             kind: "issue".into(),
+            body: None,
+            number: None,
+            assignees: vec![],
+            labels: vec![],
+            linked_prs: vec![],
+            updated_at: None,
         });
         let peer = Participant {
             id: "peer".into(),

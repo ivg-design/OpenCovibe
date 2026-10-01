@@ -483,7 +483,7 @@
           {#each rooms as room (room.id)}<option value={room.id}>{room.title}</option>{/each}
         </select>
       </label>{/if}
-    <div class={!boardOnly && !settingsOnly && selected ? "sr-only" : ""}>
+    <div class={selected && !settingsOnly ? "sr-only" : ""}>
       <h1 class="text-2xl font-semibold text-foreground">
         {tr(boardOnly ? "room_projectBoard" : settingsOnly ? "room_settings" : "room_pageTitle")}
       </h1>
@@ -709,15 +709,18 @@
               </div>
             </div>
           {:else}
-            <Card class="shrink-0 p-4 md:p-5"
+            <Card class={boardOnly ? "shrink-0 p-3" : "shrink-0 p-4 md:p-5"}
               ><div class="flex flex-wrap items-start justify-between gap-3">
                 <div class="min-w-0">
-                  <h2 class="min-w-0 break-words text-xl font-semibold [overflow-wrap:anywhere]">
+                  <h2
+                    class={`min-w-0 break-words font-semibold [overflow-wrap:anywhere] ${boardOnly ? "text-base" : "text-xl"}`}
+                  >
                     {selected.title}
                   </h2>
                   {#if boardOnly}<details class="mt-1 text-xs text-muted-foreground">
                       <summary class="cursor-pointer">{tr("room_objectiveLabel")}</summary>
                       <p class="mt-1 whitespace-pre-wrap">{selected.objective}</p>
+                      <p class="mt-1">Local folder: {selected.repo_path}</p>
                     </details>{:else if settingsOnly}<p
                       class="mt-2 whitespace-pre-wrap text-sm text-muted-foreground"
                     >
@@ -726,9 +729,10 @@
                   <p
                     class="mt-2 break-words text-xs text-muted-foreground [overflow-wrap:anywhere]"
                   >
-                    {selected.repository} · {selected.repo_path}
+                    {selected.repository}{#if !boardOnly}
+                      · {selected.repo_path}{/if}
                   </p>
-                  {#if selected.origin}<p class="mt-3 text-sm text-muted-foreground">
+                  {#if selected.origin}<p class="mt-2 text-xs text-muted-foreground">
                       {#if boardOnly || settingsOnly}{tr("room_startingConversation", {
                           count: String(selected.origin.message_count),
                         })}{/if}
@@ -923,6 +927,8 @@
           {#if boardOnly && selected.project}<RoomBoard
               roomId={selected.id}
               board={selected.board}
+              claims={selected.claims}
+              participants={selected.participants}
               loading={busyAction === "board"}
               canRefresh={!actionsDisabled}
               onrefresh={() => void perform("board", refreshRoomBoard)}

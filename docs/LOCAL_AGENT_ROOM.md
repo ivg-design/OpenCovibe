@@ -83,7 +83,7 @@ wakeups. Timers and human messages can wake an idle participant without a fresh 
 claiming work still requires a fresh snapshot. The host runs while the desktop app is alive,
 including when hidden in the tray; it does not schedule work after Quit.
 
-Room-scoped stdio MCP tools provide snapshot, post_message, create_sidechat, read_sidechat, read_task, create_task, claim_task,
+Room-scoped stdio MCP tools provide snapshot, post_message, create_sidechat, read_sidechat, read_task, create_task, update_task, convert_draft_task, claim_task,
 finish_task, block_task, release_task, request_agent, request_decision, request_review,
 respond_request and propose_completion. They bind one room and participant and check ownership,
 pauses and any enabled turn limits for governance writes. Repeated identical request creation returns
@@ -92,6 +92,24 @@ Finishing requires a summary and evidence; the proof is stored on GitHub before 
 Exact task-creation intents are persisted to avoid blindly repeating uncertain writes. Creation
 waits for the new task to appear in the claimable Project snapshot. In-flight board reads cannot
 overwrite a task change or newer refresh committed while the read was pending.
+
+New tasks are repository Issues linked to the room Project. Their descriptions require
+Outcome, Work, Acceptance criteria, Progress and References sections. Every participant
+wake includes the same built-in tracking policy; the room's editable instructions add
+project-specific requirements. Claiming updates Status and Agent, progress updates retain
+evidence and commit/PR references on the Issue and in the room's live claim, and finishing
+records proof before marking Done. Participants enrich and convert older drafts when
+taking them on; conversion preserves the Project item and ownership. Drafts cannot be
+finished through the agent tool until converted. GitHub Issues must be enabled on the
+repository; preflight reports this before recording a creation intent.
+
+Fresh human broadcasts (including `@everyone` and the Everyone picker) revive agents
+stopped automatically for a blocked task or lack of progress. Named recipients and
+sidechat membership restrict who wakes. An unread human message received during a finishing
+turn is reconsidered after completion. Manual agent/room pauses, permission waits,
+quota errors, uncertain deliveries and turn limits remain in force. Waking a blocked
+participant lets it respond to new input; it does not resolve its blocked task or grant
+an approval.
 Codex approvals are configured only for the app-owned room tools using per-process
 [per-tool overrides](https://learn.chatgpt.com/docs/config-file/config-reference).
 Other permission requests keep the provider's normal approval behavior.

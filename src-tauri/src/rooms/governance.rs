@@ -721,6 +721,12 @@ mod tests {
                             priority: None,
                             agent: None,
                             kind: "issue".into(),
+                            body: None,
+                            number: None,
+                            assignees: vec![],
+                            labels: vec![],
+                            linked_prs: vec![],
+                            updated_at: None,
                         }],
                         synced_at: Some(crate::models::now_iso()),
                         error: None,
@@ -1184,6 +1190,12 @@ mod tests {
                     priority: None,
                     agent: None,
                     kind: "issue".into(),
+                    body: None,
+                    number: None,
+                    assignees: vec![],
+                    labels: vec![],
+                    linked_prs: vec![],
+                    updated_at: None,
                 });
                 Ok(())
             })
