@@ -176,6 +176,7 @@
       // (observed on Intel Mac WKWebView), the static CSS in the style block below
       // provides baseline syntax highlighting via classHighlighter.
       syntaxHighlighting(classHighlighter),
+      EditorView.lineWrapping,
       EditorView.editable.of(!readonly),
       EditorState.readOnly.of(readonly),
       themeCompartment.of(dark ? oneDark : []),

@@ -50,6 +50,7 @@
     RoomSessionSeed,
     SaveTimerInput,
     RepositoryInspection,
+    RoomAttachment,
   } from "$lib/rooms/types";
 
   const tr: typeof t = t;
@@ -102,6 +103,7 @@
   let humanMessage = $state(""),
     targetParticipantId = $state(""),
     activeSidechatId = $state("");
+  let attachmentDrafts = $state<RoomAttachment[]>([]);
   let projectNumber = $state("");
   let editingInstructions = $state(false),
     instructionsDraft = $state(""),
@@ -259,6 +261,7 @@
     activeSidechatId = "";
     targetParticipantId = "";
     humanMessage = "";
+    attachmentDrafts = [];
     const request = ++generation;
     pollGeneration++;
     loadingRoom = true;
@@ -300,7 +303,10 @@
     notice = "";
     try {
       const room = await operation(roomId);
-      if (request === generation && selected?.id === roomId) applyRoom(room);
+      if (request === generation && selected?.id === roomId) {
+        applyRoom(room);
+        window.dispatchEvent(new Event("ocv:room-changed"));
+      }
     } catch (cause) {
       if (request === generation && selected?.id === roomId) error = String(cause);
     } finally {
@@ -361,18 +367,20 @@
   async function submitMessage(event: SubmitEvent) {
     event.preventDefault();
     const body = humanMessage.trim();
-    if (!body || !selected || actionsDisabled) return;
+    if ((!body && !attachmentDrafts.length) || !selected || actionsDisabled) return;
     const id = selected.id,
-      target = targetParticipantId || null;
+      target = targetParticipantId || null,
+      attachmentIds = attachmentDrafts.map((attachment) => attachment.id);
     const request = ++generation;
     pollGeneration++;
     busyAction = "message";
     error = "";
     try {
-      const room = await postRoomMessage(id, body, target, activeSidechatId || null);
+      const room = await postRoomMessage(id, body, target, activeSidechatId || null, attachmentIds);
       if (request === generation && selected?.id === id) {
         applyRoom(room);
         humanMessage = "";
+        attachmentDrafts = [];
       }
     } catch (cause) {
       if (request === generation && selected?.id === id) error = String(cause);
@@ -556,7 +564,7 @@
                   >
                     {tr("room_chooseFolder")}
                   </Button>
-                  <span class="min-w-0 flex-1 break-all" title={repoPath}
+                  <span class="min-w-0 flex-1 break-words [overflow-wrap:anywhere]" title={repoPath}
                     >{repoPath || tr("room_noFolderSelected")}</span
                   >
                   {#if inspectingRepository}<span role="status"
@@ -594,7 +602,7 @@
                 </label>
               {:else if repoInspection && repoInspection.repositories.length && !manualRepository}
                 <div class="flex min-w-0 flex-wrap items-center gap-2 text-xs md:col-span-2">
-                  <span class="min-w-0 break-all text-muted-foreground"
+                  <span class="min-w-0 break-words text-muted-foreground [overflow-wrap:anywhere]"
                     >{tr("room_githubRepository")}: {repository}</span
                   >
                   <button
@@ -619,7 +627,7 @@
                 </label>
               {:else if sourceSession}
                 <div class="flex min-w-0 flex-wrap items-center gap-2 text-xs md:col-span-2">
-                  <span class="min-w-0 break-all text-muted-foreground"
+                  <span class="min-w-0 break-words text-muted-foreground [overflow-wrap:anywhere]"
                     >{tr("room_githubRepository")}: {repository}</span
                   ><button
                     type="button"
@@ -674,7 +682,11 @@
             <div class="flex shrink-0 flex-wrap items-center justify-between gap-2">
               <div class="min-w-0">
                 <h2 class="sr-only">{selected.title}</h2>
-                <p class="text-xs text-muted-foreground">{selected.repository}</p>
+                <p
+                  class="min-w-0 break-words text-xs text-muted-foreground [overflow-wrap:anywhere]"
+                >
+                  {selected.repository}
+                </p>
               </div>
               <div class="flex flex-wrap items-center gap-2 text-xs">
                 {#if selected.origin}<a
@@ -700,13 +712,20 @@
             <Card class="shrink-0 p-4 md:p-5"
               ><div class="flex flex-wrap items-start justify-between gap-3">
                 <div class="min-w-0">
-                  <h2 class="text-xl font-semibold">{selected.title}</h2>
-                  {#if boardOnly || settingsOnly}<p
+                  <h2 class="min-w-0 break-words text-xl font-semibold [overflow-wrap:anywhere]">
+                    {selected.title}
+                  </h2>
+                  {#if boardOnly}<details class="mt-1 text-xs text-muted-foreground">
+                      <summary class="cursor-pointer">{tr("room_objectiveLabel")}</summary>
+                      <p class="mt-1 whitespace-pre-wrap">{selected.objective}</p>
+                    </details>{:else if settingsOnly}<p
                       class="mt-2 whitespace-pre-wrap text-sm text-muted-foreground"
                     >
                       {selected.objective}
                     </p>{/if}
-                  <p class="mt-2 text-xs text-muted-foreground">
+                  <p
+                    class="mt-2 break-words text-xs text-muted-foreground [overflow-wrap:anywhere]"
+                  >
                     {selected.repository} · {selected.repo_path}
                   </p>
                   {#if selected.origin}<p class="mt-3 text-sm text-muted-foreground">
@@ -918,6 +937,7 @@
               bind:humanMessage
               bind:targetParticipantId
               bind:activeSidechatId
+              bind:attachmentDrafts
               onBranch={branchMessage}
               {submitMessage}
             />

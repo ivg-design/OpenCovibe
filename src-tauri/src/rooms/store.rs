@@ -7,6 +7,7 @@ use std::sync::Mutex;
 
 pub struct RoomStore {
     connection: Mutex<Connection>,
+    pub(crate) attachment_root: std::path::PathBuf,
     pub project_operation: tokio::sync::Mutex<()>,
 }
 
@@ -40,6 +41,7 @@ impl RoomStore {
         }
         Ok(Self {
             connection: Mutex::new(connection),
+            attachment_root: parent.join("room-attachments"),
             project_operation: tokio::sync::Mutex::new(()),
         })
     }
@@ -297,11 +299,53 @@ impl RoomStore {
         source_event_id: Option<String>,
         sidechat_id: Option<String>,
     ) -> Result<Room, String> {
+        self.append_message_with_attachments(
+            id,
+            sender,
+            body,
+            participant_id,
+            target_participant_id,
+            source_event_id,
+            sidechat_id,
+            &[],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_message_with_attachments(
+        &self,
+        id: &str,
+        sender: &str,
+        body: String,
+        participant_id: Option<String>,
+        target_participant_id: Option<String>,
+        source_event_id: Option<String>,
+        sidechat_id: Option<String>,
+        attachment_ids: &[String],
+    ) -> Result<Room, String> {
+        let attachments = self.resolve_attachments(id, attachment_ids)?;
         let body = body.trim();
-        if body.is_empty() || body.len() > 32_000 {
-            return Err("message must contain 1–32000 bytes".into());
+        if (body.is_empty() && attachments.is_empty()) || body.len() > 32_000 {
+            return Err(
+                "Add a message or attachment. Messages can contain up to 32000 bytes.".into(),
+            );
         }
         self.update(id, |room| {
+            if room.archived {
+                return Err("room is archived".into());
+            }
+            let mut target_participant_id = target_participant_id.clone();
+            let mut target_participant_ids = vec![];
+            if sender == "Human" && participant_id.is_none() {
+                if let Some(ids) = super::mentions::recipients(body, &room.participants) {
+                    if ids.len() == 1 {
+                        target_participant_id = ids.first().cloned();
+                    } else {
+                        target_participant_id = None;
+                        target_participant_ids = ids;
+                    }
+                }
+            }
             if let Some(sidechat_id) = sidechat_id.as_deref() {
                 let sidechat = room
                     .sidechats
@@ -319,6 +363,12 @@ impl RoomStore {
                     .is_some_and(|id| !sidechat.participant_ids.contains(id))
                 {
                     return Err("target participant is not a member of this sidechat".into());
+                }
+                if target_participant_ids
+                    .iter()
+                    .any(|id| !sidechat.participant_ids.contains(id))
+                {
+                    return Err("A mentioned agent is not a member of this sidechat.".into());
                 }
             }
             if target_participant_id
@@ -341,8 +391,10 @@ impl RoomStore {
                 created_at: crate::models::now_iso(),
                 participant_id,
                 target_participant_id,
+                target_participant_ids,
                 source_event_id,
                 sidechat_id,
+                attachments,
             });
             Ok(())
         })
@@ -375,25 +427,23 @@ impl RoomStore {
                     .ok_or("source sidechat not found")?
                     .participant_ids
                     .clone()
-            } else if source.target_participant_id.is_some() {
-                [
-                    source.participant_id.clone(),
-                    source.target_participant_id.clone(),
-                ]
-                .into_iter()
-                .flatten()
-                .collect()
+            } else if source.is_directed() {
+                source
+                    .target_participant_ids
+                    .iter()
+                    .cloned()
+                    .chain(source.target_participant_id.clone())
+                    .chain(source.participant_id.clone())
+                    .collect()
             } else {
                 room.participants
                     .iter()
                     .map(|p| p.id.clone())
                     .collect::<Vec<_>>()
             };
-            if source.sidechat_id.is_some() && source.target_participant_id.is_some() {
-                allowed_ids.retain(|id| {
-                    source.participant_id.as_ref() == Some(id)
-                        || source.target_participant_id.as_ref() == Some(id)
-                });
+            if source.sidechat_id.is_some() && source.is_directed() {
+                allowed_ids
+                    .retain(|id| source.participant_id.as_ref() == Some(id) || source.targets(id));
             }
             let ids = if participant_ids.is_empty() {
                 allowed_ids.clone()
@@ -677,8 +727,10 @@ mod tests {
             created_at: "yesterday".into(),
             participant_id: Some(peer.id.clone()),
             target_participant_id: None,
+            target_participant_ids: vec![],
             source_event_id: Some("existing-run:998".into()),
             sidechat_id: None,
+            attachments: vec![],
         };
         let room = store
             .create_from_session(

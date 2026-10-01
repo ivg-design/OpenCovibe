@@ -125,7 +125,7 @@
     >
     <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
       ><span>{t("room_provider")}</span><select
-        class="h-9 rounded-md border bg-background px-2 text-sm text-foreground"
+        class="h-9 w-full min-w-0 rounded-md border bg-background px-2 text-sm text-foreground"
         bind:value={provider}
         onchange={() => {
           model = effort = "";
@@ -158,24 +158,24 @@
       <Card class="space-y-3 p-4">
         <div class="flex flex-wrap items-start justify-between gap-2">
           <div class="min-w-0">
-            <h3 class="font-medium text-foreground">
+            <h3 class="break-words font-medium text-foreground">
               <span
                 class="mr-2 inline-block h-2.5 w-2.5 rounded-full"
                 style={`background-color: ${["#5677c8", "#b36a9a", "#538b70", "#bd8250", "#7481aa", "#ad665d"][index % 6]}`}
                 aria-hidden="true"
               ></span>{participant.name}
             </h3>
-            <p class="text-xs text-muted-foreground">
+            <p class="break-words text-xs text-muted-foreground">
               {participant.provider} · {participant.model ?? t("room_defaultModel")} · {participant.effort ??
                 t("room_defaultEffort")}
             </p>
           </div>
-          <span class="rounded bg-muted px-2 py-1 text-xs"
+          <span class="shrink-0 whitespace-nowrap rounded bg-muted px-2 py-1 text-xs"
             >{roomAgentStateLabel(participant.state)}</span
           >
         </div>
         <div class="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-          <div>
+          <div class="min-w-0 break-words">
             {participant.max_turns === 0
               ? t("room_budgetUnlimited", { used: String(participant.wake_count) })
               : t("room_budget", {
@@ -183,20 +183,20 @@
                   max: String(participant.max_turns),
                 })}
           </div>
-          <div>
+          <div class="min-w-0 break-all">
             {participant.branch
               ? t("room_branch", { branch: participant.branch })
               : t("room_noBranch")}
           </div>
         </div>
         {#if participant.last_error}<p
-            class="rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive"
+            class="break-words rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive"
             role="status"
           >
             {participant.last_error}
           </p>{/if}
         {#if participant.pending_delivery}<p
-            class="rounded border border-amber-500/30 bg-amber-500/5 p-2 text-xs"
+            class="break-words rounded border border-amber-500/30 bg-amber-500/5 p-2 text-xs"
           >
             {t("room_pendingDelivery", { reason: participant.pending_delivery.reason })}
           </p>{/if}

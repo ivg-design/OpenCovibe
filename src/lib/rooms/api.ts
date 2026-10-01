@@ -6,8 +6,10 @@ import type {
   Room,
   RoomSessionSeed,
   RepositoryInspection,
+  RoomAttachment,
   SaveTimerInput,
 } from "./types";
+import type { Attachment } from "$lib/types";
 
 export function listRooms(): Promise<Room[]> {
   return getTransport().invoke("list_rooms");
@@ -54,8 +56,35 @@ export function postRoomMessage(
   body: string,
   targetParticipantId: string | null = null,
   sidechatId: string | null = null,
+  attachmentIds: string[] = [],
 ): Promise<Room> {
-  return getTransport().invoke("post_room_message", { id, body, targetParticipantId, sidechatId });
+  return getTransport().invoke("post_room_message", {
+    id,
+    body,
+    targetParticipantId,
+    sidechatId,
+    attachmentIds,
+  });
+}
+
+export function attachRoomFiles(roomId: string, paths: string[]): Promise<RoomAttachment[]> {
+  return getTransport().invoke("attach_room_files", { roomId, paths });
+}
+
+export function uploadRoomAttachment(
+  roomId: string,
+  name: string,
+  contentBase64: string,
+): Promise<RoomAttachment> {
+  return getTransport().invoke("upload_room_attachment", { roomId, name, contentBase64 });
+}
+
+export function readRoomAttachment(roomId: string, attachmentId: string): Promise<Attachment> {
+  return getTransport().invoke("read_room_attachment", { roomId, attachmentId });
+}
+
+export function openRoomAttachment(roomId: string, attachmentId: string): Promise<void> {
+  return getTransport().invoke("open_room_attachment", { roomId, attachmentId });
 }
 
 export function createRoomSidechat(
@@ -158,4 +187,19 @@ export function updateRoomParticipantSettings(
     input,
     expected,
   });
+}
+
+export interface RoomAgentIdentity {
+  room_id: string;
+  run_id: string;
+  participant_id: string;
+  name: string;
+  color_index: number;
+}
+export function listRoomAgentIdentities(): Promise<RoomAgentIdentity[]> {
+  return getTransport().invoke("list_room_agent_identities");
+}
+
+export function roomClipboardFilePaths(): Promise<string[]> {
+  return getTransport().invoke("get_room_clipboard_paths");
 }

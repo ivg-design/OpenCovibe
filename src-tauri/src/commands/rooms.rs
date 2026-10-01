@@ -326,7 +326,13 @@ pub async fn refresh_room_board(
     id: String,
 ) -> Result<Room, String> {
     let _operation = store.project_operation.lock().await;
-    let room = store.get(&id)?;
+    let history_store = store.inner().clone();
+    let history_id = id.clone();
+    let room = tauri::async_runtime::spawn_blocking(move || {
+        crate::rooms::runtime::reconcile_history(&history_store, &history_id)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     let project = room.project.ok_or("This room has no GitHub Project yet")?;
     match github::read_board(&project.id).await {
         Ok(board) => store.apply_board_snapshot(&id, &room.board, board),
@@ -427,8 +433,9 @@ pub fn post_room_message(
     body: String,
     target_participant_id: Option<String>,
     sidechat_id: Option<String>,
+    attachment_ids: Option<Vec<String>>,
 ) -> Result<Room, String> {
-    store.append_message_in_sidechat(
+    store.append_message_with_attachments(
         &id,
         "Human",
         body,
@@ -436,7 +443,82 @@ pub fn post_room_message(
         target_participant_id,
         None,
         sidechat_id,
+        &attachment_ids.unwrap_or_default(),
     )
+}
+
+#[tauri::command]
+pub async fn attach_room_files(
+    store: State<'_, Arc<RoomStore>>,
+    room_id: String,
+    paths: Vec<String>,
+) -> Result<Vec<crate::rooms::models::RoomAttachment>, String> {
+    let store = store.inner().clone();
+    tokio::task::spawn_blocking(move || store.attach_files(&room_id, &paths))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn upload_room_attachment(
+    store: State<'_, Arc<RoomStore>>,
+    room_id: String,
+    name: String,
+    content_base64: String,
+) -> Result<crate::rooms::models::RoomAttachment, String> {
+    let store = store.inner().clone();
+    tokio::task::spawn_blocking(move || store.upload_attachment(&room_id, &name, &content_base64))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn read_room_attachment(
+    store: State<'_, Arc<RoomStore>>,
+    room_id: String,
+    attachment_id: String,
+) -> Result<crate::models::Attachment, String> {
+    let store = store.inner().clone();
+    tokio::task::spawn_blocking(move || store.read_attachment(&room_id, &attachment_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn open_room_attachment(
+    store: State<'_, Arc<RoomStore>>,
+    room_id: String,
+    attachment_id: String,
+) -> Result<(), String> {
+    let (_, path) = store.attachment_path(&room_id, &attachment_id)?;
+    // Reveal arbitrary file types; never execute a received binary or script.
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut c = tokio::process::Command::new("/usr/bin/open");
+        c.arg("-R").arg(&path);
+        c
+    };
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut c = tokio::process::Command::new("explorer");
+        c.arg(format!("/select,{}", path.display()));
+        c
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let mut command = {
+        let mut c = tokio::process::Command::new("xdg-open");
+        c.arg(path.parent().ok_or("Attachment folder is missing.")?);
+        c
+    };
+    let status = tokio::time::timeout(std::time::Duration::from_secs(10), command.status())
+        .await
+        .map_err(|_| "The file manager did not respond.".to_string())?
+        .map_err(|_| "Cannot show this file in the file manager.".to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("Cannot show this file in the file manager.".into())
+    }
 }
 
 #[tauri::command]
@@ -569,6 +651,7 @@ async fn add_participant(
         wake_count: 0,
         max_turns: input.max_turns,
         event_cursor: 0,
+        event_offset: None,
         message_cursor: 0,
         pending_delivery: None,
         active_sidechat_id: None,
@@ -1171,4 +1254,46 @@ pub async fn approve_room_agent(
         return Err(error);
     }
     governance::record_agent_approval(&store, &id, &request_id, &request_id)
+}
+
+#[derive(serde::Serialize)]
+pub struct RoomAgentIdentity {
+    room_id: String,
+    run_id: String,
+    participant_id: String,
+    name: String,
+    color_index: usize,
+}
+
+#[tauri::command]
+pub fn list_room_agent_identities(
+    store: State<'_, Arc<RoomStore>>,
+) -> Result<Vec<RoomAgentIdentity>, String> {
+    Ok(store
+        .list()?
+        .into_iter()
+        .flat_map(|room| {
+            let room_id = room.id;
+            room.participants
+                .into_iter()
+                .enumerate()
+                .map(move |(color_index, peer)| RoomAgentIdentity {
+                    room_id: room_id.clone(),
+                    run_id: peer.run_id,
+                    participant_id: peer.id,
+                    name: peer.name,
+                    color_index,
+                })
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn get_room_clipboard_paths() -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        crate::commands::clipboard::get_clipboard_files()
+            .map(|files| files.into_iter().map(|file| file.path).collect())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }

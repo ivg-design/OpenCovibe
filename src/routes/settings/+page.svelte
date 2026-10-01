@@ -2091,12 +2091,12 @@
                 <div class="space-y-2">
                   {#if tunnelUrl}
                     <!-- Tunnel link (primary) -->
-                    <div class="flex items-center gap-2">
+                    <div class="flex flex-wrap items-center gap-2">
                       <span class="text-xs text-muted-foreground shrink-0"
                         >{t("settings_general_webTunnelLink")}</span
                       >
                       <code
-                        class="flex-1 rounded-md border bg-muted/50 px-3 py-1.5 font-mono text-xs overflow-hidden text-ellipsis whitespace-nowrap"
+                        class="min-w-0 flex-1 basis-full overflow-hidden text-ellipsis whitespace-nowrap rounded-md border bg-muted/50 px-3 py-1.5 font-mono text-xs sm:basis-auto"
                         >{tunnelUrl.replace(/[?#]token=.*$/, "?token=...")}</code
                       >
                       <button
@@ -2129,12 +2129,12 @@
                     </div>
                     <!-- Local link (secondary, muted) -->
                     {#if displayHost && localUrl}
-                      <div class="flex items-center gap-2">
+                      <div class="flex flex-wrap items-center gap-2">
                         <span class="text-xs text-muted-foreground shrink-0"
                           >{t("settings_general_webLocalLink")}</span
                         >
                         <code
-                          class="flex-1 rounded-md border bg-muted/30 px-3 py-1.5 font-mono text-xs text-muted-foreground overflow-hidden text-ellipsis whitespace-nowrap"
+                          class="min-w-0 flex-1 basis-full overflow-hidden text-ellipsis whitespace-nowrap rounded-md border bg-muted/30 px-3 py-1.5 font-mono text-xs text-muted-foreground sm:basis-auto"
                           >{localUrl.replace(/#token=.*$/, "#token=...")}</code
                         >
                         <button
@@ -2155,9 +2155,9 @@
                       </div>
                     {/if}
                   {:else if displayHost}
-                    <div class="flex items-center gap-2">
+                    <div class="flex flex-wrap items-center gap-2">
                       <code
-                        class="flex-1 rounded-md border bg-muted/50 px-3 py-1.5 font-mono text-xs overflow-hidden text-ellipsis whitespace-nowrap"
+                        class="min-w-0 flex-1 basis-full overflow-hidden text-ellipsis whitespace-nowrap rounded-md border bg-muted/50 px-3 py-1.5 font-mono text-xs sm:basis-auto"
                         >{`http://${displayHost}:${webStatus.port}/login#token=...`}</code
                       >
                       <button

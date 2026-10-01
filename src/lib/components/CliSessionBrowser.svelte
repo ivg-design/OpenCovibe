@@ -288,7 +288,7 @@
     class="relative flex max-h-[85dvh] min-h-0 min-w-0 w-[calc(100%-2rem)] max-w-4xl flex-col rounded-xl border border-border bg-background shadow-2xl animate-slide-up"
   >
     <!-- Header -->
-    <div class="border-b border-border px-6 py-4">
+    <div class="border-b border-border px-4 py-4 sm:px-6">
       <div class="flex min-w-0 items-start justify-between gap-2">
         <div class="min-w-0">
           <h2 class="text-base font-semibold text-foreground">
@@ -412,7 +412,7 @@
     </div>
 
     <!-- Search -->
-    <div class="border-b border-border px-6 py-3">
+    <div class="border-b border-border px-4 py-3 sm:px-6">
       <div class="relative">
         <svg
           class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
@@ -435,7 +435,7 @@
     </div>
 
     <!-- Session list -->
-    <div class="min-h-0 min-w-0 flex-1 overflow-y-auto px-6 py-3">
+    <div class="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-3 sm:px-6">
       {#if loading}
         <div class="flex items-center justify-center py-12">
           <div
@@ -604,11 +604,15 @@
 
     <!-- Footer -->
     {#if !loading && filtered.length > 0}
-      <div class="flex items-center justify-between border-t border-border px-6 py-3">
+      <div
+        class="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-3 sm:px-6"
+      >
         {#if error}
-          <p class="text-xs text-destructive truncate max-w-[60%]">{error}</p>
+          <p class="min-w-0 flex-1 truncate text-xs text-destructive">{error}</p>
         {:else if warning}
-          <p class="text-xs text-yellow-600 dark:text-yellow-400 truncate max-w-[60%]">{warning}</p>
+          <p class="min-w-0 flex-1 truncate text-xs text-yellow-600 dark:text-yellow-400">
+            {warning}
+          </p>
         {:else}
           <div></div>
         {/if}

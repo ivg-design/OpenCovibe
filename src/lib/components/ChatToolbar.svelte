@@ -132,7 +132,7 @@
   <!-- Plan mode (Claude only) -->
   {#if isClaude}
     <button
-      class="flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors
+      class="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors
         {planMode
         ? 'bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-400'
         : 'hover:bg-accent'}"
@@ -155,12 +155,12 @@
     </button>
   {/if}
 
-  <div class="h-4 w-px bg-border mx-0.5"></div>
+  <div class="h-4 w-px shrink-0 bg-border mx-0.5"></div>
 
   <!-- Compact (Claude only) -->
   {#if isClaude}
     <button
-      class="flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-accent transition-colors"
+      class="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-accent transition-colors"
       onclick={handleCompact}
       title={t("toolbar_compactTitle")}
     >
@@ -180,7 +180,7 @@
   <!-- Review (Claude only) -->
   {#if isClaude}
     <button
-      class="flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-accent transition-colors"
+      class="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-accent transition-colors"
       onclick={handleReview}
       title={t("toolbar_reviewTitle")}
     >
@@ -202,7 +202,7 @@
 
   <!-- Diff -->
   <button
-    class="flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-accent transition-colors"
+    class="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-accent transition-colors"
     onclick={() => (diffOpen = true)}
     title={t("toolbar_diffTitle")}
   >
@@ -223,7 +223,7 @@
 
   <!-- Export -->
   <button
-    class="flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-accent transition-colors disabled:opacity-50"
+    class="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-accent transition-colors disabled:opacity-50"
     onclick={handleExport}
     disabled={!runId || exporting}
     title={t("toolbar_exportTitle")}
@@ -252,7 +252,7 @@
 
   <!-- Command palette trigger -->
   <button
-    class="flex items-center gap-1 rounded-md border px-2 py-1.5 text-xs font-medium hover:bg-accent transition-colors text-muted-foreground"
+    class="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-2 py-1.5 text-xs font-medium hover:bg-accent transition-colors text-muted-foreground"
     onclick={onOpenPalette}
     title={t("toolbar_paletteTitle")}
   >

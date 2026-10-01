@@ -180,19 +180,19 @@
       >{/if}
     <div class="room-peer-grid grid gap-2">
       {#each timers as timer (timer.id)}<Card class="space-y-2 p-3"
-          ><div class="flex items-start justify-between gap-2">
-            <div>
-              <p class="text-sm font-medium">
+          ><div class="flex min-w-0 items-start justify-between gap-2">
+            <div class="min-w-0">
+              <p class="break-words text-sm font-medium">
                 {participants.find((p) => p.id === timer.participant_id)?.name ??
                   timer.participant_id}
               </p>
-              <p class="whitespace-pre-wrap text-sm">{timer.message}</p>
+              <p class="whitespace-pre-wrap break-words text-sm">{timer.message}</p>
             </div>
-            <span class="rounded bg-muted px-2 py-0.5 text-xs"
+            <span class="shrink-0 whitespace-nowrap rounded bg-muted px-2 py-0.5 text-xs"
               >{timer.enabled ? t("room_timerEnabled") : t("room_timerDisabled")}</span
             >
           </div>
-          <p class="text-xs text-muted-foreground">
+          <p class="break-words text-xs text-muted-foreground">
             {#if timer.ends_at != null}
               {t("room_timerStatsUntil", {
                 interval: String(timer.interval_seconds),
@@ -216,7 +216,7 @@
           {#if timer.queued_at}<p class="text-xs text-muted-foreground" role="status">
               {t("room_timerQueued")}
             </p>{/if}
-          {#if timer.last_error}<p class="text-xs text-destructive" role="status">
+          {#if timer.last_error}<p class="break-words text-xs text-destructive" role="status">
               {timer.last_error}
             </p>{/if}
           <div class="flex flex-wrap gap-2">

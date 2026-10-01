@@ -342,12 +342,12 @@
             </div>
           </div>
 
-          <!-- Row 2: member chips horizontal scroll -->
-          <div class="flex items-center gap-1.5 px-4 py-1.5 overflow-x-auto">
+          <!-- Member chips wrap as complete controls when the sidebar is narrow. -->
+          <div class="flex min-w-0 flex-wrap items-center gap-1.5 px-4 py-1.5">
             {#each teamStore.teamConfig.members as member}
               {@const isLead = member.agentId === teamStore.teamConfig.leadAgentId}
               <button
-                class="shrink-0 flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors {expandedMemberName ===
+                class="max-w-full shrink-0 flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs transition-colors {expandedMemberName ===
                 member.name
                   ? 'border-primary/40 bg-primary/5'
                   : 'border-border/40 bg-card hover:bg-accent/50'}"
@@ -366,7 +366,9 @@
                     ></span>
                   {/if}
                 </span>
-                <span class="font-medium text-foreground">{member.name}</span>
+                <span class="max-w-[10rem] truncate font-medium text-foreground" title={member.name}
+                  >{member.name}</span
+                >
                 {#if member.agentType}
                   <span class="rounded bg-muted px-1 py-0.5 text-[10px] font-medium"
                     >{member.agentType}</span
@@ -463,9 +465,9 @@
         <div class="flex flex-1 flex-col min-h-0">
           {#if teamStore.teamConfig.members.length > 0}
             <!-- Agent tabs -->
-            <div class="shrink-0 flex gap-0.5 border-b border-border px-4 overflow-x-auto">
+            <div class="flex min-w-0 shrink-0 flex-wrap gap-0.5 border-b border-border px-4">
               <button
-                class="shrink-0 px-3 py-1.5 text-xs font-medium transition-colors border-b-2 {inboxTab ===
+                class="shrink-0 whitespace-nowrap px-3 py-1.5 text-xs font-medium transition-colors border-b-2 {inboxTab ===
                 'all'
                   ? 'text-foreground border-primary'
                   : 'text-muted-foreground hover:text-foreground border-transparent'}"
@@ -473,7 +475,7 @@
               >
               {#each teamStore.teamConfig.members as member}
                 <button
-                  class="shrink-0 px-3 py-1.5 text-xs font-medium transition-colors border-b-2 {inboxTab ===
+                  class="max-w-full shrink-0 whitespace-nowrap px-3 py-1.5 text-xs font-medium transition-colors border-b-2 {inboxTab ===
                   member.name
                     ? 'text-foreground border-primary'
                     : 'text-muted-foreground hover:text-foreground border-transparent'}"
@@ -483,7 +485,9 @@
                     class="inline-block h-1.5 w-1.5 rounded-full mr-1 {memberColorClass(
                       member.color,
                     )}"
-                  ></span>{member.name}
+                  ></span><span class="max-w-[12rem] truncate" title={member.name}
+                    >{member.name}</span
+                  >
                 </button>
               {/each}
             </div>

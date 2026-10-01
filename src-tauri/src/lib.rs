@@ -172,6 +172,7 @@ pub fn run() {
         // into Tauri command modules or using a single dispatch command with typed payloads.
         .invoke_handler(tauri::generate_handler![
             commands::rooms::list_rooms,
+            commands::rooms::list_room_agent_identities,
             commands::rooms::get_room,
             commands::rooms::get_room_run_settings,
             commands::rooms::resolve_room_request,
@@ -185,6 +186,11 @@ pub fn run() {
             commands::rooms::refresh_room_board,
             commands::rooms::set_room_paused,
             commands::rooms::post_room_message,
+            commands::rooms::attach_room_files,
+            commands::rooms::get_room_clipboard_paths,
+            commands::rooms::upload_room_attachment,
+            commands::rooms::read_room_attachment,
+            commands::rooms::open_room_attachment,
             commands::rooms::create_room_sidechat,
             commands::rooms::add_room_participant,
             commands::rooms::set_room_participant_paused,

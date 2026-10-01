@@ -74,18 +74,18 @@
       <Card class="space-y-3 p-4">
         <div class="flex flex-wrap items-start justify-between gap-2">
           <div class="min-w-0">
-            <h3 class="font-medium">{request.title}</h3>
-            <p class="mt-1 text-xs text-muted-foreground">
+            <h3 class="break-words font-medium">{request.title}</h3>
+            <p class="mt-1 break-words text-xs text-muted-foreground">
               {t(`room_requestKind_${request.kind}`)} · {t(`room_requestStatus_${request.status}`)} ·
               {t("room_requestsRequester", { name: nameFor(request.requester_id) })}
             </p>
           </div>
-          <time class="text-xs text-muted-foreground"
+          <time class="shrink-0 whitespace-nowrap text-xs text-muted-foreground"
             >{new Date(request.created_at).toLocaleString()}</time
           >
         </div>
         <div class="text-sm"><MarkdownContent text={request.body} /></div>
-        {#if request.task_id}<p class="text-xs text-muted-foreground">
+        {#if request.task_id}<p class="break-all text-xs text-muted-foreground">
             {t("room_requestsTask", { task: request.task_id })}
           </p>{/if}
         {#if request.evidence}<div class="rounded-md border bg-muted/30 p-3">
@@ -136,7 +136,7 @@
             <span class="text-xs font-medium"
               >{t("room_requestsPriorResponse", { name: nameFor(request.resolved_by) })}</span
             >
-            <p class="mt-1 whitespace-pre-wrap">{request.response}</p>
+            <p class="mt-1 whitespace-pre-wrap break-words">{request.response}</p>
           </div>{/if}
         {#if request.review_response}<div
             class="rounded-md border border-primary/20 bg-primary/5 p-3 text-sm"
@@ -284,7 +284,7 @@
       <div class="space-y-2 border-t p-3">
         {#each history as request (request.id)}<article class="rounded-md border p-3 text-sm">
             <div class="flex flex-wrap justify-between gap-2">
-              <h3 class="font-medium">{request.title}</h3>
+              <h3 class="break-words font-medium">{request.title}</h3>
               <span class="text-xs text-muted-foreground"
                 >{t(`room_requestKind_${request.kind}`)} · {t(
                   `room_requestStatus_${request.status}`,
@@ -304,7 +304,7 @@
                 <p class="text-xs font-medium">{t("room_requestsEvidence")}</p>
                 <MarkdownContent text={request.evidence} />
               </div>{/if}{#if request.response && (!request.review_response || request.response !== request.review_response || request.resolved_by !== request.reviewed_by)}<p
-                class="mt-2 whitespace-pre-wrap text-muted-foreground"
+                class="mt-2 whitespace-pre-wrap break-words text-muted-foreground"
               >
                 {t("room_requestsPriorResponse", { name: nameFor(request.resolved_by) })}: {request.response}
               </p>{/if}{#if request.review_response}<div

@@ -59,6 +59,8 @@ pub struct Participant {
     #[serde(default)]
     pub event_cursor: u64,
     #[serde(default)]
+    pub event_offset: Option<u64>,
+    #[serde(default)]
     pub message_cursor: usize,
     #[serde(default)]
     pub pending_delivery: Option<Delivery>,
@@ -134,6 +136,8 @@ pub struct Delivery {
     pub sidechat_id: Option<String>,
     #[serde(default)]
     pub message_id: Option<String>,
+    #[serde(default)]
+    pub attachment_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,6 +151,14 @@ pub struct Claim {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoomAttachment {
+    pub id: String,
+    pub name: String,
+    pub mime_type: String,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub id: String,
     pub sender: String,
@@ -156,10 +168,29 @@ pub struct Message {
     pub participant_id: Option<String>,
     #[serde(default)]
     pub target_participant_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_participant_ids: Vec<String>,
     #[serde(default)]
     pub source_event_id: Option<String>,
     #[serde(default)]
     pub sidechat_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<RoomAttachment>,
+}
+
+impl Message {
+    pub fn targets(&self, peer_id: &str) -> bool {
+        if !self.target_participant_ids.is_empty() {
+            self.target_participant_ids.iter().any(|id| id == peer_id)
+        } else {
+            self.target_participant_id
+                .as_deref()
+                .is_none_or(|id| id == peer_id)
+        }
+    }
+    pub fn is_directed(&self) -> bool {
+        self.target_participant_id.is_some() || !self.target_participant_ids.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

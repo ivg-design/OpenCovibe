@@ -294,8 +294,10 @@ async fn release_claim_with_owner(
                 created_at: crate::models::now_iso(),
                 participant_id: Some(peer.id.clone()),
                 target_participant_id: None,
+                target_participant_ids: vec![],
                 source_event_id: None,
                 sidechat_id: peer.active_sidechat_id.clone(),
+                attachments: vec![],
             });
         }
         Ok(())

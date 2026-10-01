@@ -774,7 +774,7 @@
         editResult!.originalFile,
       )}
       <div
-        class="diff-section overflow-x-auto relative {outputExpanded
+        class="diff-section overflow-x-hidden relative {outputExpanded
           ? ''
           : 'max-h-96 overflow-y-hidden'}"
       >
@@ -809,7 +809,7 @@
         origFile,
       )}
       <div
-        class="diff-section overflow-x-auto relative {outputExpanded
+        class="diff-section overflow-x-hidden relative {outputExpanded
           ? ''
           : 'max-h-96 overflow-y-hidden'}"
       >
@@ -889,7 +889,7 @@
         writeResult!.originalFile,
       )}
       <div
-        class="diff-section overflow-x-auto relative {outputExpanded
+        class="diff-section overflow-x-hidden relative {outputExpanded
           ? ''
           : 'max-h-96 overflow-y-hidden'}"
       >

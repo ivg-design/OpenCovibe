@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { tick, untrack } from "svelte";
   import Card from "$lib/components/Card.svelte";
   import Button from "$lib/components/Button.svelte";
@@ -8,7 +9,17 @@
   import { roomBriefing, readableProtocolOutput } from "$lib/utils/room-presentation";
   import { t } from "$lib/i18n/index.svelte";
   import { roomAgentStateLabel } from "$lib/rooms/state-label";
-  import type { Room, RoomMessage } from "$lib/rooms/types";
+  import { attachRoomFiles, uploadRoomAttachment, roomClipboardFilePaths } from "$lib/rooms/api";
+  import type { Room, RoomAttachment, RoomMessage } from "$lib/rooms/types";
+  import RoomAttachmentView from "$lib/components/RoomAttachmentView.svelte";
+  import { getTransport } from "$lib/transport";
+  import {
+    fitRoomAttachmentLimits,
+    normalizeDroppedLinks,
+    uniqueComposerFiles,
+  } from "$lib/utils/room-attachment-composer";
+  import { resolveRoomMentionIds } from "$lib/utils/room-mentions";
+  import { roomParticipantColor } from "$lib/utils/room-participant-colors";
   let {
     selected,
     actionsDisabled,
@@ -16,6 +27,7 @@
     humanMessage = $bindable(""),
     targetParticipantId = $bindable(""),
     activeSidechatId = $bindable(""),
+    attachmentDrafts = $bindable<RoomAttachment[]>([]),
     onBranch,
     submitMessage,
   }: {
@@ -25,6 +37,7 @@
     humanMessage?: string;
     targetParticipantId?: string;
     activeSidechatId?: string;
+    attachmentDrafts?: RoomAttachment[];
     onBranch: (sourceMessageId: string, title: string, participantIds: string[]) => Promise<void>;
     submitMessage: (event: SubmitEvent) => Promise<void>;
   } = $props();
@@ -35,6 +48,14 @@
   let branchSource = $state<RoomMessage | null>(null);
   let branchTitle = $state("");
   let branchParticipants = $state<string[]>([]);
+  let mentionRange = $state<{ start: number; end: number } | null>(null);
+  let mentionIndex = $state(0);
+  let mentionDismissed = $state(false);
+  let attachmentBusy = $state(false);
+  let attachmentError = $state("");
+  let conversationContext = $derived(`${selected.id}:${activeSidechatId}`);
+  let previousContext = "";
+  let composer: HTMLTextAreaElement | undefined;
   let activeSidechat = $derived(
     selected.sidechats?.find((sidechat) => sidechat.id === activeSidechatId),
   );
@@ -49,13 +70,58 @@
       (participant) => !activeSidechat || activeSidechat.participant_ids.includes(participant.id),
     ),
   );
-  let branchEligibleParticipants = $derived(
-    visibleParticipants.filter(
+  function explicitRecipients(message: RoomMessage): string[] {
+    const targetIds = (message as RoomMessage & { target_participant_ids?: string[] })
+      .target_participant_ids;
+    return [
+      ...new Set([
+        ...(targetIds ?? []),
+        ...(message.target_participant_id ? [message.target_participant_id] : []),
+      ]),
+    ];
+  }
+  function eligibleParticipants(message: RoomMessage): typeof visibleParticipants {
+    const recipients = explicitRecipients(message);
+    if (!recipients.length) return visibleParticipants;
+    return visibleParticipants.filter(
       (participant) =>
-        !branchSource?.target_participant_id ||
-        participant.id === branchSource.target_participant_id ||
-        participant.id === branchSource.participant_id,
-    ),
+        recipients.includes(participant.id) || participant.id === message.participant_id,
+    );
+  }
+  let branchEligibleParticipants = $derived(
+    branchSource ? eligibleParticipants(branchSource) : visibleParticipants,
+  );
+  let mentionOptions = $derived([
+    { id: "", name: "everyone" },
+    ...visibleParticipants.map((participant) => ({ id: participant.id, name: participant.name })),
+  ]);
+  let mentionSuggestions = $derived.by(() => {
+    if (
+      !mentionRange ||
+      mentionDismissed ||
+      humanMessage[mentionRange.start] !== "@" ||
+      mentionRange.end > humanMessage.length
+    )
+      return [];
+    const query = humanMessage.slice(mentionRange.start + 1, mentionRange.end).toLocaleLowerCase();
+    return mentionOptions
+      .filter((option) => option.name.toLocaleLowerCase().startsWith(query))
+      .slice(0, 6);
+  });
+  let resolvedMentionNames = $derived.by(() => {
+    const ids = resolveRoomMentionIds(humanMessage, visibleParticipants);
+    if (ids?.length === 0) return ["@everyone"];
+    return (ids ?? []).map(
+      (id) => visibleParticipants.find((participant) => participant.id === id)?.name ?? id,
+    );
+  });
+  let recipientHint = $derived(
+    resolvedMentionNames.length
+      ? resolvedMentionNames.join(", ")
+      : targetParticipantId
+        ? (selected.participants.find((participant) => participant.id === targetParticipantId)
+            ?.name ?? targetParticipantId)
+        : tr("room_everyone"),
   );
   function startBranch(message: RoomMessage) {
     branchSource = message;
@@ -63,14 +129,7 @@
     branchTitle = (briefing?.objective ?? readableProtocolOutput(message.body))
       .replace(/\s+/g, " ")
       .slice(0, 80);
-    branchParticipants = visibleParticipants
-      .filter(
-        (participant) =>
-          !message.target_participant_id ||
-          participant.id === message.target_participant_id ||
-          participant.id === message.participant_id,
-      )
-      .map((participant) => participant.id);
+    branchParticipants = eligibleParticipants(message).map((participant) => participant.id);
   }
   function autoGrow(node: HTMLTextAreaElement, _value: string) {
     const resize = () => {
@@ -93,6 +152,229 @@
       },
     };
   }
+  let contextGeneration = 0;
+  $effect(() => {
+    const context = conversationContext;
+    if (previousContext && previousContext !== context) {
+      contextGeneration++;
+      attachmentDrafts = [];
+      attachmentError = "";
+      attachmentBusy = false;
+      branchSource = null;
+      mentionRange = null;
+    }
+    previousContext = context;
+  });
+
+  function base64(bytes: Uint8Array): string {
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += 0x8000)
+      binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return btoa(binary);
+  }
+  async function addPaths(paths: string[]) {
+    const unique = [...new Set(paths)].filter(Boolean);
+    if (!unique.length || attachmentBusy || actionsDisabled) return;
+    const context = conversationContext;
+    const generation = contextGeneration;
+    const roomId = selected.id;
+    attachmentBusy = true;
+    attachmentError = "";
+    try {
+      const roomAttachments = await attachRoomFiles(roomId, unique);
+      if (context === conversationContext && generation === contextGeneration) {
+        const fitted = fitRoomAttachmentLimits(attachmentDrafts, roomAttachments);
+        if (fitted.rejected.length) {
+          attachmentError = tr("room_attachmentLimit");
+          return;
+        }
+        attachmentDrafts = [...attachmentDrafts, ...roomAttachments];
+      }
+    } catch {
+      if (generation === contextGeneration) attachmentError = tr("room_attachmentError");
+    } finally {
+      if (generation === contextGeneration) attachmentBusy = false;
+    }
+  }
+  async function addFiles(input: Iterable<File>, expectedContext = conversationContext) {
+    if (expectedContext !== conversationContext) return;
+    const files = uniqueComposerFiles(input);
+    if (!files.length || attachmentBusy || actionsDisabled) return;
+    const fitted = fitRoomAttachmentLimits(attachmentDrafts, files);
+    if (fitted.rejected.length) {
+      attachmentError = tr("room_attachmentLimit");
+      return;
+    }
+    if (!fitted.accepted.length) return;
+    const context = conversationContext;
+    const generation = contextGeneration;
+    const roomId = selected.id;
+    attachmentBusy = true;
+    attachmentError = "";
+    try {
+      for (const file of fitted.accepted) {
+        if (context !== conversationContext || generation !== contextGeneration) return;
+        const data = base64(new Uint8Array(await file.arrayBuffer()));
+        if (context !== conversationContext || generation !== contextGeneration) return;
+        const uploaded = await uploadRoomAttachment(roomId, file.name, data);
+        if (context !== conversationContext || generation !== contextGeneration) return;
+        attachmentDrafts = [...attachmentDrafts, uploaded];
+      }
+    } catch {
+      if (generation === contextGeneration) attachmentError = tr("room_attachmentError");
+    } finally {
+      if (generation === contextGeneration) attachmentBusy = false;
+    }
+  }
+  async function chooseAttachments() {
+    const context = conversationContext;
+    try {
+      if (getTransport().isDesktop()) {
+        const { open } = await import("@tauri-apps/plugin-dialog");
+        const paths = await open({ multiple: true, title: tr("room_chooseFiles") });
+        if (paths && context === conversationContext)
+          await addPaths(Array.isArray(paths) ? paths : [paths]);
+      } else {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.multiple = true;
+        input.onchange = () => void addFiles(input.files ?? [], context);
+        input.click();
+      }
+    } catch {
+      attachmentError = tr("room_attachmentError");
+    }
+  }
+  function onComposerPaste(event: ClipboardEvent) {
+    const files = event.clipboardData?.files;
+    if (files?.length) {
+      event.preventDefault();
+      void addFiles(files);
+      return;
+    }
+    if (!getTransport().isDesktop()) return;
+    const context = conversationContext;
+    const generation = contextGeneration;
+    const before = humanMessage;
+    const start = composer?.selectionStart ?? before.length;
+    const end = composer?.selectionEnd ?? start;
+    const pastedText = event.clipboardData?.getData("text/plain") ?? "";
+    // Finder/Explorer file copies often contain native file URLs rather than browser Files.
+    // Leave ordinary text paste immediate and roll back only its exact inserted text if files arrive.
+    void roomClipboardFilePaths()
+      .then((paths) => {
+        if (!paths.length || context !== conversationContext || generation !== contextGeneration)
+          return;
+        const expected = before.slice(0, start) + pastedText + before.slice(end);
+        if (humanMessage === expected || humanMessage === before) humanMessage = before;
+        void addPaths(paths);
+      })
+      .catch(() => {
+        /* Browser text paste still works if the native clipboard is unavailable. */
+      });
+  }
+  function updateMention(event: Event) {
+    mentionDismissed = false;
+    const node = event.currentTarget as HTMLTextAreaElement;
+    const caret = node.selectionStart ?? node.value.length;
+    const start = node.value.lastIndexOf("@", caret - 1);
+    const preceding = start > 0 ? node.value[start - 1] : " ";
+    const precedingAllowed = !preceding || /\s/.test(preceding) || /[([{"',]/.test(preceding);
+    const linesBeforeCaret = node.value.slice(0, caret).split(/\r?\n/);
+    let fenced = false;
+    for (const line of linesBeforeCaret.slice(0, -1))
+      if (/^\s*(?:```|~~~)/.test(line)) fenced = !fenced;
+    const currentLine = linesBeforeCaret.at(-1) ?? "";
+    if (/^\s*(?:```|~~~)/.test(currentLine)) fenced = !fenced;
+    let inline = false;
+    for (const character of currentLine.slice(0, start < 0 ? 0 : start))
+      if (character === "`") inline = !inline;
+    if (
+      start < 0 ||
+      !precedingAllowed ||
+      fenced ||
+      inline ||
+      node.value.slice(start, caret).includes("\n")
+    ) {
+      mentionRange = null;
+      return;
+    }
+    mentionRange = { start, end: caret };
+    mentionIndex = 0;
+  }
+  function chooseMention(name: string) {
+    if (!mentionRange || !composer) return;
+    const caret = composer.selectionStart ?? mentionRange.end;
+    const replacement = `@${name} `;
+    humanMessage = `${humanMessage.slice(0, mentionRange.start)}${replacement}${humanMessage.slice(caret)}`;
+    const nextCaret = mentionRange.start + replacement.length;
+    mentionRange = null;
+    mentionDismissed = true;
+    void tick().then(() => {
+      composer?.focus();
+      composer?.setSelectionRange(nextCaret, nextCaret);
+    });
+  }
+  function onComposerKeydown(event: KeyboardEvent) {
+    if (mentionSuggestions.length) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        mentionIndex =
+          (mentionIndex + direction + mentionSuggestions.length) % mentionSuggestions.length;
+        return;
+      }
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        chooseMention(mentionSuggestions[mentionIndex].name);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        mentionDismissed = true;
+        return;
+      }
+    }
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      if (
+        (humanMessage.trim() || attachmentDrafts.length) &&
+        !actionsDisabled &&
+        !attachmentBusy &&
+        event.currentTarget instanceof HTMLTextAreaElement
+      )
+        event.currentTarget.form?.requestSubmit();
+    }
+  }
+  function onComposerDrop(event: DragEvent) {
+    event.preventDefault();
+    const files = event.dataTransfer?.files;
+    if (files?.length) void addFiles(files);
+    const transfer = event.dataTransfer;
+    const uriList = transfer?.getData("text/uri-list") ?? "";
+    const links = normalizeDroppedLinks(uriList || transfer?.getData("text/plain") || "");
+    if (links.length) {
+      humanMessage = [humanMessage.trimEnd(), ...links].filter(Boolean).join("\n");
+    }
+  }
+  onMount(() => {
+    const transport = getTransport();
+    if (!transport.isDesktop()) return;
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void transport
+      .listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
+        if (active && event.paths?.length) void addPaths(event.paths);
+      })
+      .then((stop) => {
+        if (active) unlisten = stop;
+        else stop();
+      });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  });
   $effect(() => {
     const roomId = selected.id;
     const count = visibleMessages.length;
@@ -136,7 +418,7 @@
   </div>
   <div class="mb-2 flex shrink-0 flex-wrap gap-2" aria-label={tr("room_participants")}>
     {#each visibleParticipants as participant (participant.id)}
-      <span class="rounded-full border bg-muted/40 px-3 py-1 text-xs"
+      <span class="max-w-full min-w-0 break-words rounded-full border bg-muted/40 px-3 py-1 text-xs"
         >{participant.name} · {roomAgentStateLabel(participant.state)}</span
       >
     {/each}
@@ -167,11 +449,9 @@
         <legend class="mb-2 text-xs text-muted-foreground">{tr("room_participants")}</legend>
         {#each branchEligibleParticipants as participant (participant.id)}<label
             class="flex items-center gap-2 text-xs"
-            ><input
-              type="checkbox"
-              bind:group={branchParticipants}
-              value={participant.id}
-            />{participant.name}</label
+            ><input type="checkbox" bind:group={branchParticipants} value={participant.id} /><span
+              class="min-w-0 break-words">{participant.name}</span
+            ></label
           >{/each}
       </fieldset>
       <div class="flex flex-wrap gap-2">
@@ -194,62 +474,154 @@
         {tr("room_noMessages")}
       </p>{/if}{#each visibleMessages as message (message.id)}{@const briefing = roomBriefing(
         message.body,
-      )}
+      )}{@const targetIds = (message as RoomMessage & { target_participant_ids?: string[] })
+        .target_participant_ids}
       <article
-        class="room-message {message.participant_id === null
+        class="room-message group {message.participant_id === null
           ? 'room-message-sent'
-          : 'room-message-received'} rounded-xl border p-3"
-        style={`border-left-color: ${
+          : 'room-message-received'} min-w-0 rounded-xl border px-3 py-1.5"
+        style={`--room-sender-color: ${
           message.participant_id
-            ? ["#5677c8", "#b36a9a", "#538b70", "#bd8250", "#7481aa", "#ad665d"][
-                Math.max(
-                  0,
-                  selected.participants.findIndex((p) => p.id === message.participant_id),
-                ) % 6
-              ]
+            ? roomParticipantColor(selected.participants, message.participant_id)
             : "hsl(var(--primary))"
         }`}
       >
-        <div class="flex flex-wrap justify-between gap-3 text-xs text-muted-foreground">
-          <span
-            >{message.sender}{#if message.target_participant_id}
-              · {tr("room_directedMessage", {
-                name:
-                  selected.participants.find((p) => p.id === message.target_participant_id)?.name ??
-                  message.target_participant_id,
-              })}{/if}</span
-          ><time>{new Date(message.created_at).toLocaleString()}</time>
+        <div
+          class="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"
+        >
+          <span class="flex min-w-0 items-center gap-1.5">
+            <span
+              class="h-2.5 w-2.5 shrink-0 rounded-full border-2 border-background"
+              style="background:var(--room-sender-color)"
+            ></span>
+            <span class="min-w-0 break-words font-medium text-foreground">{message.sender}</span>
+            {#if targetIds && targetIds.length > 1}
+              <span
+                >· {tr("room_directedMessages", {
+                  names: targetIds
+                    .map((id) => selected.participants.find((p) => p.id === id)?.name ?? id)
+                    .join(", "),
+                })}</span
+              >
+            {:else if targetIds && targetIds.length === 1}
+              <span
+                >· {tr("room_directedMessage", {
+                  name:
+                    selected.participants.find((p) => p.id === targetIds[0])?.name ?? targetIds[0],
+                })}</span
+              >
+            {:else if message.target_participant_id}
+              <span
+                >· {tr("room_directedMessage", {
+                  name:
+                    selected.participants.find((p) => p.id === message.target_participant_id)
+                      ?.name ?? message.target_participant_id,
+                })}</span
+              >
+            {/if}
+          </span>
+          <div class="flex shrink-0 items-center gap-1.5">
+            <time>{new Date(message.created_at).toLocaleString()}</time>
+            <button
+              type="button"
+              class="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+              title={tr("room_branchSidechat")}
+              aria-label={tr("room_branchSidechat")}
+              disabled={actionsDisabled}
+              onclick={() => startBranch(message)}
+              ><svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+                ><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><circle
+                  cx="18"
+                  cy="6"
+                  r="3"
+                /><path d="M6 9v6M18 9a9 9 0 0 1-9 9" /></svg
+              ></button
+            >
+          </div>
         </div>
         {#if briefing}<RoomBriefing {briefing} />{:else}<div
-            class="prose-chat mt-1 min-w-0 text-sm"
+            class="prose-chat mt-1 min-w-0 break-words text-sm [overflow-wrap:anywhere]"
           >
             <MarkdownContent
               text={readableProtocolOutput(message.body)}
               basePath={selected.repo_path}
             />
           </div>{/if}
-        <button
-          type="button"
-          class="mt-2 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-          disabled={actionsDisabled}
-          onclick={() => startBranch(message)}>{tr("room_branchSidechat")}</button
-        >
+        {#if message.attachments?.length}<div class="mt-2 flex min-w-0 flex-col gap-1.5">
+            {#each message.attachments as attachment (attachment.id)}
+              <RoomAttachmentView roomId={selected.id} {attachment} />
+            {/each}
+          </div>{/if}
       </article>{/each}
   </div>
-  <form class="shrink-0 border-t pt-2" onsubmit={submitMessage}>
-    <div class="flex min-w-0 flex-wrap items-end gap-2">
+  <form
+    class="room-composer shrink-0 border-t pt-2"
+    onsubmit={submitMessage}
+    ondragover={(event) => event.preventDefault()}
+    ondrop={onComposerDrop}
+  >
+    {#if attachmentDrafts.length}<div
+        class="mb-2 flex min-w-0 flex-wrap gap-1.5"
+        aria-label={tr("room_attachments")}
+      >
+        {#each attachmentDrafts as attachment (attachment.id)}
+          <RoomAttachmentView
+            roomId={selected.id}
+            {attachment}
+            onremove={() => {
+              attachmentDrafts = attachmentDrafts.filter((item) => item.id !== attachment.id);
+              attachmentError = "";
+            }}
+          />
+        {/each}
+      </div>{/if}
+    {#if attachmentError}<p class="mb-1 text-xs text-destructive" role="alert">
+        {attachmentError}
+      </p>{/if}
+    <p class="mb-1 text-right text-[11px] text-muted-foreground">
+      {tr("room_recipientHint", { name: recipientHint })}
+    </p>
+    {#if mentionSuggestions.length}<div
+        class="mb-1 max-h-40 overflow-y-auto rounded-md border bg-background p-1 shadow-sm"
+        role="listbox"
+        aria-label={tr("room_mentionSuggestions")}
+      >
+        {#each mentionSuggestions as option, index (`${option.id}:${option.name}`)}
+          <button
+            type="button"
+            role="option"
+            aria-selected={index === mentionIndex}
+            class="block w-full rounded px-2 py-1 text-left text-sm {index === mentionIndex
+              ? 'bg-accent text-foreground'
+              : 'text-muted-foreground'}"
+            onclick={() => chooseMention(option.name)}
+            >{#if !option.id}@{/if}{option.name}</button
+          >
+        {/each}
+      </div>{/if}
+    <div class="room-composer-row min-w-0 items-end gap-2">
       <label class="min-w-0 w-32 flex-none space-y-1 text-xs text-muted-foreground"
         ><span class="sr-only">{tr("room_target")}</span><select
-          class="min-h-9 w-full min-w-[90px] rounded-md border bg-background px-2 text-sm text-foreground"
+          class="h-9 w-full min-w-[90px] rounded-md border bg-background px-2 text-sm text-foreground"
           bind:value={targetParticipantId}
           ><option value="">{tr("room_everyone")}</option
           >{#each visibleParticipants as p (p.id)}<option value={p.id}>{p.name}</option
             >{/each}</select
         ></label
       >
-      <div class="min-w-0 flex-1 basis-36">
+      <div class="room-composer-text min-w-0">
         <label
           ><span class="sr-only">{tr("room_messagePlaceholder")}</span><textarea
+            bind:this={composer}
             use:autoGrow={humanMessage}
             aria-label={tr("room_messagePlaceholder")}
             class="block min-h-9 max-h-[min(30dvh,200px)] w-full min-w-0 resize-none overflow-y-hidden rounded-md border bg-background px-3 py-1.5 text-sm"
@@ -258,22 +630,86 @@
             bind:value={humanMessage}
             placeholder={tr("room_messagePlaceholder")}
             disabled={actionsDisabled}
-            onkeydown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-                event.preventDefault();
-                if (humanMessage.trim() && !actionsDisabled)
-                  event.currentTarget.form?.requestSubmit();
-              }
-            }}
+            onkeydown={onComposerKeydown}
+            oninput={updateMention}
+            onpaste={onComposerPaste}
           ></textarea></label
         >
       </div>
       <Button
+        type="button"
+        variant="outline"
         size="sm"
-        class="min-h-9 min-w-[90px]"
-        disabled={!humanMessage.trim() || actionsDisabled}
+        class="min-h-9 shrink-0 whitespace-nowrap"
+        disabled={actionsDisabled || attachmentBusy || attachmentDrafts.length >= 8}
+        onclick={() => void chooseAttachments()}
+      >
+        {#if attachmentBusy}<svg
+            class="mr-1 h-3.5 w-3.5 animate-spin"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+            ><circle
+              class="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              stroke-width="4"
+            ></circle><path
+              class="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+            ></path></svg
+          >{/if}
+        {tr("room_attachFiles")}
+      </Button>
+      <Button
+        size="sm"
+        class="min-h-9 min-w-[90px] shrink-0 whitespace-nowrap"
+        disabled={(!humanMessage.trim() && !attachmentDrafts.length) ||
+          actionsDisabled ||
+          attachmentBusy}
         loading={busyAction === "message"}>{tr("room_sendMessage")}</Button
       >
     </div>
   </form></Card
 >
+
+<style>
+  .room-composer {
+    container-type: inline-size;
+    container-name: room-composer;
+  }
+  .room-composer-row {
+    display: grid;
+    grid-template-columns: 8rem minmax(0, 1fr) max-content max-content;
+  }
+  @container room-composer (max-width: 42rem) {
+    .room-composer-row {
+      grid-template-columns: minmax(0, 1fr) max-content max-content;
+    }
+    .room-composer-text {
+      grid-column: 1 / -1;
+      grid-row: 1;
+    }
+  }
+  @container room-composer (max-width: 28rem) {
+    .room-composer-row {
+      grid-template-columns: minmax(0, 1fr) max-content;
+    }
+    .room-composer-row > label {
+      grid-column: 1 / -1;
+      width: 100%;
+    }
+  }
+  .room-message {
+    border-color: color-mix(in srgb, var(--room-sender-color) 60%, hsl(var(--border)));
+    border-left: 3px solid var(--room-sender-color);
+    background: color-mix(in srgb, var(--room-sender-color) 12%, transparent);
+  }
+  .room-message :global(.prose-chat :is(p, ul, ol, blockquote, pre)) {
+    margin-block: 0.25rem;
+    line-height: 1.4;
+  }
+</style>

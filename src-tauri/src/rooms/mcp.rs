@@ -239,13 +239,8 @@ async fn call_tool(
                 .iter()
                 .find(|m| m.id == source_message_id)
                 .ok_or("source message not found in this room")?;
-            let source_visible = source
-                .target_participant_id
-                .as_deref()
-                .is_none_or(|target| {
-                    target == participant_id
-                        || source.participant_id.as_deref() == Some(participant_id)
-                })
+            let source_visible = (source.targets(participant_id)
+                || source.participant_id.as_deref() == Some(participant_id))
                 && source
                     .sidechat_id
                     .as_ref()
@@ -278,12 +273,7 @@ async fn call_tool(
             let messages = room
                 .messages
                 .iter()
-                .filter(|m| {
-                    m.sidechat_id.as_deref() == Some(id)
-                        && m.target_participant_id
-                            .as_deref()
-                            .is_none_or(|target| target == peer.id)
-                })
+                .filter(|m| m.sidechat_id.as_deref() == Some(id) && m.targets(&peer.id))
                 .collect::<Vec<_>>();
             Ok(json!({"sidechat":sidechat,"source":source,"messages":messages}))
         }
@@ -545,10 +535,7 @@ fn snapshot(room: &Room, peer: &Participant) -> Value {
                         .iter()
                         .any(|s| &s.id == id && s.participant_ids.contains(&peer.id))
                 }))
-                && message
-                    .target_participant_id
-                    .as_deref()
-                    .is_none_or(|target| target == peer.id)
+                && message.targets(&peer.id)
         })
         .take(100)
         .collect::<Vec<_>>();

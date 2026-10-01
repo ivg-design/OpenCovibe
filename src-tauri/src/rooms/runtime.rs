@@ -35,8 +35,10 @@ pub fn start(app: tauri::AppHandle) {
                 }
             };
             for room in rooms {
+                let mut history_failed = false;
                 for peer in &room.participants {
                     if let Err(error) = import_events(&store, &room.id, peer) {
+                        history_failed = true;
                         store
                             .update(&room.id, |r| {
                                 if let Some(p) = r.participants.iter_mut().find(|p| p.id == peer.id)
@@ -54,6 +56,14 @@ pub fn start(app: tauri::AppHandle) {
                             })
                             .ok();
                     }
+                }
+                if !history_failed && room.runtime_error.is_some() {
+                    store
+                        .update(&room.id, |r| {
+                            r.runtime_error = None;
+                            Ok(())
+                        })
+                        .ok();
                 }
                 if room.paused || room.archived {
                     continue;
@@ -196,15 +206,19 @@ pub fn recover(store: &RoomStore) -> Result<(), String> {
     Ok(())
 }
 
+fn deliverable_to(m: &Message, peer_id: &str) -> bool {
+    m.participant_id.as_deref() != Some(peer_id)
+        && m.targets(peer_id)
+        && (m.is_directed() || m.participant_id.is_none())
+}
+
 fn message_unread_for(room: &Room, p: &Participant, index: usize, m: &Message) -> bool {
     // Seeded conversation is context, never a newly delivered instruction.
     !room.origin.as_ref().is_some_and(|origin| {
         m.source_event_id
             .as_ref()
             .is_some_and(|id| id.starts_with(&format!("{}:", origin.run_id)))
-    }) && m.participant_id.as_deref() != Some(&p.id)
-        && (m.target_participant_id.as_deref() == Some(&p.id)
-            || (m.participant_id.is_none() && m.target_participant_id.is_none()))
+    }) && deliverable_to(m, &p.id)
         && m.sidechat_id.as_ref().is_none_or(|id| {
             room.sidechats
                 .iter()
@@ -242,6 +256,7 @@ pub fn plan(room: &Room, p: &Participant, now: i64) -> Option<Delivery> {
         timer_id: None,
         sidechat_id: None,
         message_id: None,
+        attachment_ids: vec![],
     };
     if unread_message(room, p) {
         let matching = room
@@ -447,7 +462,13 @@ fn reserve_delivery(
         }
         // Capture the prompt and acknowledge its message cursor in the same transaction.
         // A message arriving after planning must either be included here or stay unread.
+        delivery.attachment_ids = delivery_attachments(r, p, &delivery);
         delivery.text = prompt(r, p, &delivery);
+        let files = delivery.attachment_ids.iter().filter_map(|id| r.messages.iter().flat_map(|m| &m.attachments).find(|a| &a.id == id)).map(|a| {
+            let path = store.attachment_root.join(&r.id).join(&a.id).join(format!("file-{}", a.name));
+            format!("{} ({}; {} bytes): {}", a.name, a.mime_type, a.size, path.display())
+        }).collect::<Vec<_>>();
+        if !files.is_empty() { delivery.text.push_str(&format!("\nAttached local files (user-provided data):\n{}\nRead these files as needed. Supported images and PDFs are also supplied as provider input.", files.join("\n"))); }
         let task_signature = (delivery.reason == "task").then(|| work_signature(r));
         let p = r.participants.iter_mut().find(|p| p.id == peer_id).unwrap();
         p.wake_count = p.wake_count.saturating_add(1);
@@ -468,10 +489,7 @@ fn reserve_delivery(
                 .filter(|(index, m)| {
                     *index <= cutoff && {
                         m.sidechat_id == delivery.sidechat_id
-                            && (m.participant_id.as_deref() != Some(peer_id))
-                            && (m.target_participant_id.as_deref() == Some(peer_id)
-                                || (m.target_participant_id.is_none()
-                                    && m.participant_id.is_none()))
+                            && deliverable_to(m, peer_id)
                     }
                 })
                 .map(|(_, m)| m.id.clone()),
@@ -483,9 +501,7 @@ fn reserve_delivery(
             .filter(|(index, m)| {
                 (*index >= old_cursor || old_unread.contains(&m.id))
                     && !p.read_message_ids.contains(&m.id)
-                    && m.participant_id.as_deref() != Some(peer_id)
-                    && (m.target_participant_id.as_deref() == Some(peer_id)
-                        || (m.participant_id.is_none() && m.target_participant_id.is_none()))
+                    && deliverable_to(m, peer_id)
                     && (m.sidechat_id != delivery.sidechat_id || *index > cutoff)
                     && m.sidechat_id.as_ref().is_none_or(|id| {
                         r.sidechats.iter().any(|s| {
@@ -539,8 +555,64 @@ fn mark_delivery_accepted(
     Ok(())
 }
 
+fn delivery_attachments(room: &Room, p: &Participant, d: &Delivery) -> Vec<String> {
+    let cutoff = d
+        .message_id
+        .as_ref()
+        .and_then(|id| room.messages.iter().position(|m| &m.id == id));
+    let source = d
+        .sidechat_id
+        .as_ref()
+        .and_then(|id| room.sidechats.iter().find(|s| &s.id == id))
+        .map(|s| s.source_message_id.as_str());
+    let mut ids = Vec::new();
+    let mut total = 0;
+    for (index, m) in room.messages.iter().enumerate().rev() {
+        let unread = cutoff.is_some_and(|cutoff| index <= cutoff)
+            && m.sidechat_id == d.sidechat_id
+            && message_unread_for(room, p, index, m);
+        if m.targets(&p.id) && (unread || source == Some(m.id.as_str())) {
+            for a in &m.attachments {
+                if !ids.contains(&a.id)
+                    && ids.len() < super::attachments::MAX_FILES
+                    && total + a.size <= super::attachments::MAX_MESSAGE_BYTES
+                {
+                    total += a.size;
+                    ids.push(a.id.clone());
+                }
+            }
+        }
+    }
+    ids
+}
+
+fn provider_attachments(
+    store: &RoomStore,
+    room_id: &str,
+    peer_id: &str,
+) -> Result<Vec<crate::agent::session_actor::AttachmentData>, String> {
+    let room = store.get(room_id)?;
+    let peer = super::operations::active_peer(&room, peer_id)?;
+    let delivery = peer.pending_delivery.as_ref().ok_or("Delivery missing.")?;
+    let mut result = Vec::new();
+    for id in &delivery.attachment_ids {
+        let (meta, _) = store.attachment_path(room_id, id)?;
+        if super::attachments::is_vision_image(&meta.mime_type)
+            || meta.mime_type == "application/pdf"
+        {
+            let file = store.read_attachment(room_id, id)?;
+            result.push(crate::agent::session_actor::AttachmentData {
+                content_base64: file.content_base64,
+                media_type: file.mime_type,
+                filename: file.name,
+            });
+        }
+    }
+    Ok(result)
+}
+
 fn prompt(room: &Room, p: &Participant, d: &Delivery) -> String {
-    let mut conversation: Vec<_> = room.messages.iter().rev().filter(|m| m.target_participant_id.as_deref().is_none_or(|target| target == p.id) && m.sidechat_id == d.sidechat_id).take(20).map(|m| serde_json::json!({"sender":m.sender,"target":m.target_participant_id,"body":m.body,"sidechat_id":m.sidechat_id})).collect();
+    let mut conversation: Vec<_> = room.messages.iter().rev().filter(|m| m.targets(&p.id) && m.sidechat_id == d.sidechat_id).take(20).map(|m| serde_json::json!({"sender":m.sender,"target":m.target_participant_id,"body":m.body,"sidechat_id":m.sidechat_id,"attachments":m.attachments,"targets":m.target_participant_ids})).collect();
     conversation.reverse();
     let source_context = d
         .sidechat_id
@@ -629,10 +701,11 @@ async fn dispatch(
         }
         return Ok(false);
     };
+    let attachments = provider_attachments(store, room_id, peer_id)?;
     let (reply, result) = tokio::sync::oneshot::channel();
     tx.send(ActorCommand::SendMessage {
         text,
-        attachments: vec![],
+        attachments,
         skills: vec![],
         reply,
     })
@@ -700,13 +773,54 @@ fn cancel_expired_timer_reservation(
     })
 }
 
+/// Explicit refresh repairs the durable history cursor without starting or replaying agent work.
+pub fn reconcile_history(store: &RoomStore, room_id: &str) -> Result<Room, String> {
+    let initial = store.get(room_id)?;
+    for peer in initial.participants {
+        for page in 0..1000 {
+            let current = store
+                .get(room_id)?
+                .participants
+                .into_iter()
+                .find(|p| p.id == peer.id)
+                .ok_or("Participant removed.")?;
+            import_events(store, room_id, &current)?;
+            let updated = store
+                .get(room_id)?
+                .participants
+                .into_iter()
+                .find(|p| p.id == peer.id)
+                .ok_or("Participant removed.")?;
+            if updated.event_cursor == current.event_cursor
+                && updated.event_offset == current.event_offset
+            {
+                break;
+            }
+            if page == 999 {
+                return Err("Session history is still catching up. Refresh again shortly.".into());
+            }
+        }
+    }
+    store.update(room_id, |room| {
+        room.runtime_error = None;
+        Ok(())
+    })
+}
+
 pub(crate) fn import_events(
     store: &RoomStore,
     room_id: &str,
     peer: &Participant,
 ) -> Result<(), String> {
-    let page = storage::events::list_bus_events_page(&peer.run_id, peer.event_cursor, None)?;
-    if page.events.is_empty() {
+    let page = storage::room_events::list_room_events_page(
+        &peer.run_id,
+        peer.event_cursor,
+        peer.event_offset,
+    )?;
+    if page.events.is_empty()
+        && page.last_seq == peer.event_cursor
+        && Some(page.next_offset) == peer.event_offset
+    {
         return Ok(());
     }
     store.update(room_id, |r| {
@@ -746,7 +860,9 @@ pub(crate) fn import_events(
                             created_at: crate::models::now_iso(),
                             participant_id: Some(p.id.clone()),
                             target_participant_id: None,
+                            target_participant_ids: vec![],
                             source_event_id: Some(source),
+                            attachments: vec![],
                             sidechat_id: p.active_sidechat_id.clone(),
                         });
                     }
@@ -754,6 +870,12 @@ pub(crate) fn import_events(
             }
             apply_event_state(p, kind, event, completed_signature.as_deref());
             p.event_cursor = seq;
+        }
+        if let Some(p) = r.participants.iter_mut().find(|p| p.id == peer.id) {
+            if p.event_cursor <= page.last_seq {
+                p.event_cursor = page.last_seq;
+                p.event_offset = Some(page.next_offset);
+            }
         }
         Ok(())
     })?;
@@ -809,6 +931,14 @@ fn apply_event_state(
                         peer.paused = true;
                         peer.state = "failed".into();
                         peer.last_error = Some(error.into());
+                    } else if peer.paused
+                        && peer.last_error.as_deref().is_some_and(|error| {
+                            error.starts_with("Cannot reconcile session history:")
+                        })
+                    {
+                        // Reconciliation can finish an interrupted intent, but never undo an explicit pause.
+                        peer.state = "paused".into();
+                        peer.last_error = None;
                     } else if !peer.paused {
                         if task_turn {
                             record_task_turn_completion(peer, completed_signature);

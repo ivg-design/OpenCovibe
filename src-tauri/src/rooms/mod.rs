@@ -1,7 +1,9 @@
+pub mod attachments;
 pub mod github;
 pub mod github_tasks;
 pub mod governance;
 pub mod mcp;
+pub mod mentions;
 pub mod models;
 pub mod operations;
 pub mod repository;
@@ -10,3 +12,6 @@ pub mod scheduler;
 pub mod session_seed;
 pub mod store;
 pub mod worktrees;
+
+#[cfg(test)]
+mod attachment_tests;

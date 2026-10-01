@@ -632,8 +632,10 @@ fn push_message(
         created_at: crate::models::now_iso(),
         participant_id: participant_id.map(str::to_owned),
         target_participant_id: target.map(str::to_owned),
+        target_participant_ids: vec![],
         source_event_id: None,
         sidechat_id: None,
+        attachments: vec![],
     });
 }
 
@@ -932,6 +934,7 @@ mod tests {
                     timer_id: None,
                     sidechat_id: None,
                     message_id: None,
+                    attachment_ids: vec![],
                 });
                 Ok(())
             })
@@ -990,6 +993,7 @@ mod tests {
                     timer_id: None,
                     sidechat_id: None,
                     message_id: None,
+                    attachment_ids: vec![],
                 });
                 Ok(())
             })

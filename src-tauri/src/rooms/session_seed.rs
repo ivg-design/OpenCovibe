@@ -52,9 +52,12 @@ pub fn build_seed(meta: &RunMeta) -> Result<(RoomOrigin, Participant, Vec<Messag
     // Room context is conversation text, not raw tool output. Use the same
     // bounded projection as the history UI, pinned to one immutable generation.
     let history = crate::storage::history::get_summary(&meta.id, true)?;
-    build_seed_with(meta, history.last_seq, history.page_count > 0, |cursor| {
-        crate::storage::history::get_page(&meta.id, Some(&history.generation_id), cursor)
-    })
+    let (origin, mut peer, messages) =
+        build_seed_with(meta, history.last_seq, history.page_count > 0, |cursor| {
+            crate::storage::history::get_page(&meta.id, Some(&history.generation_id), cursor)
+        })?;
+    peer.event_offset = Some(history.source_size);
+    Ok((origin, peer, messages))
 }
 
 fn build_seed_with(
@@ -106,8 +109,10 @@ fn build_seed_with(
                         created_at: if ts.is_empty() { &meta.started_at } else { ts }.clone(),
                         participant_id: assistant.then(|| peer_id.clone()),
                         target_participant_id: None,
+                        target_participant_ids: vec![],
                         source_event_id: Some(format!("{}:{event_seq}", meta.id)),
                         sidechat_id: None,
+                        attachments: vec![],
                     });
                 }
             }

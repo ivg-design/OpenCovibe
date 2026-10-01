@@ -246,7 +246,8 @@
     min-height: 0;
     height: 100%;
     overflow: hidden;
-    overflow-wrap: anywhere;
+    overscroll-behavior: none;
+    overflow-wrap: break-word;
     font-family:
       -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB",
       "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", "WenQuanYi Micro Hei", sans-serif;
@@ -256,6 +257,7 @@
     min-height: 0;
     height: 100%;
     overflow: hidden;
+    overscroll-behavior: none;
   }
 }
 
@@ -1131,8 +1133,18 @@ textarea {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.room-workspace :is(button, a, p, h2, h3, label) {
-  overflow-wrap: anywhere;
+.room-workspace :is(a, p, h2, h3, label) {
+  overflow-wrap: break-word;
+}
+/* Short control labels stay intact; rows wrap whole controls as space narrows. */
+button,
+[role="button"],
+summary {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+button {
+  flex-shrink: 0;
 }
 
 .room-message {

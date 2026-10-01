@@ -225,6 +225,7 @@ fn delivery(reason: &str, timer_id: Option<&str>, created_at: i64) -> Delivery {
         timer_id: timer_id.map(str::to_owned),
         sidechat_id: None,
         message_id: None,
+        attachment_ids: vec![],
     }
 }
 
@@ -351,8 +352,10 @@ fn seeded_history_never_replays_as_new_work_for_joining_peers() {
         created_at: crate::models::now_iso(),
         participant_id: None,
         target_participant_id: None,
+        target_participant_ids: vec![],
         source_event_id: Some("original-run:12".into()),
         sidechat_id: None,
+        attachments: vec![],
     });
     assert!(plan(&room, &peer, fixture.now()).is_none());
     let mut new_message = room.messages[0].clone();
@@ -1488,4 +1491,185 @@ fn rename_rejects_duplicate_empty_long_and_stale_names_without_changes() {
             .contains("changed elsewhere")
     );
     assert_eq!(room.participants[0].name, "Renamed elsewhere");
+}
+
+#[test]
+fn mentioned_recipients_receive_attachments_without_leaking_or_acknowledging_later_files() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let f = Fixture::new();
+    f.store
+        .update(&f.room.id, |r| {
+            r.auto_continue = false;
+            r.participants.push(participant("peer-c", "Lead"));
+            Ok(())
+        })
+        .unwrap();
+    let image = f
+        .store
+        .upload_attachment(
+            &f.room.id,
+            "diagram.png",
+            &STANDARD.encode(b"\x89PNG\r\n\x1a\nimage bytes"),
+        )
+        .unwrap();
+    let text = f
+        .store
+        .upload_attachment(
+            &f.room.id,
+            "notes.txt",
+            &STANDARD.encode(b"read these notes"),
+        )
+        .unwrap();
+    let room = f
+        .store
+        .append_message_with_attachments(
+            &f.room.id,
+            "Human",
+            "@Codex @Claude inspect attachments".into(),
+            None,
+            Some("peer-c".into()),
+            None,
+            None,
+            &[image.id.clone(), text.id.clone()],
+        )
+        .unwrap();
+    let c = room.participants.iter().find(|p| p.id == "peer-c").unwrap();
+    assert!(plan(&room, c, f.now()).is_none());
+    assert!(
+        !super::prompt(&room, c, &delivery("timer", None, f.now())).contains("inspect attachments")
+    );
+    let p = room.participants.iter().find(|p| p.id == "peer-a").unwrap();
+    let planned = plan(&room, p, f.now()).unwrap();
+    let later = f
+        .store
+        .upload_attachment(&f.room.id, "later.txt", &STANDARD.encode(b"later"))
+        .unwrap();
+    f.store
+        .append_message_with_attachments(
+            &f.room.id,
+            "Human",
+            "Later".into(),
+            None,
+            Some("peer-a".into()),
+            None,
+            None,
+            &[later.id.clone()],
+        )
+        .unwrap();
+    let reserved = reserve_delivery(&f.store, &f.room.id, &p.id, planned, f.now()).unwrap();
+    let pending = reserved
+        .participants
+        .iter()
+        .find(|p| p.id == "peer-a")
+        .unwrap()
+        .pending_delivery
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        pending.attachment_ids,
+        vec![image.id.clone(), text.id.clone()]
+    );
+    assert!(!pending.attachment_ids.contains(&later.id));
+    assert!(pending.text.contains("file-notes.txt"));
+    assert!(pending.text.contains("file-diagram.png"));
+    let provider = super::provider_attachments(&f.store, &f.room.id, &p.id).unwrap();
+    assert_eq!(provider.len(), 1);
+    assert_eq!(provider[0].media_type, "image/png");
+    assert_eq!(
+        STANDARD.decode(&provider[0].content_base64).unwrap(),
+        b"\x89PNG\r\n\x1a\nimage bytes"
+    );
+    let reopened = RoomStore::open(&f._temp.path().join("rooms.sqlite3")).unwrap();
+    let saved = reopened.get(&f.room.id).unwrap();
+    assert_eq!(
+        saved.participants[0]
+            .pending_delivery
+            .as_ref()
+            .unwrap()
+            .attachment_ids,
+        pending.attachment_ids
+    );
+}
+
+#[test]
+#[ignore = "Local acceptance: isolated copy of active RAV room and its event logs"]
+fn live_rav_room_catches_up_past_oversized_tools_without_duplicate_messages() {
+    let root = crate::storage::data_dir();
+    assert!(
+        root.to_string_lossy()
+            .contains("ocv-live-reader-acceptance"),
+        "Use isolated acceptance profile only"
+    );
+    let store = RoomStore::open(&root.join("rooms.sqlite3")).unwrap();
+    let room_id = "115e121e-9afc-46f9-b7db-aef53900333a";
+    let initial = store.get(room_id).unwrap();
+    let lead = &initial.participants[0];
+    let mut seq = lead.event_cursor;
+    let mut offset = None;
+    let raw_error = loop {
+        match crate::storage::events::list_bus_events_page(&lead.run_id, seq, offset) {
+            Ok(page) => {
+                assert!(page.has_more);
+                seq = page.last_seq;
+                offset = Some(page.next_offset);
+            }
+            Err(e) => break e,
+        }
+    };
+    assert!(raw_error.contains("HISTORY_PROJECTION_REQUIRED"));
+    let started = std::time::Instant::now();
+    for peer in &initial.participants {
+        for _ in 0..1000 {
+            let before = store
+                .get(room_id)
+                .unwrap()
+                .participants
+                .into_iter()
+                .find(|p| p.id == peer.id)
+                .unwrap();
+            super::import_events(&store, room_id, &before).unwrap();
+            let after = store
+                .get(room_id)
+                .unwrap()
+                .participants
+                .into_iter()
+                .find(|p| p.id == peer.id)
+                .unwrap();
+            if after.event_offset == before.event_offset
+                && after.event_cursor == before.event_cursor
+            {
+                break;
+            }
+        }
+    }
+    let caught_up = store.get(room_id).unwrap();
+    for peer in &caught_up.participants {
+        assert_eq!(
+            peer.event_cursor,
+            crate::storage::events::next_seq(&peer.run_id) - 1
+        );
+        assert!(peer.event_offset.is_some());
+        super::import_events(&store, room_id, peer).unwrap();
+    }
+    let repeated = store.get(room_id).unwrap();
+    assert_eq!(caught_up.messages.len(), repeated.messages.len());
+    assert!(
+        repeated.participants[0].paused,
+        "History reconciliation never resumes a paused agent"
+    );
+    assert_eq!(
+        initial.project.as_ref().unwrap().id,
+        repeated.project.as_ref().unwrap().id
+    );
+    eprintln!(
+        "Live RAV catch-up: {raw_error}; {} -> {} messages, cursors {:?}, {:?}",
+        initial.messages.len(),
+        repeated.messages.len(),
+        repeated
+            .participants
+            .iter()
+            .map(|p| p.event_cursor)
+            .collect::<Vec<_>>(),
+        started.elapsed()
+    );
 }

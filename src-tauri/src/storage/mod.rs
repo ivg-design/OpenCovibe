@@ -14,6 +14,7 @@ pub mod history;
 pub mod mcp_registry;
 pub mod plugins;
 pub mod prompt_index;
+pub mod room_events;
 pub mod run_index;
 pub mod runs;
 pub mod settings;

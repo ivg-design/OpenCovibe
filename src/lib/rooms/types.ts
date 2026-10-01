@@ -66,6 +66,13 @@ export interface RoomClaim {
   evidence: string | null;
 }
 
+export interface RoomAttachment {
+  id: string;
+  name: string;
+  mime_type: string;
+  size: number;
+}
+
 export interface RoomMessage {
   id: string;
   sender: string;
@@ -73,8 +80,10 @@ export interface RoomMessage {
   created_at: string;
   participant_id: string | null;
   target_participant_id: string | null;
+  target_participant_ids?: string[];
   source_event_id: string | null;
   sidechat_id?: string | null;
+  attachments?: RoomAttachment[];
 }
 
 export interface RoomSidechat {

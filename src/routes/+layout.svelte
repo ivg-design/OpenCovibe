@@ -1397,7 +1397,7 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<div class="flex h-dvh min-h-0 min-w-0 overflow-hidden">
+<div class="fixed inset-0 flex min-h-0 min-w-0 overflow-hidden">
   <!-- Sidebar: Icon Rail + Content Panel -->
   {#if sidebarOpen}
     <aside
@@ -1545,9 +1545,9 @@
         <div class="border-t border-sidebar-border py-2">
           <div class="flex items-center justify-center pb-1">
             <button
-              class="text-xs text-muted-foreground hover:text-muted-foreground transition-colors cursor-pointer"
+              class="max-w-full truncate whitespace-nowrap text-[10px] text-muted-foreground hover:text-muted-foreground transition-colors cursor-pointer"
               onclick={() => (showAbout = true)}
-              title="About OpenCovibe">v{appVersion}</button
+              title={`About OpenCovibe v${appVersion}`}>v{appVersion}</button
             >
           </div>
           <div class="relative mx-auto mb-0.5">
@@ -2482,7 +2482,7 @@
           >
         </button>
 
-        <div class="flex items-center gap-2 text-sm">
+        <div class="flex min-w-0 flex-wrap items-center gap-2 text-sm">
           <span class="text-muted-foreground">{t("layout_appName")}</span>
           <svg
             class="h-3.5 w-3.5 text-muted-foreground/50"

@@ -118,7 +118,7 @@
 
   {#if board.error}
     <div
-      class="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+      class="break-words rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive"
       role="status"
     >
       {tr("room_boardSyncError", { error: board.error })}
@@ -172,7 +172,7 @@
                   <div class="min-w-0">
                     <button
                       type="button"
-                      class="text-left text-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      class="max-w-full break-words text-left text-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       aria-expanded={visibleInspection?.itemId === item.id}
                       aria-label={`${tr("room_inspectTask")}: ${item.title}`}
                       onclick={() => void inspectTask(item.id)}
