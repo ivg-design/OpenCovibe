@@ -68,7 +68,7 @@ pub fn start(app: tauri::AppHandle) {
                 if room.paused || room.archived {
                     continue;
                 }
-                // Human input received while the previous turn was still finishing
+                // Addressed input received while the previous turn was still finishing
                 // remains unread. Reconsider it after importing the completion event.
                 if store
                     .get(&room.id)
@@ -76,7 +76,7 @@ pub fn start(app: tauri::AppHandle) {
                 {
                     store
                         .update(&room.id, |r| {
-                            wake_dormant_for_unread_human_messages(r);
+                            wake_dormant_for_unread_messages(r);
                             Ok(())
                         })
                         .ok();
@@ -230,9 +230,12 @@ fn dormant_message_recipients(room: &Room) -> Vec<String> {
                 && peer.pending_delivery.is_none()
                 && !peer.turn_limit_reached()
                 && room.messages.iter().enumerate().any(|(index, message)| {
-                    message.sender == "Human"
-                        && message.participant_id.is_none()
-                        && message.source_event_id.is_none()
+                    message.source_event_id.is_none()
+                        && ((message.sender == "Human" && message.participant_id.is_none())
+                            || (message.is_directed()
+                                && message.participant_id.as_ref().is_some_and(|sender| {
+                                    room.participants.iter().any(|p| &p.id == sender)
+                                })))
                         && message_unread_for(room, peer, index, message)
                 })
         })
@@ -240,7 +243,7 @@ fn dormant_message_recipients(room: &Room) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn wake_dormant_for_unread_human_messages(room: &mut Room) {
+pub(super) fn wake_dormant_for_unread_messages(room: &mut Room) {
     let ids = dormant_message_recipients(room);
     for peer in &mut room.participants {
         if ids.contains(&peer.id) {
@@ -299,6 +302,7 @@ pub fn plan(room: &Room, p: &Participant, now: i64) -> Option<Delivery> {
         text: String::new(),
         created_at: now,
         state: "prepared".into(),
+        turn_started: false,
         task_id: None,
         timer_id: None,
         sidechat_id: None,
@@ -965,6 +969,20 @@ fn apply_event_state(
         "run_state" => {
             match event.get("state").and_then(|v| v.as_str()).unwrap_or("") {
                 "idle" | "completed" => {
+                    // A cold provider actor announces idle before accepting its first
+                    // prompt. That startup readiness event is not turn completion.
+                    if event.get("state").and_then(|v| v.as_str()) == Some("idle")
+                        && event
+                            .get("error")
+                            .and_then(|v| v.as_str())
+                            .is_none_or(str::is_empty)
+                        && peer
+                            .pending_delivery
+                            .as_ref()
+                            .is_some_and(|d| !d.turn_started)
+                    {
+                        return;
+                    }
                     let task_turn = peer
                         .pending_delivery
                         .as_ref()
@@ -1005,6 +1023,9 @@ fn apply_event_state(
                     }
                 }
                 "running" => {
+                    if let Some(delivery) = &mut peer.pending_delivery {
+                        delivery.turn_started = true;
+                    }
                     if !peer.paused {
                         peer.state = "busy".into();
                     }

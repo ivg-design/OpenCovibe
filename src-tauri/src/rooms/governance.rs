@@ -637,6 +637,7 @@ fn push_message(
         sidechat_id: None,
         attachments: vec![],
     });
+    super::runtime::wake_dormant_for_unread_messages(room);
 }
 
 fn format_request_created(request: &RoomRequest) -> String {
@@ -784,6 +785,44 @@ mod tests {
             proposal: None,
             brief: None,
             options: vec![],
+        }
+    }
+
+    #[test]
+    fn review_request_wakes_automatic_dormancy_but_retains_manual_pause() {
+        for state in ["blocked", "no_progress", "completed", "paused", "waiting"] {
+            let fixture = Fixture::new();
+            fixture
+                .store
+                .update(&fixture.room_id, |room| {
+                    let reviewer = &mut room.participants[1];
+                    reviewer.paused = true;
+                    reviewer.state = state.into();
+                    Ok(())
+                })
+                .unwrap();
+            let room = create_request(
+                &fixture.store,
+                &fixture.room_id,
+                "requester",
+                review_request(),
+            )
+            .unwrap();
+            let should_wake = matches!(state, "blocked" | "no_progress" | "completed");
+            assert_eq!(room.participants[1].paused, !should_wake, "{state}");
+            assert_eq!(room.requests[0].status, "pending");
+            if should_wake {
+                assert_eq!(
+                    super::super::runtime::plan(
+                        &room,
+                        &room.participants[1],
+                        chrono::Utc::now().timestamp_millis()
+                    )
+                    .unwrap()
+                    .reason,
+                    "message"
+                );
+            }
         }
     }
 
@@ -936,6 +975,7 @@ mod tests {
                     text: "Continue".into(),
                     created_at: 1,
                     state: "queued".into(),
+                    turn_started: false,
                     task_id: None,
                     timer_id: None,
                     sidechat_id: None,
@@ -995,6 +1035,7 @@ mod tests {
                     text: "Continue".into(),
                     created_at: 1,
                     state: "sent".into(),
+                    turn_started: true,
                     task_id: None,
                     timer_id: None,
                     sidechat_id: None,

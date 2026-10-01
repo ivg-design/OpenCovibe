@@ -336,8 +336,30 @@ impl RoomStore {
             }
             let mut target_participant_id = target_participant_id.clone();
             let mut target_participant_ids = vec![];
-            if sender == "Human" && participant_id.is_none() {
-                if let Some(ids) = super::mentions::recipients(body, &room.participants) {
+            if (sender == "Human" && participant_id.is_none())
+                || (source_event_id.is_none()
+                    && participant_id.as_ref().is_some_and(|sender_id| {
+                        room.participants.iter().any(|p| &p.id == sender_id)
+                    }))
+            {
+                if let Some(mut ids) = super::mentions::recipients(body, &room.participants) {
+                    // An explicit peer @everyone is addressed work, unlike an ordinary
+                    // progress broadcast. Freeze its recipients and keep sidechat scope.
+                    if ids.is_empty() && participant_id.is_some() {
+                        ids = room
+                            .participants
+                            .iter()
+                            .filter(|p| participant_id.as_ref() != Some(&p.id))
+                            .filter(|p| {
+                                sidechat_id.as_ref().is_none_or(|id| {
+                                    room.sidechats
+                                        .iter()
+                                        .any(|s| &s.id == id && s.participant_ids.contains(&p.id))
+                                })
+                            })
+                            .map(|p| p.id.clone())
+                            .collect();
+                    }
                     if ids.len() == 1 {
                         target_participant_id = ids.first().cloned();
                     } else {
@@ -397,7 +419,7 @@ impl RoomStore {
                 attachments,
             };
             room.messages.push(message);
-            super::runtime::wake_dormant_for_unread_human_messages(room);
+            super::runtime::wake_dormant_for_unread_messages(room);
             Ok(())
         })
     }

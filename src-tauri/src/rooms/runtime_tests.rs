@@ -227,6 +227,7 @@ fn delivery(reason: &str, timer_id: Option<&str>, created_at: i64) -> Delivery {
         text: "test wake".into(),
         created_at,
         state: "prepared".into(),
+        turn_started: true,
         task_id: None,
         timer_id: timer_id.map(str::to_owned),
         sidechat_id: None,
@@ -375,7 +376,7 @@ fn everyone_received_during_a_finishing_blocked_turn_wakes_after_completion() {
         .store
         .update(&room.id, |room| {
             room.participants[0].pending_delivery = None;
-            super::wake_dormant_for_unread_human_messages(room);
+            super::wake_dormant_for_unread_messages(room);
             Ok(())
         })
         .unwrap();
@@ -463,10 +464,11 @@ fn everyone_respects_manual_pauses_permission_waits_limits_and_inflight_deliveri
 }
 
 #[test]
-fn historical_and_agent_everyone_messages_do_not_revive_dormant_peers() {
+fn historical_and_untargeted_agent_messages_do_not_revive_dormant_peers() {
     for (sender, peer, source) in [
         ("Human", None, Some("seed:history")),
-        ("Claude", Some("peer-b"), None),
+        ("Claude", Some("peer-b"), Some("run-claude:1")),
+        ("Not a room peer", Some("unknown"), None),
     ] {
         let fixture = Fixture::new();
         fixture
@@ -490,6 +492,387 @@ fn historical_and_agent_everyone_messages_do_not_revive_dormant_peers() {
             .unwrap();
         assert!(room.participants[0].paused);
     }
+}
+
+#[test]
+fn cold_actor_idle_preserves_reserved_turn_until_running_then_completion() {
+    for provider in ["codex", "claude"] {
+        let fixture = Fixture::new();
+        fixture
+            .store
+            .update(&fixture.room.id, |r| {
+                r.auto_continue = false;
+                r.participants[0].provider = provider.into();
+                r.participants[0].max_turns = 1;
+                Ok(())
+            })
+            .unwrap();
+        let room = fixture
+            .store
+            .append_message(
+                &fixture.room.id,
+                "Claude",
+                "Review now".into(),
+                Some("peer-b".into()),
+                Some("peer-a".into()),
+                None,
+            )
+            .unwrap();
+        let next = plan(&room, &room.participants[0], fixture.now()).unwrap();
+        let reserved =
+            reserve_delivery(&fixture.store, &room.id, "peer-a", next, fixture.now()).unwrap();
+        assert!(
+            !reserved.participants[0]
+                .pending_delivery
+                .as_ref()
+                .unwrap()
+                .turn_started
+        );
+        let running = fixture
+            .store
+            .update(&room.id, |r| {
+                super::mark_delivery_accepted(
+                    r,
+                    "peer-a",
+                    &reserved.participants[0]
+                        .pending_delivery
+                        .as_ref()
+                        .unwrap()
+                        .id,
+                    fixture.now(),
+                )?;
+                let peer = &mut r.participants[0];
+                super::apply_event_state(
+                    peer,
+                    "run_state",
+                    &serde_json::json!({"state":"idle"}),
+                    None,
+                );
+                assert!(peer.pending_delivery.is_some());
+                assert_eq!(peer.state, "busy");
+                assert_eq!(peer.wake_count, 1);
+                super::apply_event_state(
+                    peer,
+                    "run_state",
+                    &serde_json::json!({"state":"running"}),
+                    None,
+                );
+                assert!(peer.pending_delivery.as_ref().unwrap().turn_started);
+                Ok(())
+            })
+            .unwrap();
+        assert!(running.participants[0].pending_delivery.is_some());
+        let reopened = RoomStore::open(&fixture._temp.path().join("rooms.sqlite3")).unwrap();
+        let completed = reopened
+            .update(&room.id, |r| {
+                super::apply_event_state(
+                    &mut r.participants[0],
+                    "run_state",
+                    &serde_json::json!({"state":"idle"}),
+                    None,
+                );
+                Ok(())
+            })
+            .unwrap();
+        assert!(completed.participants[0].pending_delivery.is_none());
+        assert_eq!(completed.participants[0].wake_count, 1);
+        assert!(plan(&completed, &completed.participants[0], fixture.now()).is_none());
+    }
+}
+
+#[test]
+fn legacy_in_flight_delivery_can_complete_after_upgrade() {
+    let mut peer = participant("peer-a", "Codex");
+    let mut value = serde_json::to_value(delivery("message", None, 1)).unwrap();
+    value.as_object_mut().unwrap().remove("turn_started");
+    peer.pending_delivery = Some(serde_json::from_value(value).unwrap());
+    peer.state = "busy".into();
+    super::apply_event_state(
+        &mut peer,
+        "run_state",
+        &serde_json::json!({"state":"idle"}),
+        None,
+    );
+    assert!(peer.pending_delivery.is_none());
+    assert_eq!(peer.state, "idle");
+}
+
+#[test]
+fn cold_actor_idle_error_still_fails_the_delivery() {
+    let mut peer = participant("peer-a", "Codex");
+    let mut intent = delivery("message", None, 1);
+    intent.turn_started = false;
+    peer.pending_delivery = Some(intent);
+    peer.state = "busy".into();
+    super::apply_event_state(
+        &mut peer,
+        "run_state",
+        &serde_json::json!({"state":"idle","error":"startup failed"}),
+        None,
+    );
+    assert!(peer.paused);
+    assert_eq!(peer.state, "failed");
+    assert!(peer.pending_delivery.is_none());
+    assert_eq!(peer.last_error.as_deref(), Some("startup failed"));
+}
+
+#[test]
+fn peer_addresses_wake_dormant_recipients_and_reserve_once() {
+    for state in ["blocked", "no_progress", "completed"] {
+        for (body, target, all) in [
+            ("Please review the artifact", Some("peer-a"), false),
+            ("@Codex please review the artifact", None, false),
+            ("@Codex @Claude please review", None, true),
+            ("@everyone please review", None, true),
+        ] {
+            let fixture = Fixture::new();
+            fixture
+                .store
+                .update(&fixture.room.id, |room| {
+                    room.auto_continue = false;
+                    room.participants.push(participant("lead", "Lead"));
+                    room.claims.push(claim("task-a", "peer-a", "blocked"));
+                    for peer in &mut room.participants[..2] {
+                        peer.paused = true;
+                        peer.state = state.into();
+                        peer.no_progress_turns = 3;
+                    }
+                    Ok(())
+                })
+                .unwrap();
+            let room = fixture
+                .store
+                .append_message(
+                    &fixture.room.id,
+                    "Lead",
+                    body.into(),
+                    Some("lead".into()),
+                    target.map(str::to_owned),
+                    None,
+                )
+                .unwrap();
+            assert!(!room.participants[0].paused, "{state}: {body}");
+            assert_eq!(room.participants[1].paused, !all);
+            assert_eq!(room.claims[0].state, "blocked");
+            assert!(
+                plan(&room, &room.participants[2], fixture.now()).is_none(),
+                "sender must not reply to itself"
+            );
+            let next = plan(&room, &room.participants[0], fixture.now()).unwrap();
+            let reserved =
+                reserve_delivery(&fixture.store, &room.id, "peer-a", next, fixture.now()).unwrap();
+            assert!(reserved.participants[0]
+                .pending_delivery
+                .as_ref()
+                .unwrap()
+                .text
+                .contains(body));
+            fixture
+                .store
+                .update(&room.id, |r| {
+                    r.participants[0].pending_delivery = None;
+                    r.participants[0].paused = true;
+                    r.participants[0].state = state.into();
+                    Ok(())
+                })
+                .unwrap();
+            let reopened = RoomStore::open(&fixture._temp.path().join("rooms.sqlite3")).unwrap();
+            let consumed = reopened
+                .update(&room.id, |r| {
+                    super::wake_dormant_for_unread_messages(r);
+                    Ok(())
+                })
+                .unwrap();
+            assert!(
+                consumed.participants[0].paused,
+                "already delivered input cannot revive again"
+            );
+        }
+    }
+}
+
+#[test]
+fn peer_broadcasts_code_mentions_and_historical_directed_output_do_not_revive() {
+    for (body, target, source) in [
+        ("Progress update for the room", None, None),
+        ("Example: `@everyone`", None, None),
+        ("Email hello@Codex", None, None),
+        (
+            "@everyone historical result",
+            Some("peer-a"),
+            Some("run-lead:2"),
+        ),
+    ] {
+        let fixture = Fixture::new();
+        fixture
+            .store
+            .update(&fixture.room.id, |r| {
+                r.participants[0].paused = true;
+                r.participants[0].state = "no_progress".into();
+                Ok(())
+            })
+            .unwrap();
+        let room = fixture
+            .store
+            .append_message(
+                &fixture.room.id,
+                "Claude",
+                body.into(),
+                Some("peer-b".into()),
+                target.map(str::to_owned),
+                source.map(str::to_owned),
+            )
+            .unwrap();
+        assert!(room.participants[0].paused, "{body}");
+    }
+}
+
+#[test]
+fn peer_addresses_respect_manual_pause_provider_waits_room_pause_and_turn_limit() {
+    for (state, pending, exhausted, room_paused) in [
+        ("paused", false, false, false),
+        ("waiting", false, false, false),
+        ("quota", false, false, false),
+        ("failed", false, false, false),
+        ("budget_exhausted", false, false, false),
+        ("busy", true, false, false),
+        ("no_progress", false, true, false),
+        ("blocked", false, false, true),
+    ] {
+        let fixture = Fixture::new();
+        fixture
+            .store
+            .update(&fixture.room.id, |r| {
+                r.paused = room_paused;
+                let peer = &mut r.participants[0];
+                peer.paused = true;
+                peer.state = state.into();
+                if pending {
+                    peer.pending_delivery = Some(delivery("message", None, fixture.now()));
+                }
+                if exhausted {
+                    peer.wake_count = peer.max_turns;
+                }
+                Ok(())
+            })
+            .unwrap();
+        let room = fixture
+            .store
+            .append_message(
+                &fixture.room.id,
+                "Claude",
+                "@Codex review".into(),
+                Some("peer-b".into()),
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(room.participants[0].paused, "{state}");
+        assert_eq!(room.participants[0].state, state);
+    }
+}
+
+#[test]
+fn peer_everyone_is_scoped_to_sidechat_members() {
+    let fixture = Fixture::new();
+    let source = fixture
+        .store
+        .post_message(&fixture.room.id, "Source".into())
+        .unwrap()
+        .messages[0]
+        .id
+        .clone();
+    let room = fixture
+        .store
+        .create_sidechat(
+            &fixture.room.id,
+            &source,
+            "Review pair",
+            vec!["peer-a".into(), "peer-b".into()],
+        )
+        .unwrap();
+    fixture
+        .store
+        .update(&room.id, |r| {
+            r.auto_continue = false;
+            r.participants.push(participant("outside", "Outside"));
+            for peer in &mut r.participants {
+                peer.message_cursor = r.messages.len();
+                if peer.id != "peer-b" {
+                    peer.paused = true;
+                    peer.state = "blocked".into();
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+    let scoped = fixture
+        .store
+        .append_message_in_sidechat(
+            &room.id,
+            "Claude",
+            "@everyone please review".into(),
+            Some("peer-b".into()),
+            None,
+            None,
+            Some(room.sidechats[0].id.clone()),
+        )
+        .unwrap();
+    assert!(!scoped.participants[0].paused);
+    assert!(scoped.participants[2].paused);
+    assert_eq!(
+        scoped
+            .messages
+            .last()
+            .unwrap()
+            .target_participant_id
+            .as_deref(),
+        Some("peer-a")
+    );
+    assert!(plan(&scoped, &scoped.participants[1], fixture.now()).is_none());
+}
+
+#[test]
+fn queued_peer_input_survives_a_finishing_blocked_delivery_and_reopen() {
+    let fixture = Fixture::new();
+    fixture
+        .store
+        .update(&fixture.room.id, |r| {
+            r.auto_continue = false;
+            let peer = &mut r.participants[0];
+            peer.paused = true;
+            peer.state = "blocked".into();
+            peer.pending_delivery = Some(delivery("task", None, fixture.now()));
+            Ok(())
+        })
+        .unwrap();
+    let queued = fixture
+        .store
+        .append_message(
+            &fixture.room.id,
+            "Claude",
+            "New review after blocker".into(),
+            Some("peer-b".into()),
+            Some("peer-a".into()),
+            None,
+        )
+        .unwrap();
+    assert!(queued.participants[0].paused);
+    let reopened = RoomStore::open(&fixture._temp.path().join("rooms.sqlite3")).unwrap();
+    let ready = reopened
+        .update(&queued.id, |r| {
+            r.participants[0].pending_delivery = None;
+            super::wake_dormant_for_unread_messages(r);
+            Ok(())
+        })
+        .unwrap();
+    assert!(!ready.participants[0].paused);
+    assert_eq!(
+        plan(&ready, &ready.participants[0], fixture.now())
+            .unwrap()
+            .reason,
+        "message"
+    );
 }
 
 #[test]

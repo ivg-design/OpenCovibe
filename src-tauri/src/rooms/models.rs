@@ -142,6 +142,10 @@ pub struct Delivery {
     pub text: String,
     pub created_at: i64,
     pub state: String,
+    // Older saved deliveries already treated idle as completion. Preserve that
+    // behavior when upgrading an in-flight turn that has no startup marker.
+    #[serde(default = "yes")]
+    pub turn_started: bool,
     pub task_id: Option<String>,
     pub timer_id: Option<String>,
     #[serde(default)]

@@ -103,10 +103,13 @@ taking them on; conversion preserves the Project item and ownership. Drafts cann
 finished through the agent tool until converted. GitHub Issues must be enabled on the
 repository; preflight reports this before recording a creation intent.
 
-Fresh human broadcasts (including `@everyone` and the Everyone picker) revive agents
-stopped automatically for a blocked task or lack of progress. Named recipients and
-sidechat membership restrict who wakes. An unread human message received during a finishing
-turn is reconsidered after completion. Manual agent/room pauses, permission waits,
+Fresh human broadcasts (including `@everyone` and the Everyone picker), directed peer
+messages, explicit peer mentions, and assigned review requests revive agents stopped
+automatically for a blocked task or lack of progress. Ordinary peer progress broadcasts
+and imported transcript output do not revive dormant agents. Peer `@everyone` addresses
+the other members of the current room or sidechat. Named recipients and sidechat membership
+restrict who wakes. Unread addressed input received during a finishing turn is reconsidered
+after completion, including after restart. Manual agent/room pauses, permission waits,
 quota errors, uncertain deliveries and turn limits remain in force. Waking a blocked
 participant lets it respond to new input; it does not resolve its blocked task or grant
 an approval.

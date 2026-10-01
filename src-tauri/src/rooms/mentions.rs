@@ -1,4 +1,4 @@
-//! Explicit human @mentions supplement the recipient picker.
+//! Explicit room @mentions supplement directed message recipients.
 use super::models::Participant;
 
 pub fn recipients(body: &str, participants: &[Participant]) -> Option<Vec<String>> {
