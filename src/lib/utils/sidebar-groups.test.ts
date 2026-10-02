@@ -370,3 +370,57 @@ describe("expandForProjectChange", () => {
     expect(uncatFolder?.folderKey).toBe("uncategorized");
   });
 });
+
+describe("room hierarchy in project folders", () => {
+  const room = {
+    id: "room-1",
+    title: "RAV room",
+    repo_path: "/project",
+    updated_at: "2026-10-02T10:00:00Z",
+    needs_answer: 1,
+    participants: [
+      {
+        run_id: "room-peer",
+        participant_id: "peer",
+        name: "Claude reviewer",
+        provider: "claude",
+        state: "idle",
+        color_index: 0,
+      },
+    ],
+  };
+  it("nests participating worktree sessions under the primary repo without duplicate standalone rows", () => {
+    const folders = buildProjectFolders(
+      [
+        makeRun({ id: "room-peer", cwd: "/worktree", session_id: "peer-session" }),
+        makeRun({ id: "older-peer", cwd: "/worktree", session_id: "peer-session" }),
+        makeRun({ id: "solo", cwd: "/project", session_id: "solo-session" }),
+      ],
+      NO_FAVS,
+      NO_PINS,
+      [],
+      [room],
+    );
+    expect(folders).toHaveLength(1);
+    expect(folders[0].rooms).toEqual([room]);
+    expect(folders[0].conversations.map((c) => c.latestRun.id)).toEqual(["solo"]);
+    expect(folders[0].conversationCount).toBe(2);
+    expect(autoExpandForRun("room-peer", folders, new Set())).toEqual(new Set(["cwd:/project"]));
+  });
+  it("keeps empty rooms visible and honors removed projects", () => {
+    expect(
+      buildProjectFolders([], NO_FAVS, NO_PINS, [], [{ ...room, participants: [] }])[0].rooms,
+    ).toHaveLength(1);
+    expect(buildProjectFolders([], NO_FAVS, NO_PINS, ["/project"], [room])).toEqual([]);
+  });
+  it("keeps two rooms in the same repo distinct", () => {
+    const folders = buildProjectFolders(
+      [],
+      NO_FAVS,
+      NO_PINS,
+      [],
+      [room, { ...room, id: "room-2", participants: [] }],
+    );
+    expect(folders[0].rooms?.map((r) => r.id)).toEqual(["room-1", "room-2"]);
+  });
+});

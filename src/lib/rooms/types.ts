@@ -238,3 +238,19 @@ export interface CreateRoomInput {
   repository: string;
   create_project: boolean;
 }
+
+export interface RoomSidebarEntry {
+  id: string;
+  title: string;
+  repo_path: string;
+  updated_at: string;
+  needs_answer: number;
+  participants: {
+    run_id: string;
+    participant_id: string;
+    name: string;
+    provider: string;
+    state: string;
+    color_index: number;
+  }[];
+}

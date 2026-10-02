@@ -12,6 +12,10 @@
     listMemoryFiles,
     softDeleteRuns,
   } from "$lib/api";
+  import {
+    retainRoomSidebarParticipants,
+    roomSidebarEntries,
+  } from "$lib/stores/room-sidebar-participants.svelte";
   import ProjectFolderItem from "$lib/components/ProjectFolderItem.svelte";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
   import SetupWizard from "$lib/components/SetupWizard.svelte";
@@ -1054,8 +1058,21 @@
 
   // Build project folder tree for chats tab
   let projectFolders = $derived.by(() =>
-    buildProjectFolders(runs, favoriteRunIds, pinnedCwds, removedCwds),
+    buildProjectFolders(runs, favoriteRunIds, pinnedCwds, removedCwds, roomSidebarEntries()),
   );
+
+  onMount(() => retainRoomSidebarParticipants());
+  const selectedRoomId = $derived(
+    $page.url.pathname.startsWith("/rooms") ? ($page.url.searchParams.get("room") ?? "") : "",
+  );
+  $effect(() => {
+    if (!selectedRoomId) return;
+    const folder = projectFolders.find((folder) =>
+      folder.rooms?.some((room) => room.id === selectedRoomId),
+    );
+    if (folder && !expandedProjects.has(folder.folderKey))
+      expandedProjects = new Set([...expandedProjects, folder.folderKey]);
+  });
 
   // Selectable folders: real project folders (exclude Uncategorized)
   const selectableFolders = $derived(projectFolders.filter((f) => !f.isUncategorized));
@@ -2356,6 +2373,8 @@
                       : cwdDisplayLabel(folder.cwd)}
                     expanded={expandedProjects.has(folder.folderKey)}
                     {selectedRunId}
+                    {selectedRoomId}
+                    onSelectRoom={(roomId) => goto(`/rooms?room=${encodeURIComponent(roomId)}`)}
                     onToggle={() => toggleProject(folder.folderKey)}
                     onSelectConversation={(runId) => goto(`/chat?run=${runId}`)}
                     onResume={(runId, mode) => goto(`/chat?run=${runId}&resume=${mode}`)}

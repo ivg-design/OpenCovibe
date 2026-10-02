@@ -1,4 +1,5 @@
-import { listRoomAgentIdentities } from "$lib/rooms/api";
+import { getTransport } from "$lib/transport";
+import type { RoomSidebarEntry } from "$lib/rooms/types";
 
 export interface RoomSidebarParticipant {
   room_id: string;
@@ -6,6 +7,11 @@ export interface RoomSidebarParticipant {
   participant_id: string;
   name: string;
   color_index: number;
+}
+
+let entries = $state<RoomSidebarEntry[]>([]);
+export function roomSidebarEntries(): RoomSidebarEntry[] {
+  return entries;
 }
 
 let byRunId = $state<Record<string, RoomSidebarParticipant>>({});
@@ -16,10 +22,12 @@ let refreshRequest = 0;
 async function refreshRoomParticipants() {
   const request = ++refreshRequest;
   try {
-    const identities = await listRoomAgentIdentities();
+    const rooms = await getTransport().invoke<RoomSidebarEntry[]>("list_room_sidebar_entries");
     if (request !== refreshRequest) return;
     const next: Record<string, RoomSidebarParticipant> = {};
-    for (const identity of identities) next[identity.run_id] = identity;
+    for (const room of rooms)
+      for (const peer of room.participants) next[peer.run_id] = { ...peer, room_id: room.id };
+    entries = rooms;
     byRunId = next;
   } catch {
     // Keep the last successful mapping; temporary room-service failures should not hide labels.

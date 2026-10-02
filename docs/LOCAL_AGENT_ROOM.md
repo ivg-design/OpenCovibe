@@ -25,9 +25,9 @@ GitHub Project, independent peers, and a continuous shared conversation.
 6. Open a peer's session to inspect tools, answer approval requests or send provider controls.
    The room board is read-only: inspect task bodies/evidence, filter titles/priority/agents, and
    follow GitHub links. Peers change the canonical task through room tools.
-7. Requests records agent proposals, questions for the human, independent peer reviews and
+7. The persistent **Requests** panel beside the room chat records agent proposals, questions for the human, independent peer reviews and
    final completion. Approving an agent creates exactly one paused peer with its approved brief;
-   explicitly resume it when ready. Answer a decision in its card. Reviews go to a named different
+   explicitly resume it when ready. Search and filter Open, Resolved or All requests, then select an entry to read its full context and retained responses. Answer in the full-width multiline field beneath the context; buttons stay below and only the context scrolls. Room settings contains configuration, not requests or task claims. Reviews go to a named different
    peer and retain their evidence. Resolve requests for changes by cancelling the old request and
    creating a new one after the correction. Completion needs all board work Done, no unfinished
    claims or other open requests, fresh GitHub data, and independent peer verification. Pause the
@@ -43,7 +43,9 @@ GitHub Project, independent peers, and a continuous shared conversation.
     The primary Git repository is detected from its working folder. A single linked open
     GitHub Project is selected automatically; multiple candidates require a choice. Existing
     board fields are preserved. Add new agents, then explicitly resume when ready.
-11. The sidebar **Project board** opens the selected room's board directly. Room briefings,
+11. The chat sidebar groups **project → room chat → named participants**. Select the room row for group chat or a colored participant row for its direct session. Standalone agent chats remain directly under their project. Room rows show a badge for requests needing your answer.
+12. **View source session** opens the session used to start the room, including its full preserved history. **Room settings** is a button in the room header.
+13. The sidebar **Project board** opens the selected room's board directly. Room briefings,
     automation envelopes, and generic protocol outputs render as readable summaries.
 
 Room settings includes **Edit room instructions**. The saved instructions are included in new
@@ -59,7 +61,7 @@ create_sidechat/read_sidechat and post_message to do the same. Side chats retain
 shared instructions, repository and project; they do not create new provider sessions or worktrees.
 Peers keep their existing provider context. Messages and wakeups are routed to the selected
 conversation, and creating a side chat alone never wakes a peer. Human messages appear on the
-right and agent replies on the left. The composer stays visible while history scrolls.
+right and agent replies on the left. The full-width multiline composer stays visible, with controls on the row below, while history scrolls. It grows without collapsing the live field during typing. Reading older messages preserves your position; Jump to latest resumes following. Rooms initially render 50 recent messages and load older messages in batches on demand. Direct sessions open on the latest projected page before becoming visible, and load earlier history on upward scrolling.
 
 ## Runtime boundaries
 

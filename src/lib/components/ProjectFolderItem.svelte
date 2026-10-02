@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import type { ProjectFolder, ConversationGroup } from "$lib/utils/sidebar-groups";
+  import RoomSidebarItem from "./RoomSidebarItem.svelte";
   import ConversationItem from "./ConversationItem.svelte";
   import { t } from "$lib/i18n/index.svelte";
   import { dbgWarn } from "$lib/utils/debug";
@@ -12,6 +13,8 @@
     label: string;
     expanded?: boolean;
     onToggle: () => void;
+    selectedRoomId?: string;
+    onSelectRoom?: (roomId: string) => void;
     showCount?: boolean;
     onRemove?: () => void;
   };
@@ -43,6 +46,8 @@
     onRemove,
     children,
     selectedRunId = "",
+    selectedRoomId = "",
+    onSelectRoom,
     onSelectConversation,
     onResume,
     onDelete,
@@ -71,11 +76,11 @@
   const visibleConversations = $derived(
     children ? [] : folder.conversations.slice(0, visibleCount),
   );
-  const hiddenCount = $derived(children ? 0 : folder.conversationCount - visibleCount);
+  const hiddenCount = $derived(children ? 0 : folder.conversations.length - visibleCount);
   const hasMore = $derived(hiddenCount > 0);
 
   function showMore() {
-    visibleCount = Math.min(visibleCount + PAGE_SIZE, folder.conversationCount);
+    visibleCount = Math.min(visibleCount + PAGE_SIZE, folder.conversations.length);
   }
 
   function isConvSelected(conv: { runs: { id: string }[] }): boolean {
@@ -230,6 +235,15 @@
             <span>{t("sidebar_newChatInFolder")}</span>
           </button>
         {/if}
+        {#each folder.rooms ?? [] as room (room.id)}
+          <RoomSidebarItem
+            {room}
+            {selectedRoomId}
+            {selectedRunId}
+            onSelectRoom={() => onSelectRoom?.(room.id)}
+            onSelectParticipant={(runId) => onSelectConversation?.(runId)}
+          />
+        {/each}
         {#each visibleConversations as conv (conv.groupKey)}
           <ConversationItem
             conversation={conv}

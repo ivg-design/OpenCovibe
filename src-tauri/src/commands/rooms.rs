@@ -1299,6 +1299,73 @@ pub fn list_room_agent_identities(
         .collect())
 }
 
+#[derive(serde::Serialize)]
+pub struct RoomSidebarEntry {
+    id: String,
+    title: String,
+    repo_path: String,
+    updated_at: String,
+    needs_answer: usize,
+    participants: Vec<RoomSidebarPeer>,
+}
+
+#[derive(serde::Serialize)]
+pub struct RoomSidebarPeer {
+    run_id: String,
+    participant_id: String,
+    name: String,
+    provider: String,
+    state: String,
+    color_index: usize,
+}
+
+#[tauri::command]
+pub async fn list_room_sidebar_entries(
+    store: State<'_, Arc<RoomStore>>,
+) -> Result<Vec<RoomSidebarEntry>, String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(store
+            .list()?
+            .into_iter()
+            .filter(|room| !room.archived)
+            .map(|room| {
+                let needs_answer = room
+                    .requests
+                    .iter()
+                    .filter(|request| {
+                        (request.status == "pending"
+                            && matches!(request.kind.as_str(), "agent" | "decision"))
+                            || (request.kind == "completion" && request.status == "verified")
+                    })
+                    .count();
+                RoomSidebarEntry {
+                    id: room.id,
+                    title: room.title,
+                    repo_path: room.repo_path,
+                    updated_at: room.updated_at,
+                    needs_answer,
+                    participants: room
+                        .participants
+                        .into_iter()
+                        .enumerate()
+                        .map(|(color_index, peer)| RoomSidebarPeer {
+                            run_id: peer.run_id,
+                            participant_id: peer.id,
+                            name: peer.name,
+                            provider: peer.provider,
+                            state: peer.state,
+                            color_index,
+                        })
+                        .collect(),
+                }
+            })
+            .collect())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 pub async fn get_room_clipboard_paths() -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(|| {

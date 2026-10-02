@@ -12,7 +12,6 @@
     participants,
     claims,
     disabled,
-    roomPaused,
     busyAction,
     onAction,
     onAdd,
@@ -21,7 +20,6 @@
     participants: RoomParticipant[];
     claims: { task_id: string; participant_id: string; state: string }[];
     disabled: boolean;
-    roomPaused: boolean;
     busyAction: string;
     onAction: (action: string, participant: RoomParticipant, message?: string) => void;
     onSave: (
@@ -93,8 +91,6 @@
     p.paused &&
     !p.pending_delivery &&
     !["busy", "running", "starting", "working", "waiting"].includes(p.state);
-
-  let wakeMessages = $state<Record<string, string>>({});
 
   function submit(event: SubmitEvent) {
     event.preventDefault();
@@ -255,19 +251,6 @@
             {disabled}
             onclick={() => editAgent(participant)}>{t("room_editAgentSettings")}</Button
           >
-          <a
-            class="inline-flex h-8 items-center rounded-md border px-3 text-xs hover:bg-accent"
-            href={`/chat?run=${encodeURIComponent(participant.run_id)}`}>{t("room_openSession")}</a
-          >
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={disabled ||
-              isActive ||
-              !participant.worktree_path ||
-              (!roomPaused && !participant.paused)}
-            onclick={() => onAction("merge", participant)}>{t("room_mergeWorktree")}</Button
-          >
           <Button
             size="sm"
             variant="outline"
@@ -290,46 +273,6 @@
         {#if !editable(participant)}<p class="text-xs text-muted-foreground">
             {t("room_pauseToEditAgent")}
           </p>{/if}
-        <form
-          class="flex flex-wrap gap-2"
-          onsubmit={(event) => {
-            event.preventDefault();
-            const message = wakeMessages[participant.id]?.trim();
-            if (message) {
-              onAction("wake", participant, message);
-              wakeMessages[participant.id] = "";
-            }
-          }}
-        >
-          <label class="min-w-0 flex-1"
-            ><span class="sr-only">{t("room_wakeMessageLabel", { name: participant.name })}</span
-            ><Input
-              class="w-full"
-              value={wakeMessages[participant.id] ?? ""}
-              oninput={(event) => {
-                wakeMessages[participant.id] = (event.currentTarget as HTMLInputElement).value;
-              }}
-              placeholder={t("room_wakeMessagePlaceholder")}
-            /></label
-          >
-          <Button size="sm" disabled={disabled || !wakeMessages[participant.id]?.trim()}
-            >{t("room_wake")}</Button
-          >
-        </form>
-        {#if claimsOwned.length > 0}<div class="space-y-1 border-t pt-2">
-            <p class="text-xs font-medium">{t("room_ownedClaims")}</p>
-            {#each claimsOwned as claim (claim.task_id)}<div
-                class="flex items-center justify-between gap-2 text-xs"
-              >
-                <span>{claim.task_id} · {claim.state}</span><Button
-                  size="sm"
-                  variant="outline"
-                  disabled={disabled || isActive || (!roomPaused && !participant.paused)}
-                  onclick={() => onAction(`release:${claim.task_id}`, participant)}
-                  >{t("room_releaseClaim")}</Button
-                >
-              </div>{/each}
-          </div>{/if}
       </Card>
     {/each}
   </div>

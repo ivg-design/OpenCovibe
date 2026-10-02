@@ -19,6 +19,8 @@
     uniqueComposerFiles,
   } from "$lib/utils/room-attachment-composer";
   import { resolveRoomMentionIds } from "$lib/utils/room-mentions";
+  import { textareaAutosize } from "$lib/utils/textarea-autosize";
+  import type { RoomParticipant } from "$lib/rooms/types";
   import { roomParticipantColor } from "$lib/utils/room-participant-colors";
   let {
     selected,
@@ -29,6 +31,7 @@
     activeSidechatId = $bindable(""),
     attachmentDrafts = $bindable<RoomAttachment[]>([]),
     onBranch,
+    onParticipantAction,
     submitMessage,
   }: {
     selected: Room;
@@ -38,13 +41,17 @@
     targetParticipantId?: string;
     activeSidechatId?: string;
     attachmentDrafts?: RoomAttachment[];
+    onParticipantAction: (action: string, participant: RoomParticipant) => void;
     onBranch: (sourceMessageId: string, title: string, participantIds: string[]) => Promise<void>;
     submitMessage: (event: SubmitEvent) => Promise<void>;
   } = $props();
   const tr: typeof t = t;
   let feed: HTMLDivElement | undefined;
-  let previousRoom = "";
-  let previousSidechat = "";
+  let previousFeedKey = "";
+  let followingLatest = true;
+  let latestHidden = $state(false);
+  let feedScrollTop = 0;
+  let feedFrame = 0;
   let branchSource = $state<RoomMessage | null>(null);
   let branchTitle = $state("");
   let branchParticipants = $state<string[]>([]);
@@ -56,6 +63,19 @@
   let conversationContext = $derived(`${selected.id}:${activeSidechatId}`);
   let previousContext = "";
   let composer: HTMLTextAreaElement | undefined;
+  let messageLimit = $state(50);
+  async function showEarlierMessages() {
+    if (!feed) return;
+    const height = feed.scrollHeight;
+    const top = feed.scrollTop;
+    followingLatest = false;
+    messageLimit += 100;
+    await tick();
+    if (feed) {
+      feed.scrollTop = top + feed.scrollHeight - height;
+      feedScrollTop = feed.scrollTop;
+    }
+  }
   let activeSidechat = $derived(
     selected.sidechats?.find((sidechat) => sidechat.id === activeSidechatId),
   );
@@ -65,6 +85,7 @@
   let visibleMessages = $derived(
     selected.messages.filter((message) => (message.sidechat_id ?? "") === activeSidechatId),
   );
+  let renderedMessages = $derived(visibleMessages.slice(-messageLimit));
   let visibleParticipants = $derived(
     selected.participants.filter(
       (participant) => !activeSidechat || activeSidechat.participant_ids.includes(participant.id),
@@ -131,24 +152,34 @@
       .slice(0, 80);
     branchParticipants = eligibleParticipants(message).map((participant) => participant.id);
   }
-  function autoGrow(node: HTMLTextAreaElement, _value: string) {
-    const resize = () => {
-      node.style.height = "auto";
-      const maxHeight = Math.min(window.innerHeight * 0.3, 200);
-      node.style.height = `${Math.min(node.scrollHeight + 2, maxHeight)}px`;
-      node.style.overflowY = node.scrollHeight > maxHeight ? "auto" : "hidden";
-    };
-    const observer = new ResizeObserver(resize);
-    if (node.parentElement) observer.observe(node.parentElement);
-    window.addEventListener("resize", resize);
-    node.addEventListener("input", resize);
-    queueMicrotask(resize);
+  function followFeed() {
+    if (feed) {
+      feed.scrollTop = feed.scrollHeight;
+      feedScrollTop = feed.scrollTop;
+    }
+    followingLatest = true;
+    latestHidden = false;
+  }
+  function trackFeedScroll() {
+    if (!feed) return;
+    feedScrollTop = feed.scrollTop;
+    followingLatest = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40;
+    if (followingLatest) latestHidden = false;
+  }
+  function keepFeedPosition(node: HTMLDivElement) {
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(feedFrame);
+      feedFrame = requestAnimationFrame(() => {
+        if (followingLatest) followFeed();
+        else node.scrollTop = feedScrollTop;
+      });
+    });
+    observer.observe(node);
+    if (node.firstElementChild) observer.observe(node.firstElementChild);
     return {
-      update: resize,
       destroy() {
         observer.disconnect();
-        window.removeEventListener("resize", resize);
-        node.removeEventListener("input", resize);
+        cancelAnimationFrame(feedFrame);
       },
     };
   }
@@ -157,6 +188,7 @@
     const context = conversationContext;
     if (previousContext && previousContext !== context) {
       contextGeneration++;
+      messageLimit = 50;
       attachmentDrafts = [];
       attachmentError = "";
       attachmentBusy = false;
@@ -376,193 +408,243 @@
     };
   });
   $effect(() => {
-    const roomId = selected.id;
-    const count = visibleMessages.length;
-    const sidechatId = activeSidechatId;
+    const context = conversationContext;
+    const key = `${context}:${visibleMessages.length}:${visibleMessages.at(-1)?.id ?? ""}`;
     untrack(() => {
-      const shouldScroll =
-        previousRoom !== roomId ||
-        previousSidechat !== sidechatId ||
-        !feed ||
-        feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
-      previousRoom = roomId;
-      previousSidechat = sidechatId;
-      if (shouldScroll)
-        void tick().then(() => {
-          if (feed) feed.scrollTop = feed.scrollHeight;
-        });
+      if (key === previousFeedKey) return; // A room poll is not a new message.
+      const changedContext = !previousFeedKey.startsWith(`${context}:`);
+      previousFeedKey = key;
+      if (changedContext) followingLatest = true;
+      if (followingLatest) void tick().then(followFeed);
+      else latestHidden = true;
     });
-    void count;
   });
 </script>
 
-<Card class="flex min-h-0 flex-1 flex-col overflow-hidden p-3"
-  ><div class="mb-2 flex shrink-0 flex-wrap items-center justify-between gap-3">
-    <label class="min-w-0 flex-1 text-sm">
-      <span class="sr-only">{tr("room_conversation")}</span>
-      <select
-        class="min-h-9 max-w-full rounded-md border bg-background px-3 text-sm"
-        bind:value={activeSidechatId}
-        onchange={() => {
-          targetParticipantId = humanMessage = "";
-          branchSource = null;
+<Card class="flex min-h-0 flex-1 flex-col overflow-hidden p-3">
+  <div class="max-h-[30%] shrink-0 overflow-y-auto overflow-x-hidden">
+    <div class="mb-2 flex shrink-0 flex-wrap items-center justify-between gap-3">
+      <label class="min-w-0 flex-1 text-sm">
+        <span class="sr-only">{tr("room_conversation")}</span>
+        {#if selected.sidechats?.length}
+          <select
+            class="min-h-9 max-w-full rounded-md border bg-background px-3 text-sm"
+            bind:value={activeSidechatId}
+            onchange={() => {
+              targetParticipantId = humanMessage = "";
+              branchSource = null;
+            }}
+          >
+            <option value="">{tr("room_groupChat")}</option>
+            {#each selected.sidechats ?? [] as sidechat (sidechat.id)}<option value={sidechat.id}
+                >{sidechat.title}</option
+              >{/each}
+          </select>
+        {:else}<span>{tr("room_groupChat")}</span>{/if}
+      </label>
+      <span class="text-xs text-muted-foreground">{visibleMessages.length}</span>
+    </div>
+    <div class="mb-2 flex shrink-0 flex-wrap gap-2" aria-label={tr("room_participants")}>
+      {#each visibleParticipants as participant (participant.id)}
+        <div
+          class="flex max-w-full min-w-0 items-center gap-1 rounded-md border px-2 py-1 text-xs"
+          style={`border-color: ${roomParticipantColor(selected.participants, participant.id)}`}
+        >
+          <a
+            class="min-w-0 break-words hover:underline"
+            href={`/chat?run=${encodeURIComponent(participant.run_id)}`}
+            title={tr("room_openSession")}
+            ><span
+              class="mr-1 inline-block h-2 w-2 rounded-full"
+              style={`background: ${roomParticipantColor(selected.participants, participant.id)}`}
+            ></span>{participant.name}</a
+          >
+          <span class="whitespace-nowrap text-muted-foreground"
+            >· {roomAgentStateLabel(participant.state)}</span
+          >
+          <button
+            type="button"
+            class="shrink-0 rounded px-1 hover:bg-accent"
+            disabled={actionsDisabled}
+            aria-label={`${participant.paused ? tr("room_resumeParticipant") : tr("room_pauseParticipant")}: ${participant.name}`}
+            title={participant.paused ? tr("room_resumeParticipant") : tr("room_pauseParticipant")}
+            onclick={() =>
+              onParticipantAction(
+                participant.paused ? "resume-participant" : "pause-participant",
+                participant,
+              )}>{participant.paused ? "▶" : "Ⅱ"}</button
+          >
+        </div>
+      {/each}
+      {#if selected.paused}<p class="w-full text-xs text-muted-foreground">
+          {tr("room_chatPausedCompact")}
+        </p>{/if}
+    </div>
+    {#if sourceMessage}<aside class="mb-2 shrink-0 rounded-md border bg-muted/30 p-3 text-xs">
+        <p class="font-medium">{tr("room_branchedFrom", { name: sourceMessage.sender })}</p>
+        <p class="mt-1 line-clamp-3 whitespace-pre-wrap text-muted-foreground">
+          {(
+            roomBriefing(sourceMessage.body)?.objective ??
+            readableProtocolOutput(sourceMessage.body)
+          ).slice(0, 600)}
+        </p>
+      </aside>{/if}
+    {#if branchSource}<form
+        class="mb-2 max-h-[35vh] shrink-0 space-y-3 overflow-y-auto rounded-md border p-3"
+        onsubmit={async (event) => {
+          event.preventDefault();
+          await onBranch(branchSource!.id, branchTitle, branchParticipants);
+          if (activeSidechatId !== (branchSource?.sidechat_id ?? "")) branchSource = null;
         }}
       >
-        <option value="">{tr("room_groupChat")}</option>
-        {#each selected.sidechats ?? [] as sidechat (sidechat.id)}<option value={sidechat.id}
-            >{sidechat.title}</option
-          >{/each}
-      </select>
-    </label>
-    <span class="text-xs text-muted-foreground">{visibleMessages.length}</span>
-  </div>
-  <div class="mb-2 flex shrink-0 flex-wrap gap-2" aria-label={tr("room_participants")}>
-    {#each visibleParticipants as participant (participant.id)}
-      <span class="max-w-full min-w-0 break-words rounded-full border bg-muted/40 px-3 py-1 text-xs"
-        >{participant.name} · {roomAgentStateLabel(participant.state)}</span
-      >
-    {/each}
-    {#if selected.paused}<p class="w-full text-xs text-muted-foreground">
-        {tr("room_chatPaused")}
-      </p>{/if}
-  </div>
-  {#if sourceMessage}<aside class="mb-2 shrink-0 rounded-md border bg-muted/30 p-3 text-xs">
-      <p class="font-medium">{tr("room_branchedFrom", { name: sourceMessage.sender })}</p>
-      <p class="mt-1 line-clamp-3 whitespace-pre-wrap text-muted-foreground">
-        {(
-          roomBriefing(sourceMessage.body)?.objective ?? readableProtocolOutput(sourceMessage.body)
-        ).slice(0, 600)}
-      </p>
-    </aside>{/if}
-  {#if branchSource}<form
-      class="mb-2 max-h-[35vh] shrink-0 space-y-3 overflow-y-auto rounded-md border p-3"
-      onsubmit={async (event) => {
-        event.preventDefault();
-        await onBranch(branchSource!.id, branchTitle, branchParticipants);
-        if (activeSidechatId !== (branchSource?.sidechat_id ?? "")) branchSource = null;
-      }}
-    >
-      <label class="block space-y-1 text-sm"
-        ><span>{tr("room_sidechatTitle")}</span><Input bind:value={branchTitle} /></label
-      >
-      <fieldset class="flex flex-wrap gap-3">
-        <legend class="mb-2 text-xs text-muted-foreground">{tr("room_participants")}</legend>
-        {#each branchEligibleParticipants as participant (participant.id)}<label
-            class="flex items-center gap-2 text-xs"
-            ><input type="checkbox" bind:group={branchParticipants} value={participant.id} /><span
-              class="min-w-0 break-words">{participant.name}</span
-            ></label
-          >{/each}
-      </fieldset>
-      <div class="flex flex-wrap gap-2">
-        <Button
-          loading={busyAction === "sidechat"}
-          disabled={actionsDisabled || !branchTitle.trim() || branchParticipants.length === 0}
-          >{tr("room_createSidechat")}</Button
-        ><Button
-          type="button"
-          variant="outline"
-          disabled={!!busyAction}
-          onclick={() => {
-            branchSource = null;
-          }}>{tr("common_cancel")}</Button
+        <label class="block space-y-1 text-sm"
+          ><span>{tr("room_sidechatTitle")}</span><Input bind:value={branchTitle} /></label
         >
-      </div>
-    </form>{/if}
-  <div class="mb-2 min-h-0 flex-1 space-y-2 overflow-y-auto overflow-x-hidden" bind:this={feed}>
-    {#if visibleMessages.length === 0}<p class="text-sm text-muted-foreground">
-        {tr("room_noMessages")}
-      </p>{/if}{#each visibleMessages as message (message.id)}{@const briefing = roomBriefing(
-        message.body,
-      )}{@const targetIds = (message as RoomMessage & { target_participant_ids?: string[] })
-        .target_participant_ids}
-      <article
-        class="room-message group {message.participant_id === null
-          ? 'room-message-sent'
-          : 'room-message-received'} min-w-0 rounded-xl border px-3 py-1.5"
-        style={`--room-sender-color: ${
-          message.participant_id
-            ? roomParticipantColor(selected.participants, message.participant_id)
-            : "hsl(var(--primary))"
-        }`}
-      >
-        <div
-          class="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"
-        >
-          <span class="flex min-w-0 items-center gap-1.5">
-            <span
-              class="h-2.5 w-2.5 shrink-0 rounded-full border-2 border-background"
-              style="background:var(--room-sender-color)"
-            ></span>
-            <span class="min-w-0 break-words font-medium text-foreground">{message.sender}</span>
-            {#if targetIds && targetIds.length > 1}
-              <span
-                >· {tr("room_directedMessages", {
-                  names: targetIds
-                    .map((id) => selected.participants.find((p) => p.id === id)?.name ?? id)
-                    .join(", "),
-                })}</span
-              >
-            {:else if targetIds && targetIds.length === 1}
-              <span
-                >· {tr("room_directedMessage", {
-                  name:
-                    selected.participants.find((p) => p.id === targetIds[0])?.name ?? targetIds[0],
-                })}</span
-              >
-            {:else if message.target_participant_id}
-              <span
-                >· {tr("room_directedMessage", {
-                  name:
-                    selected.participants.find((p) => p.id === message.target_participant_id)
-                      ?.name ?? message.target_participant_id,
-                })}</span
-              >
-            {/if}
-          </span>
-          <div class="flex shrink-0 items-center gap-1.5">
-            <time>{new Date(message.created_at).toLocaleString()}</time>
-            <button
-              type="button"
-              class="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
-              title={tr("room_branchSidechat")}
-              aria-label={tr("room_branchSidechat")}
-              disabled={actionsDisabled}
-              onclick={() => startBranch(message)}
-              ><svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-                ><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><circle
-                  cx="18"
-                  cy="6"
-                  r="3"
-                /><path d="M6 9v6M18 9a9 9 0 0 1-9 9" /></svg
-              ></button
-            >
-          </div>
-        </div>
-        {#if briefing}<RoomBriefing {briefing} />{:else}<div
-            class="prose-chat mt-1 min-w-0 break-words text-sm [overflow-wrap:anywhere]"
+        <fieldset class="flex flex-wrap gap-3">
+          <legend class="mb-2 text-xs text-muted-foreground">{tr("room_participants")}</legend>
+          {#each branchEligibleParticipants as participant (participant.id)}<label
+              class="flex items-center gap-2 text-xs"
+              ><input type="checkbox" bind:group={branchParticipants} value={participant.id} /><span
+                class="min-w-0 break-words">{participant.name}</span
+              ></label
+            >{/each}
+        </fieldset>
+        <div class="flex flex-wrap gap-2">
+          <Button
+            loading={busyAction === "sidechat"}
+            disabled={actionsDisabled || !branchTitle.trim() || branchParticipants.length === 0}
+            >{tr("room_createSidechat")}</Button
+          ><Button
+            type="button"
+            variant="outline"
+            disabled={!!busyAction}
+            onclick={() => {
+              branchSource = null;
+            }}>{tr("common_cancel")}</Button
           >
-            <MarkdownContent
-              text={readableProtocolOutput(message.body)}
-              basePath={selected.repo_path}
-            />
-          </div>{/if}
-        {#if message.attachments?.length}<div class="mt-2 flex min-w-0 flex-col gap-1.5">
-            {#each message.attachments as attachment (attachment.id)}
-              <RoomAttachmentView roomId={selected.id} {attachment} />
-            {/each}
-          </div>{/if}
-      </article>{/each}
+        </div>
+      </form>{/if}
   </div>
+  <div class="relative min-h-0 flex-1">
+    <div
+      class="h-full overflow-y-auto overflow-x-hidden"
+      style="overflow-anchor:none"
+      bind:this={feed}
+      onscroll={trackFeedScroll}
+      use:keepFeedPosition
+    >
+      <div class="space-y-2">
+        {#if visibleMessages.length > messageLimit}<button
+            type="button"
+            class="mb-2 block w-full rounded-md border px-3 py-2 text-xs hover:bg-accent"
+            onclick={() => void showEarlierMessages()}
+            >{tr("room_loadEarlier", {
+              count: String(visibleMessages.length - messageLimit),
+            })}</button
+          >{/if}
+        {#if visibleMessages.length === 0}<p class="text-sm text-muted-foreground">
+            {tr("room_noMessages")}
+          </p>{/if}{#each renderedMessages as message (message.id)}{@const briefing = roomBriefing(
+            message.body,
+          )}{@const targetIds = (message as RoomMessage & { target_participant_ids?: string[] })
+            .target_participant_ids}
+          <article
+            class="room-message group {message.participant_id === null
+              ? 'room-message-sent'
+              : 'room-message-received'} min-w-0 rounded-xl border px-3 py-1.5"
+            style={`--room-sender-color: ${
+              message.participant_id
+                ? roomParticipantColor(selected.participants, message.participant_id)
+                : "hsl(var(--primary))"
+            }`}
+          >
+            <div
+              class="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"
+            >
+              <span class="flex min-w-0 items-center gap-1.5">
+                <span
+                  class="h-2.5 w-2.5 shrink-0 rounded-full border-2 border-background"
+                  style="background:var(--room-sender-color)"
+                ></span>
+                <span class="min-w-0 break-words font-medium text-foreground">{message.sender}</span
+                >
+                {#if targetIds && targetIds.length > 1}
+                  <span
+                    >· {tr("room_directedMessages", {
+                      names: targetIds
+                        .map((id) => selected.participants.find((p) => p.id === id)?.name ?? id)
+                        .join(", "),
+                    })}</span
+                  >
+                {:else if targetIds && targetIds.length === 1}
+                  <span
+                    >· {tr("room_directedMessage", {
+                      name:
+                        selected.participants.find((p) => p.id === targetIds[0])?.name ??
+                        targetIds[0],
+                    })}</span
+                  >
+                {:else if message.target_participant_id}
+                  <span
+                    >· {tr("room_directedMessage", {
+                      name:
+                        selected.participants.find((p) => p.id === message.target_participant_id)
+                          ?.name ?? message.target_participant_id,
+                    })}</span
+                  >
+                {/if}
+              </span>
+              <div class="flex shrink-0 items-center gap-1.5">
+                <time>{new Date(message.created_at).toLocaleString()}</time>
+                <button
+                  type="button"
+                  class="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                  title={tr("room_branchSidechat")}
+                  aria-label={tr("room_branchSidechat")}
+                  disabled={actionsDisabled}
+                  onclick={() => startBranch(message)}
+                  ><svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                    ><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><circle
+                      cx="18"
+                      cy="6"
+                      r="3"
+                    /><path d="M6 9v6M18 9a9 9 0 0 1-9 9" /></svg
+                  ></button
+                >
+              </div>
+            </div>
+            {#if briefing}<RoomBriefing {briefing} />{:else}<div
+                class="prose-chat mt-1 min-w-0 break-words text-sm [overflow-wrap:anywhere]"
+              >
+                <MarkdownContent
+                  text={readableProtocolOutput(message.body)}
+                  basePath={selected.repo_path}
+                />
+              </div>{/if}
+            {#if message.attachments?.length}<div class="mt-2 flex min-w-0 flex-col gap-1.5">
+                {#each message.attachments as attachment (attachment.id)}
+                  <RoomAttachmentView roomId={selected.id} {attachment} />
+                {/each}
+              </div>{/if}
+          </article>{/each}
+      </div>
+    </div>
+    {#if latestHidden}<button
+        type="button"
+        class="absolute bottom-2 right-2 rounded-md border bg-background px-3 py-1.5 text-xs shadow-sm"
+        onclick={followFeed}>{tr("room_jumpLatest")}</button
+      >{/if}
+  </div>
+
   <form
     class="room-composer shrink-0 border-t pt-2"
     onsubmit={submitMessage}
@@ -609,7 +691,7 @@
         {/each}
       </div>{/if}
     <div class="room-composer-row min-w-0 items-end gap-2">
-      <label class="min-w-0 w-32 flex-none space-y-1 text-xs text-muted-foreground"
+      <label class="min-w-0 w-28 flex-none space-y-1 text-xs text-muted-foreground"
         ><span class="sr-only">{tr("room_target")}</span><select
           class="h-9 w-full min-w-[90px] rounded-md border bg-background px-2 text-sm text-foreground"
           bind:value={targetParticipantId}
@@ -622,9 +704,9 @@
         <label
           ><span class="sr-only">{tr("room_messagePlaceholder")}</span><textarea
             bind:this={composer}
-            use:autoGrow={humanMessage}
+            use:textareaAutosize={{ value: humanMessage, uncapped: true }}
             aria-label={tr("room_messagePlaceholder")}
-            class="block min-h-9 max-h-[min(30dvh,200px)] w-full min-w-0 resize-none overflow-y-hidden rounded-md border bg-background px-3 py-1.5 text-sm"
+            class="block min-h-9 w-full min-w-0 resize-none overflow-y-hidden rounded-md border bg-background px-3 py-1.5 text-sm"
             rows="1"
             wrap="soft"
             bind:value={humanMessage}
@@ -640,7 +722,7 @@
         type="button"
         variant="outline"
         size="sm"
-        class="min-h-9 shrink-0 whitespace-nowrap"
+        class="min-h-9 w-9 shrink-0 p-0"
         disabled={actionsDisabled || attachmentBusy || attachmentDrafts.length >= 8}
         onclick={() => void chooseAttachments()}
       >
@@ -662,15 +744,37 @@
               d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
             ></path></svg
           >{/if}
-        {tr("room_attachFiles")}
+        <span class="sr-only">{tr("room_attachFiles")}</span>
+        {#if !attachmentBusy}<svg
+            class="h-4 w-4"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            aria-hidden="true"
+            ><path
+              d="m21 11-8.5 8.5a6 6 0 0 1-8.5-8.5l9-9a4 4 0 0 1 5.7 5.7l-9 9a2 2 0 0 1-2.8-2.8l8.5-8.5"
+            /></svg
+          >{/if}
       </Button>
       <Button
         size="sm"
-        class="min-h-9 min-w-[90px] shrink-0 whitespace-nowrap"
+        class="room-send min-h-9 shrink-0 whitespace-nowrap"
         disabled={(!humanMessage.trim() && !attachmentDrafts.length) ||
           actionsDisabled ||
           attachmentBusy}
-        loading={busyAction === "message"}>{tr("room_sendMessage")}</Button
+        loading={busyAction === "message"}
+        ><span class="sr-only">{tr("room_sendMessage")}</span><span
+          class="room-send-label"
+          aria-hidden="true">{tr("room_sendMessage")}</span
+        ><svg
+          class="room-send-icon h-4 w-4"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          aria-hidden="true"><path d="m22 2-7 20-4-9-9-4 20-7Z" /><path d="m22 2-11 11" /></svg
+        ></Button
       >
     </div>
   </form></Card
@@ -682,25 +786,29 @@
     container-name: room-composer;
   }
   .room-composer-row {
-    display: grid;
-    grid-template-columns: 8rem minmax(0, 1fr) max-content max-content;
+    display: flex;
+    flex-wrap: wrap;
   }
-  @container room-composer (max-width: 42rem) {
-    .room-composer-row {
-      grid-template-columns: minmax(0, 1fr) max-content max-content;
-    }
-    .room-composer-text {
-      grid-column: 1 / -1;
-      grid-row: 1;
-    }
+  .room-composer-text {
+    order: -1;
+    flex-basis: 100%;
   }
-  @container room-composer (max-width: 28rem) {
-    .room-composer-row {
-      grid-template-columns: minmax(0, 1fr) max-content;
+  .room-composer-row > label {
+    max-width: 100%;
+  }
+  .room-send-icon {
+    display: none;
+  }
+  @container room-composer (max-width: 20rem) {
+    .room-send-label {
+      display: none;
     }
-    .room-composer-row > label {
-      grid-column: 1 / -1;
-      width: 100%;
+    .room-send-icon {
+      display: block;
+    }
+    .room-composer-row :global(.room-send) {
+      width: 2.25rem;
+      padding-inline: 0;
     }
   }
   .room-message {

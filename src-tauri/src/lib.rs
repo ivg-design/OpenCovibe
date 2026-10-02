@@ -173,6 +173,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::rooms::list_rooms,
             commands::rooms::list_room_agent_identities,
+            commands::rooms::list_room_sidebar_entries,
             commands::rooms::get_room,
             commands::rooms::get_room_run_settings,
             commands::rooms::resolve_room_request,

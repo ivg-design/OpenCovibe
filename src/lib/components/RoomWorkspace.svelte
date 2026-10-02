@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { goto } from "$app/navigation";
   import { page } from "$app/stores";
   import Button from "$lib/components/Button.svelte";
   import Card from "$lib/components/Card.svelte";
@@ -123,6 +124,11 @@
       repositoryRequest++;
       if (repositoryTimer) clearTimeout(repositoryTimer);
     };
+  });
+  $effect(() => {
+    const requested = $page.url.searchParams.get("room");
+    if (ready && desktop && requested && selected && requested !== selected.id)
+      void selectRoom(requested);
   });
   async function initialize() {
     const sourceId = $page.url.searchParams.get("fromSession");
@@ -692,10 +698,14 @@
                 {#if selected.origin}<a
                     class="text-primary underline underline-offset-4"
                     href={`/chat?run=${encodeURIComponent(selected.origin.run_id)}`}
-                    >{tr("room_originalConversation")}</a
+                    title={tr("room_sourceSessionHelp")}>{tr("room_originalConversation")}</a
                   >{/if}
-                <a class="text-muted-foreground underline underline-offset-4" href="/rooms/settings"
-                  >{tr("room_settings")}</a
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onclick={() =>
+                    void goto(`/rooms/settings?room=${encodeURIComponent(selected!.id)}`)}
+                  >{tr("room_settings")}</Button
                 >
                 <Button
                   size="sm"
@@ -732,7 +742,7 @@
                     {selected.repository}{#if !boardOnly}
                       · {selected.repo_path}{/if}
                   </p>
-                  {#if selected.origin}<p class="mt-2 text-xs text-muted-foreground">
+                  {#if selected.origin && boardOnly}<p class="mt-2 text-xs text-muted-foreground">
                       {#if boardOnly || settingsOnly}{tr("room_startingConversation", {
                           count: String(selected.origin.message_count),
                         })}{/if}
@@ -902,19 +912,11 @@
           {#if settingsOnly}<RoomParticipants
               participants={selected.participants}
               claims={selected.claims}
-              roomPaused={selected.paused}
               disabled={actionsDisabled}
               {busyAction}
               onAction={participantAction}
               onAdd={addParticipant}
               onSave={saveParticipantSettings}
-            />
-            <RoomRequests
-              room={selected}
-              disabled={actionsDisabled}
-              {busyAction}
-              onResolve={resolveRequest}
-              onApproveAgent={approveAgentRequest}
             />
             <RoomTimers
               timers={selected.timers}
@@ -936,19 +938,31 @@
               {tr("room_boardNeedsProject")}
             </p>{/if}
           {#if !boardOnly && !settingsOnly}
-            <RoomConversation
-              {selected}
-              {actionsDisabled}
-              {busyAction}
-              bind:humanMessage
-              bind:targetParticipantId
-              bind:activeSidechatId
-              bind:attachmentDrafts
-              onBranch={branchMessage}
-              {submitMessage}
-            />
+            <div class="room-chat-layout min-h-0 min-w-0 flex-1">
+              <div class="flex min-h-0 min-w-0 flex-col overflow-hidden">
+                <RoomConversation
+                  {selected}
+                  {actionsDisabled}
+                  {busyAction}
+                  bind:humanMessage
+                  bind:targetParticipantId
+                  bind:activeSidechatId
+                  bind:attachmentDrafts
+                  onBranch={branchMessage}
+                  {submitMessage}
+                  onParticipantAction={participantAction}
+                />
+              </div>
+              {#key selected.id}<RoomRequests
+                  room={selected}
+                  disabled={actionsDisabled}
+                  {busyAction}
+                  onResolve={resolveRequest}
+                  onApproveAgent={approveAgentRequest}
+                />{/key}
+            </div>
           {/if}
-          {#if settingsOnly && selected.claims.length > 0}<Card class="p-4"
+          {#if boardOnly && selected.claims.length > 0}<Card class="p-4"
               ><h2 class="mb-3 text-base font-semibold">{tr("room_claims")}</h2>
               <div class="space-y-2">
                 {#each selected.claims as claim (claim.task_id)}{@const owner =
@@ -983,6 +997,30 @@
                   </div>{/each}
               </div></Card
             >{/if}
+          {#if boardOnly && selected.participants.some((p) => p.worktree_path)}
+            <details class="rounded-lg border p-3">
+              <summary class="cursor-pointer text-sm font-medium">{tr("room_workspaces")}</summary>
+              <div class="mt-3 space-y-2">
+                {#each selected.participants.filter((p) => p.worktree_path) as participant (participant.id)}
+                  <div class="flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs">
+                    <span class="min-w-0 break-words"
+                      >{participant.name} · {participant.branch}</span
+                    >
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={actionsDisabled ||
+                        !!participant.pending_delivery ||
+                        ["busy", "running", "starting", "working"].includes(participant.state) ||
+                        (!selected.paused && !participant.paused)}
+                      onclick={() => participantAction("merge", participant)}
+                      >{tr("room_mergeWorktree")}</Button
+                    >
+                  </div>
+                {/each}
+              </div>
+            </details>
+          {/if}
         {:else if !loadingList}<Card variant="subtle" class="p-6 text-sm text-muted-foreground"
             >{tr("room_selectOrCreate")}</Card
           >{/if}
@@ -990,3 +1028,21 @@
     </div>
   {/if}
 </main>
+
+<style>
+  .room-content {
+    container-type: inline-size;
+  }
+  .room-chat-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 0.5rem;
+  }
+  @container (min-width: 30rem) {
+    .room-chat-layout {
+      grid-template-columns: minmax(0, 1fr) clamp(14rem, 32%, 26rem);
+      grid-template-rows: minmax(0, 1fr);
+    }
+  }
+</style>

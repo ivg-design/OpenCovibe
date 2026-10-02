@@ -83,6 +83,7 @@
   import ReleaseNotesCard from "$lib/components/ReleaseNotesCard.svelte";
   import { t } from "$lib/i18n/index.svelte";
   import { dbg, dbgWarn } from "$lib/utils/debug";
+  import { IS_WEBKIT } from "$lib/utils/platform";
   import { yieldToMain } from "$lib/utils/yield";
   import {
     getLastTarget,
@@ -433,7 +434,9 @@
   let renderLimit = $state(INITIAL_RENDER_LIMIT);
   let progressiveGen = 0; // generation counter for stale-callback protection
   let loadingMore = $state(false);
-  let loadMoreArmed = $state(true); // throttle: re-armed by handleChatScroll
+  let positioningRun = $state(false);
+  let lastChatScrollTop = 0;
+  let loadMoreArmed = $state(false); // throttle: re-armed by handleChatScroll
   let _suppressLoadMoreRearm = false; // raised during programmatic scrollTop adjustment
 
   async function syncVerboseState(runId: string | undefined) {
@@ -925,7 +928,7 @@
    * by the delta.
    */
   async function loadMoreEarlier() {
-    if (loadingMore || !loadMoreArmed) return;
+    if (positioningRun || loadingMore || !loadMoreArmed) return;
     loadingMore = true;
     loadMoreArmed = false; // re-armed by handleChatScroll on next user scroll
     _suppressLoadMoreRearm = true;
@@ -1010,7 +1013,8 @@
     // an anchor jump) doesn't leak into the new run.
     renderLimit = INITIAL_RENDER_LIMIT;
     loadingMore = false;
-    loadMoreArmed = true;
+    loadMoreArmed = false;
+    positioningRun = true;
     const gen = nextProgressiveGen();
 
     // Capture scrollTo BEFORE loadRun — URL may change during async load
@@ -1065,12 +1069,16 @@
       clean.searchParams.delete("scrollTo");
       replaceState(clean, {});
     } else {
-      // Scroll to bottom after DOM update — ensures content-visibility triggers re-layout
       await tick();
-      requestAnimationFrame(() => {
-        if (chatAreaRef) chatAreaRef.scrollTop = chatAreaRef.scrollHeight;
-      });
+      if (gen !== progressiveGen) return;
+      if (chatAreaRef) {
+        chatAreaRef.scrollTop = chatAreaRef.scrollHeight;
+        lastChatScrollTop = chatAreaRef.scrollTop;
+      }
+      isChatAutoScroll = true;
+      showChatScrollHint = false;
     }
+    if (gen === progressiveGen) positioningRun = false;
   }
 
   let welcomeVisible = $derived(
@@ -2040,7 +2048,7 @@
   let prevSt = 0;
 
   $effect(() => {
-    if (store.useStreamSession && chatAreaRef) {
+    if (store.useStreamSession && chatAreaRef && !positioningRun) {
       const tl = store.timeline.length;
       const st = store.streamingText.length;
       const _rid = store.run?.id;
@@ -2049,7 +2057,7 @@
       prevSt = st;
       if (isChatAutoScroll) {
         requestAnimationFrame(() => {
-          if (chatAreaRef) chatAreaRef.scrollTop = chatAreaRef.scrollHeight;
+          if (!positioningRun && chatAreaRef) chatAreaRef.scrollTop = chatAreaRef.scrollHeight;
         });
       } else if (changed) {
         showChatScrollHint = true;
@@ -2141,7 +2149,9 @@
   const SCROLL_BOTTOM_THRESHOLD = 40;
 
   function handleChatScroll() {
-    if (!chatAreaRef) return;
+    if (!chatAreaRef || positioningRun) return;
+    const movedUp = chatAreaRef.scrollTop < lastChatScrollTop;
+    lastChatScrollTop = chatAreaRef.scrollTop;
     const dist = chatAreaRef.scrollHeight - chatAreaRef.scrollTop - chatAreaRef.clientHeight;
     isChatAutoScroll = dist < SCROLL_BOTTOM_THRESHOLD;
     if (isChatAutoScroll) showChatScrollHint = false;
@@ -2150,7 +2160,7 @@
     // sentinel remains in view after a prepend. Programmatic scrollTop adjustments
     // (loadMoreEarlier's anchor compensation) raise `_suppressLoadMoreRearm` so the
     // anchor-correction scroll doesn't immediately re-arm the observer.
-    if (!loadMoreArmed && !_suppressLoadMoreRearm) loadMoreArmed = true;
+    if (movedUp && !_suppressLoadMoreRearm) loadMoreArmed = true;
     const hasEarlier = filteredTimeline.length > renderLimit || store.historyHasMore;
     if (loadMoreArmed && !loadingMore && hasEarlier && chatAreaRef.scrollTop <= 200) {
       void loadMoreEarlier();
@@ -4922,11 +4932,17 @@
 
     <!-- Main area -->
     <div class="flex-1 overflow-hidden relative">
+      {#if positioningRun}<div
+          class="absolute inset-0 z-10 flex items-center justify-center text-sm text-muted-foreground"
+          role="status"
+        >
+          {t("room_loadingLatest")}
+        </div>{/if}
       {#if store.useChatTimeline}
         <!-- API / Codex bus-events mode: chat messages -->
         <div
           class="h-full overflow-y-auto"
-          style="overflow-anchor:none"
+          style={`overflow-anchor:none;visibility:${positioningRun ? "hidden" : "visible"}`}
           bind:this={chatAreaRef}
           onscroll={handleChatScroll}
         >
@@ -5101,7 +5117,7 @@
                   <div
                     id="msg-{entry.anchorId}"
                     data-entry-id={entry.id}
-                    class:cv-auto={true}
+                    class:cv-auto={!IS_WEBKIT}
                     class="group/msg"
                     class:opacity-40={lastClearSepId !== null &&
                       (timelineIdIndex.get(entry.id) ?? 0) <
