@@ -8,6 +8,7 @@
   } from "$lib/rooms/requests";
   import { goto } from "$app/navigation";
   import { page } from "$app/stores";
+  import { visibleRooms, revealRoom, roomVisibilityEvent } from "$lib/rooms/visibility";
   import Button from "$lib/components/Button.svelte";
   import Card from "$lib/components/Card.svelte";
   import Input from "$lib/components/Input.svelte";
@@ -43,6 +44,7 @@
     removeRoomTimer,
     saveRoomTimer,
     saveRoomInstructions,
+    saveRoomTitle,
     setRoomAutoContinue,
     setRoomConcurrency,
     setRoomPaused,
@@ -73,6 +75,8 @@
   let sourceFailure = $state("");
   let setupRequest = 0;
   let previousRouteKey = "";
+  let visibilityRevision = $state(0);
+  let showHiddenRooms = $state(false);
   let sourceProjectId = $state("");
   const selectedRoomStorageKey = "opencovibe:selected-room";
   function storedSelection(): string | null {
@@ -94,6 +98,13 @@
     ready = $state(false),
     rooms = $state<Room[]>([]),
     selected = $state<Room | null>(null);
+  const activeRooms = $derived.by(() => {
+    void visibilityRevision;
+    return visibleRooms(rooms);
+  });
+  const hiddenRooms = $derived(
+    rooms.filter((room) => !room.archived && !activeRooms.some((r) => r.id === room.id)),
+  );
   let loadingList = $state(false),
     loadingRoom = $state(false),
     busyAction = $state(""),
@@ -189,6 +200,9 @@
   let editingInstructions = $state(false),
     instructionsDraft = $state(""),
     instructionsOriginal = $state("");
+  let editingTitle = $state(false),
+    titleDraft = $state(""),
+    titleOriginal = $state("");
   let actionsDisabled = $derived(
     loadingRoom || !!busyAction || creating || !selected || selected.archived,
   );
@@ -196,10 +210,23 @@
   onMount(() => {
     desktop = getTransport().isDesktop();
     ready = true;
+    const visibilityChanged = () => {
+      visibilityRevision++;
+      if (selected && !visibleRooms([selected]).length) {
+        generation++;
+        pollGeneration++;
+        selected = null;
+        notice = "";
+        saveSelection(null);
+        error = tr("room_unavailableSelection");
+      }
+    };
+    window.addEventListener(roomVisibilityEvent, visibilityChanged);
 
     const timer = window.setInterval(() => void pollSelected(), 2000);
     return () => {
       window.clearInterval(timer);
+      window.removeEventListener(roomVisibilityEvent, visibilityChanged);
       generation++;
       setupRequest++;
       repositoryRequest++;
@@ -220,11 +247,18 @@
       loadingSource = false;
       sourceSession = null;
       showCreate = false;
-      void loadRooms(requested ?? storedSelection());
+      if (requested && selected?.id !== requested) {
+        selected = null;
+        notice = "";
+        generation++;
+        pollGeneration++;
+      }
+      untrack(() => void loadRooms(requested, true));
     }
   });
   async function initializeSource(sourceId: string) {
     const request = ++setupRequest;
+    listGeneration++;
     generation++;
     pollGeneration++;
     repositoryRequest++;
@@ -239,8 +273,9 @@
     sourceProjectId = "";
     createProject = false;
     try {
-      const seed = await getRoomSessionSeed(sourceId);
+      const [seed, savedRooms] = await Promise.all([getRoomSessionSeed(sourceId), listRooms()]);
       if (request !== setupRequest) return;
+      rooms = savedRooms;
       sourceSession = seed;
       title = seed.title;
       objective = seed.objective;
@@ -274,6 +309,7 @@
     error = "";
     try {
       if (restore) await attachRoomChat(match.id, seed.run_id, match.participant_name);
+      revealRoom(match, await listRooms());
       await goto(`/rooms?room=${encodeURIComponent(match.id)}`);
     } catch (cause) {
       error = String(cause);
@@ -350,21 +386,37 @@
     repository =
       repoInspection?.repositories.find((item) => item.remote === remote)?.repository ?? "";
   }
-  async function loadRooms(preferredRoomId: string | null = null) {
+  async function loadRooms(preferredRoomId: string | null = null, navigate = false) {
     if (!desktop) return;
     const request = ++listGeneration;
+    const selectionRequest = generation;
     loadingList = true;
     error = "";
     try {
       const result = await listRooms();
-      if (request !== listGeneration) return;
+      if (request !== listGeneration || selectionRequest !== generation || showCreate || creating)
+        return;
       rooms = result;
+      const available = visibleRooms(result);
+      // An explicit URL must never silently open a different room.
+      if (preferredRoomId && !available.some((room) => room.id === preferredRoomId)) {
+        selected = null;
+        notice = "";
+        error = tr("room_unavailableSelection");
+        return;
+      }
+      const saved = storedSelection();
       const roomId =
-        (preferredRoomId && result.some((r) => r.id === preferredRoomId)
-          ? preferredRoomId
-          : null) ??
-        (selected && result.some((r) => r.id === selected?.id) ? selected.id : null) ??
-        result[0]?.id;
+        preferredRoomId ??
+        available.find((room) => room.id === selected?.id)?.id ??
+        available.find((room) => room.id === saved)?.id ??
+        available[0]?.id;
+      if (navigate && roomId && $page.url.searchParams.get("room") !== roomId) {
+        await goto(`${$page.url.pathname}?room=${encodeURIComponent(roomId)}`, {
+          replaceState: true,
+        });
+        return;
+      }
       if (roomId && roomId !== selected?.id) await selectRoom(roomId);
       else if (!roomId) {
         selected = null;
@@ -395,6 +447,8 @@
     }
   }
   async function selectRoom(id: string) {
+    notice = "";
+    editingTitle = false;
     editingInstructions = false;
     activeSidechatId = "";
     targetParticipantId = "";
@@ -486,6 +540,8 @@
       create_project: createProject,
     };
     const request = ++generation;
+    listGeneration++;
+    pollGeneration++;
     creating = true;
     error = "";
     const fromSource = !!sourceSession;
@@ -494,6 +550,7 @@
         ? await createRoomFromSession(sourceSession.run_id, input, sourceProjectId || null)
         : await createRoom(input);
       if (request !== generation) return;
+      revealRoom(room, rooms);
       rooms = [room, ...rooms.filter((r) => r.id !== room.id)];
       selected = room;
       saveSelection(room.id);
@@ -506,6 +563,7 @@
       inspectingRepository = false;
       createProject = true;
       sourceSession = null;
+      sourceRunId = "";
       sourceProjectId = "";
       notice = fromSource
         ? tr("room_createdDestination", { title: room.title })
@@ -619,7 +677,7 @@
     if (selected?.id === id && selected.archived) {
       selected = null;
       saveSelection(null);
-      await loadRooms();
+      await loadRooms(null, true);
       notice = tr("room_archived");
     }
   }
@@ -634,15 +692,18 @@
 >
 <main class="room-workspace flex h-full min-h-0 min-w-0 w-full flex-col overflow-hidden p-4">
   <header class="flex shrink-0 flex-wrap items-center justify-between gap-2">
-    {#if selected}<label class="min-w-0 flex-1">
+    {#if selected}<label class="min-w-0 w-full basis-full">
         <span class="sr-only">{tr("room_savedRooms")}</span>
         <select
           class="min-h-9 w-full rounded-md border bg-background px-2 text-sm"
           value={selected.id}
           disabled={!!busyAction || loadingRoom || showCreate}
-          onchange={(event) => void selectRoom(event.currentTarget.value)}
+          onchange={(event) =>
+            void goto(
+              `${$page.url.pathname}?room=${encodeURIComponent(event.currentTarget.value)}`,
+            )}
         >
-          {#each rooms as room (room.id)}<option value={room.id}>{room.title}</option>{/each}
+          {#each activeRooms as room (room.id)}<option value={room.id}>{room.title}</option>{/each}
         </select>
       </label>{/if}
     <div class={selected && !settingsOnly ? "sr-only" : ""}>
@@ -660,6 +721,12 @@
       </p>
     </div>
     {#if desktop}<div class="flex flex-wrap gap-2">
+        {#if hiddenRooms.length}<Button
+            size="sm"
+            variant="outline"
+            onclick={() => (showHiddenRooms = !showHiddenRooms)}
+            >{tr("room_hiddenRooms", { count: String(hiddenRooms.length) })}</Button
+          >{/if}
         <Button
           size="sm"
           variant="outline"
@@ -672,6 +739,10 @@
             onclick={() => {
               if (showCreate) cancelSetup();
               else {
+                listGeneration++;
+                generation++;
+                pollGeneration++;
+                notice = "";
                 title = objective = repoPath = repository = "";
                 sourceSession = null;
                 repoInspection = null;
@@ -707,6 +778,23 @@
           >
             {notice}
           </div>{/if}
+        {#if showHiddenRooms && !showCreate}<Card class="p-3 space-y-2">
+            <p class="text-xs text-muted-foreground">{tr("room_hiddenRoomsHelp")}</p>
+            {#each hiddenRooms as room (room.id)}<div
+                class="flex flex-wrap items-center justify-between gap-2 text-sm"
+              >
+                <span>{room.title}</span><Button
+                  size="sm"
+                  variant="outline"
+                  onclick={() => {
+                    revealRoom(room, rooms);
+                    showHiddenRooms = false;
+                    void selectRoom(room.id);
+                    void goto(`/rooms?room=${encodeURIComponent(room.id)}`);
+                  }}>{tr("room_showRoom")}</Button
+                >
+              </div>{/each}
+          </Card>{/if}
         {#if showCreate}<Card class="p-4 md:p-5"
             ><h2 class="mb-4 text-base font-semibold">
               {tr(sourceRunId ? "room_fromSession" : "room_createTitle")}
@@ -772,9 +860,21 @@
                   </div>
                 </div>
               {:else}
-                <form class="grid gap-3 md:grid-cols-2" onsubmit={submitCreate}>
-                  <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
-                    ><span>{tr("room_titleLabel")}</span><Input bind:value={title} /></label
+                <!-- Prevent implicit Enter submission while retaining native keyboard controls. -->
+                <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+                <form
+                  class="grid gap-3 md:grid-cols-2"
+                  onsubmit={submitCreate}
+                  onkeydown={(event) => {
+                    if (event.key === "Enter" && event.target instanceof HTMLInputElement)
+                      event.preventDefault();
+                  }}
+                >
+                  <label class="min-w-0 space-y-1 text-xs text-muted-foreground md:col-span-2"
+                    ><span>{tr("room_titleLabel")}</span><Input
+                      bind:value={title}
+                      disabled={creating}
+                    /></label
                   >
                   <div class="min-w-0 space-y-2 text-xs text-muted-foreground md:col-span-2">
                     <span class="block">{tr("room_repoPathLabel")}</span>
@@ -911,6 +1011,7 @@
                         })}
                       </p>{/if}
                     <Button
+                      type="submit"
                       loading={creating}
                       disabled={inspectingRepository ||
                         repositoryFolderError ||
@@ -1021,6 +1122,41 @@
                   </div>{/if}
               </div>
               {#if settingsOnly}
+                <div class="mt-3">
+                  {#if editingTitle}<form
+                      class="space-y-2"
+                      onsubmit={async (event) => {
+                        event.preventDefault();
+                        await perform("title", (id) =>
+                          saveRoomTitle(id, titleDraft, titleOriginal),
+                        );
+                        if (!error) editingTitle = false;
+                      }}
+                    >
+                      <label class="block text-sm space-y-1"
+                        ><span>{tr("room_titleLabel")}</span><Input
+                          bind:value={titleDraft}
+                          disabled={!!busyAction}
+                        /></label
+                      >
+                      <div class="flex flex-wrap gap-2">
+                        <Button type="submit" disabled={actionsDisabled || !titleDraft.trim()}
+                          >{tr("room_saveName")}</Button
+                        ><Button
+                          type="button"
+                          variant="outline"
+                          onclick={() => (editingTitle = false)}>{tr("common_cancel")}</Button
+                        >
+                      </div>
+                    </form>{:else}<Button
+                      variant="outline"
+                      disabled={actionsDisabled}
+                      onclick={() => {
+                        titleDraft = titleOriginal = selected!.title;
+                        editingTitle = true;
+                      }}>{tr("room_rename")}</Button
+                    >{/if}
+                </div>
                 <div class="mt-4 border-t pt-4">
                   {#if editingInstructions}
                     <form

@@ -431,7 +431,7 @@
   "sidebar_deleteOk": "删除",
   "sidebar_removeProject": "移除项目",
   "sidebar_removeProjectConfirm": "移除项目文件夹",
-  "sidebar_removeProjectDesc": "该项目将从侧边栏移除，数据保留在磁盘上。通过“打开文件夹”可重新添加。",
+  "sidebar_removeProjectDesc": "此操作会从侧边栏和房间选择器中隐藏项目及其房间。数据仍保留在磁盘上，可通过隐藏的房间或打开文件夹恢复。",
   "statusbar_toggleSidebar": "切换侧边栏 (Ctrl+B)",
   "statusbar_contextTitle": "最新轮次的上下文使用量（{pct}%，共 {tokens} 个 token）。接近限制时 CLI 会自动压缩上下文。",
   "statusbar_ctx": "上下文 {pct}%",
@@ -2083,5 +2083,12 @@
   "room_chooseSourceRepository": "已保存目录不是 Git 仓库。请选择房间的项目仓库。",
   "room_roomDestination": "在 {folder} 中创建“{title}”。原智能体将暂停加入；导入的聊天成为房间成员条目。",
   "room_createFromSourceAction": "使用此智能体创建房间",
-  "room_createdDestination": "房间“{title}”已就绪。原智能体已暂停；可以添加智能体或准备好后恢复。"
+  "room_createdDestination": "房间“{title}”已就绪。原智能体已暂停；可以添加智能体或准备好后恢复。",
+  "room_unavailableSelection": "此房间已隐藏或归档。可在隐藏的房间中恢复，或选择其他房间。",
+  "room_hiddenRooms": "隐藏的房间 · {count}",
+  "room_hiddenRoomsHelp": "从侧边栏移除的房间仍保存在本地。请仅恢复需要再次显示的房间。",
+  "room_showRoom": "恢复到侧边栏",
+  "room_rename": "重命名房间",
+  "room_saveName": "保存名称",
+  "sidebar_removeFromSidebar": "从侧边栏移除"
 }

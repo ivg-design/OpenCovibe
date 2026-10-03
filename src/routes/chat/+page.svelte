@@ -3545,7 +3545,7 @@
     } else if (action === "open-feedback") {
       // Source-of-truth: matches package.json `bugs.url`. If the repo URL ever
       // changes, update both this constant AND package.json.
-      const url = "https://github.com/AnyiWang/OpenCovibe/issues";
+      const url = "https://github.com/ivg-design/OpenCovibe/issues";
       dbg("chat", "open-feedback", { url });
       try {
         const { open } = await import("@tauri-apps/plugin-shell");

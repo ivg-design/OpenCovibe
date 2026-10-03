@@ -1,16 +1,16 @@
 {
   "name": "opencovibe",
-  "version": "0.2.9",
+  "version": "0.3.0",
   "description": "Local-first desktop app for AI-assisted vibe coding",
   "type": "module",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/AnyiWang/OpenCovibe",
+  "homepage": "https://github.com/ivg-design/OpenCovibe",
   "repository": {
     "type": "git",
-    "url": "https://github.com/AnyiWang/OpenCovibe.git"
+    "url": "https://github.com/ivg-design/OpenCovibe.git"
   },
   "bugs": {
-    "url": "https://github.com/AnyiWang/OpenCovibe/issues"
+    "url": "https://github.com/ivg-design/OpenCovibe/issues"
   },
   "engines": {
     "node": ">=20"

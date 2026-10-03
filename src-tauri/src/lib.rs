@@ -207,6 +207,7 @@ pub fn run() {
             commands::rooms::set_room_auto_continue,
             commands::rooms::set_room_concurrency,
             commands::rooms::save_room_instructions,
+            commands::rooms::save_room_title,
             commands::rooms::attach_room_project,
             commands::rooms::archive_room,
             commands::rooms::release_room_claim,

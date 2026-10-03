@@ -1,15 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { checkForUpdates } from "$lib/api";
   import { renderMarkdown } from "$lib/utils/markdown";
-  import { currentLocale, t } from "$lib/i18n/index.svelte";
-  import readmeEn from "../../../README.md?raw";
-  import readmeZhCN from "../../../README.zh-CN.md?raw";
+  import forkReadme from "../../../docs/FORK.md?raw";
 
   let { open = $bindable(false) }: { open: boolean } = $props();
 
   let appVersion = $state("");
-  let checkingUpdate = $state(false);
   onMount(async () => {
     try {
       const { getVersion } = await import("@tauri-apps/api/app");
@@ -30,12 +26,7 @@
       .trim();
   }
 
-  const readmeHtmlMap: Record<string, string> = {
-    en: processReadme(renderMarkdown(readmeEn)),
-    "zh-CN": processReadme(renderMarkdown(readmeZhCN)),
-  };
-
-  let readmeHtml = $derived(readmeHtmlMap[currentLocale()] ?? readmeHtmlMap.en);
+  const readmeHtml = processReadme(renderMarkdown(forkReadme));
 
   function handleBackdropClick(e: MouseEvent) {
     if (e.target === e.currentTarget) open = false;
@@ -43,38 +34,6 @@
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") open = false;
-  }
-
-  async function updateToLatest() {
-    if (checkingUpdate) return;
-    checkingUpdate = true;
-    try {
-      const info = await checkForUpdates();
-      if (!info.latestVersion) {
-        window.alert(t("appUpdate_checkFailed"));
-        return;
-      }
-      if (!info.hasUpdate) {
-        window.alert(
-          t("appUpdate_upToDate", { version: info.currentVersion || appVersion || "-" }),
-        );
-        return;
-      }
-      if (!info.downloadUrl) {
-        window.alert(t("appUpdate_checkFailed"));
-        return;
-      }
-      try {
-        const { open } = await import("@tauri-apps/plugin-shell");
-        await open(info.downloadUrl);
-      } catch {
-        window.open(info.downloadUrl, "_blank");
-      }
-    } catch {
-      window.alert(t("appUpdate_checkFailed"));
-    } finally {
-      checkingUpdate = false;
-    }
   }
 </script>
 
@@ -95,13 +54,7 @@
           <span class="text-xs text-muted-foreground"
             >{appVersion ? `OpenCovibe v${appVersion}` : ""}</span
           >
-          <button
-            class="rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
-            onclick={updateToLatest}
-            disabled={checkingUpdate}
-          >
-            {checkingUpdate ? t("appUpdate_checking") : t("appUpdate_manual")}
-          </button>
+          <span class="text-xs text-muted-foreground">Local fork</span>
         </div>
         <button
           class="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"

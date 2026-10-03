@@ -175,3 +175,57 @@ automatic-continuation preferences were temporarily guarded, then restored into
 fresh room payloads. The user's restored RAV Lead, Codex delegate and Claude delegate
 remained present and paused. Native room settings showed the new agent attachment
 labels. No real source was converted, detached agent restored or participant resumed.
+
+
+## Room visibility, explicit names and fork identity follow-up
+
+The main profile's `ocv:removed-cwds` still hid KDCustom. The new Huion room existed
+in the store, but a removed-project tombstone hid it from the sidebar while the
+room picker ignored that tombstone. The earlier onboarding acceptance missed this
+case. Active room lists now share archived/hidden filtering. Creating or explicitly
+restoring one room reveals its repository without reviving other removed rooms;
+those remain under Hidden rooms. Their participant sessions and import aliases stay
+hidden too. Sidebar removal is labeled Remove from sidebar, rather than Delete.
+
+Creation keeps the name field full width and prevents accidental Enter submission
+from setup inputs. Changing selection updates the room URL and clears stale success
+notices. Explicit unavailable room URLs show an error instead of opening another room.
+Generation guards discard stale list/selection responses. Room settings supports
+renaming with persisted, validated names and stale-editor conflict protection.
+
+Native final-build acceptance used a separate stopped Huion source identity in the
+isolated profile. With KDCustom removed, the custom name survived native folder
+selection and repository/Project discovery. Enter in the name input did not create
+anything; clicking Create produced matching notice, heading, picker and sidebar
+names. The original agent stayed paused and its 40-message shared history remained.
+The old Session setup acceptance room stayed hidden. Renaming to Renamed room
+acceptance updated the heading, picker and sidebar and survived app restart. The
+final build hid the older participant/import aliases. Hidden rooms listed exactly
+the old fixture; explicit Restore opened its matching URL, heading and paused
+participant beneath the correct sidebar room. No provider message or GitHub write
+was sent. Native dropdown switching was not completed; URL selection and hidden
+restoration were observed directly.
+
+Fork version 0.3.0 is consistent across npm, Cargo and Tauri metadata. The rail's
+language/theme/palette shortcuts were removed; preferences remain in Settings.
+About shows the local fork and its repository, with no update/download control.
+The update banner is no longer mounted and the legacy backend update command is
+disabled without a network request. Copyright and upstream credit remain.
+
+`npm run verify` passed: 1,579 frontend tests in 58 files, lint/format/build,
+translations, Rust formatting and Clippy. The full Rust suite passed 956 tests,
+zero failed and five ignored. Svelte checks reported zero errors and 71 existing
+warnings; translation checks reported zero errors and 18 existing warnings. Final
+Acceptance and Local bundles built successfully. Native About confirmed v0.3.0,
+fork identity and the absence of update actions. The isolated app was closed.
+
+Upstream contribution candidates and preparation are recorded separately in
+[UPSTREAM_CONTRIBUTIONS.md](UPSTREAM_CONTRIBUTIONS.md). No upstream PR was submitted.
+
+The main Local app was restarted after a fresh check found no in-flight room
+deliveries. Automatic-continuation preferences were temporarily guarded and restored
+into fresh payloads, preserving pause/removal/name state. Native Hidden rooms →
+Restore to sidebar reopened the existing Fix Huion wheel shortcuts in Rive room at
+its exact id under KDCustom → room → Original Codex. Heading and picker matched;
+the old KDCustom R&D room stayed hidden. The existing source and 40 shared messages
+were preserved. No real provider turn was sent or agent resumed.

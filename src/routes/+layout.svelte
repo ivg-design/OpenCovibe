@@ -15,15 +15,16 @@
   import {
     retainRoomSidebarParticipants,
     roomSidebarEntries,
+    roomSidebarRuns,
   } from "$lib/stores/room-sidebar-participants.svelte";
   import ProjectFolderItem from "$lib/components/ProjectFolderItem.svelte";
+  import { roomVisibilityEvent } from "$lib/rooms/visibility";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
   import SetupWizard from "$lib/components/SetupWizard.svelte";
   import AboutModal from "$lib/components/AboutModal.svelte";
   import PermissionsModal from "$lib/components/PermissionsModal.svelte";
   import Modal from "$lib/components/Modal.svelte";
   import CliSessionBrowser from "$lib/components/CliSessionBrowser.svelte";
-  import UpdateBanner from "$lib/components/UpdateBanner.svelte";
   import FolderPicker from "$lib/components/FolderPicker.svelte";
   import type {
     TaskRun,
@@ -66,7 +67,6 @@
     THEME_CONTEXT,
     applyThemeClasses,
     getSystemThemeQuery,
-    nextThemeMode,
     persistColorScheme,
     persistThemeMode,
     readStoredColorScheme,
@@ -84,24 +84,10 @@
     type CustomPalette,
     type PaletteField,
   } from "$lib/utils/custom-palette";
-  import {
-    t,
-    LOCALE_REGISTRY,
-    getEntry,
-    initLocale,
-    switchLocale,
-    currentLocale,
-  } from "$lib/i18n/index.svelte";
+  import { t, initLocale } from "$lib/i18n/index.svelte";
 
   // Wire reactive locale before any t() usage
   initLocale();
-
-  let localePopupOpen = $state(false);
-
-  function handleLocaleSelect(code: string) {
-    switchLocale(code);
-    localePopupOpen = false;
-  }
 
   let commandPaletteOpen = $state(false);
   let showSetupWizard = $state(false);
@@ -187,7 +173,6 @@
   let systemDark = $state(
     getSystemThemeQuery(typeof window === "undefined" ? null : window)?.matches ?? true,
   );
-  let effectiveDark = $derived(themeMode === "system" ? systemDark : themeMode === "dark");
   const themeController: ThemeController = {
     get mode() {
       return themeMode;
@@ -693,6 +678,10 @@
       /* ignore parse errors */
     }
     removedCwds = loadRemovedCwds();
+    const refreshRoomVisibility = () => {
+      removedCwds = loadRemovedCwds();
+    };
+    window.addEventListener(roomVisibilityEvent, refreshRoomVisibility);
 
     // Poll for runs every 60s (fallback only — primary updates via ocv:runs-changed event)
     const interval = setInterval(loadRuns, 60000);
@@ -899,6 +888,7 @@
       });
 
     return () => {
+      window.removeEventListener(roomVisibilityEvent, refreshRoomVisibility);
       resizeCleanup?.(); // Clean up resize drag if component unmounts mid-drag
       unlistenStatus?.();
       clearInterval(interval);
@@ -1017,6 +1007,7 @@
 
   function persistRemovedCwds() {
     localStorage.setItem("ocv:removed-cwds", JSON.stringify(removedCwds));
+    window.dispatchEvent(new Event(roomVisibilityEvent));
   }
 
   function requestRemoveProject(cwd: string) {
@@ -1058,7 +1049,13 @@
 
   // Build project folder tree for chats tab
   let projectFolders = $derived.by(() =>
-    buildProjectFolders(runs, favoriteRunIds, pinnedCwds, removedCwds, roomSidebarEntries()),
+    buildProjectFolders(
+      roomSidebarRuns(runs),
+      favoriteRunIds,
+      pinnedCwds,
+      removedCwds,
+      roomSidebarEntries(),
+    ),
   );
 
   onMount(() => retainRoomSidebarParticipants());
@@ -1228,16 +1225,6 @@
   }
 
   setContext("toggleSidebar", toggleSidebar);
-
-  function cycleTheme() {
-    themeMode = nextThemeMode(themeMode);
-    dbg("layout", "theme cycled", { themeMode, effectiveDark });
-  }
-
-  function cycleScheme() {
-    colorScheme = colorScheme === "warm" ? "neutral" : "warm";
-    dbg("layout", "color scheme cycled", { colorScheme });
-  }
 
   // Persist theme + apply class
   $effect(() => {
@@ -1565,7 +1552,7 @@
           {/each}
         </nav>
 
-        <!-- Rail version + locale + dark mode toggle -->
+        <!-- Fork version; preferences live in Settings -->
         <div class="border-t border-sidebar-border py-2">
           <div class="flex items-center justify-center pb-1">
             <button
@@ -1574,149 +1561,6 @@
               title={`About OpenCovibe v${appVersion}`}>v{appVersion}</button
             >
           </div>
-          <div class="relative mx-auto mb-0.5">
-            <button
-              class="flex h-9 w-9 items-center justify-center rounded-md text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
-              onclick={() => (localePopupOpen = !localePopupOpen)}
-              title={currentLocale()}
-            >
-              <span class="text-xs font-medium"
-                >{getEntry(currentLocale())?.shortLabel ?? currentLocale()}</span
-              >
-            </button>
-            {#if localePopupOpen}
-              <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <div
-                class="fixed inset-0 z-40"
-                onclick={() => (localePopupOpen = false)}
-                onkeydown={(e) => e.key === "Escape" && (localePopupOpen = false)}
-              ></div>
-              <div
-                class="absolute bottom-0 left-full ml-1 z-50 min-w-[140px] rounded-md border border-sidebar-border bg-popover py-1 shadow-lg"
-              >
-                {#each LOCALE_REGISTRY as entry}
-                  <button
-                    class="flex w-full items-center gap-2 px-3 py-1.5 text-xs transition-colors
-                      {currentLocale() === entry.code
-                      ? 'bg-accent text-accent-foreground'
-                      : 'text-popover-foreground hover:bg-accent/50'}"
-                    onclick={() => handleLocaleSelect(entry.code)}
-                  >
-                    <span class="w-5 text-center font-medium">{entry.shortLabel}</span>
-                    <span>{entry.nativeName}</span>
-                    {#if (entry.status as string) === "beta"}
-                      <span
-                        class="ml-auto text-[10px] text-muted-foreground/60 border border-muted-foreground/20 rounded px-1"
-                        >Beta</span
-                      >
-                    {/if}
-                  </button>
-                {/each}
-              </div>
-            {/if}
-          </div>
-          <button
-            class="flex h-9 w-9 items-center justify-center rounded-md text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
-            onclick={cycleTheme}
-            aria-label={themeMode === "dark"
-              ? t("layout_themeTitle_dark")
-              : themeMode === "light"
-                ? t("layout_themeTitle_light")
-                : themeMode === "high-contrast"
-                  ? t("layout_themeTitle_highContrast")
-                  : t("layout_themeTitle_system")}
-            title={themeMode === "dark"
-              ? t("layout_themeTitle_dark")
-              : themeMode === "light"
-                ? t("layout_themeTitle_light")
-                : themeMode === "high-contrast"
-                  ? t("layout_themeTitle_highContrast")
-                  : t("layout_themeTitle_system")}
-          >
-            {#if themeMode === "dark"}
-              <!-- Moon icon (dark mode active) -->
-              <svg
-                class="h-[18px] w-[18px]"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" /></svg
-              >
-            {:else if themeMode === "light"}
-              <!-- Sun icon (light mode active) -->
-              <svg
-                class="h-[18px] w-[18px]"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                ><circle cx="12" cy="12" r="4" /><path
-                  d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"
-                /></svg
-              >
-            {:else if themeMode === "high-contrast"}
-              <!-- Split circle icon (high-contrast mode active) -->
-              <svg
-                class="h-[18px] w-[18px]"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                ><circle cx="12" cy="12" r="9" /><path
-                  d="M12 3a9 9 0 0 1 0 18Z"
-                  fill="currentColor"
-                /></svg
-              >
-            {:else}
-              <!-- Monitor icon (system mode active) -->
-              <svg
-                class="h-[18px] w-[18px]"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                ><rect width="20" height="14" x="2" y="3" rx="2" /><line
-                  x1="8"
-                  x2="16"
-                  y1="21"
-                  y2="21"
-                /><line x1="12" x2="12" y1="17" y2="21" /></svg
-              >
-            {/if}
-          </button>
-          <button
-            class="flex h-9 w-9 items-center justify-center rounded-md text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors duration-150"
-            onclick={cycleScheme}
-            title={colorScheme === "warm"
-              ? t("layout_schemeTitle_warm")
-              : t("layout_schemeTitle_neutral")}
-          >
-            <!-- Palette icon -->
-            <svg
-              class="h-[18px] w-[18px]"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              ><circle cx="13.5" cy="6.5" r=".5" fill="currentColor" /><circle
-                cx="17.5"
-                cy="10.5"
-                r=".5"
-                fill="currentColor"
-              /><circle cx="8.5" cy="7.5" r=".5" fill="currentColor" /><circle
-                cx="6.5"
-                cy="12"
-                r=".5"
-                fill="currentColor"
-              /><path
-                d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"
-              /></svg
-            >
-          </button>
         </div>
       </div>
 
@@ -2487,7 +2331,6 @@
 
   <!-- Main content -->
   <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-    <UpdateBanner />
     <!-- Top bar (non-chat pages only — chat uses SessionStatusBar) -->
     {#if !isChatPage}
       <header class="flex h-14 items-center gap-3 border-b px-4">
@@ -2596,7 +2439,7 @@
       class="px-3 py-1.5 text-sm rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
       onclick={confirmRemoveProject}
     >
-      {t("sidebar_deleteOk")}
+      {t("sidebar_removeFromSidebar")}
     </button>
   </div>
 </Modal>

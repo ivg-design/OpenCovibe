@@ -431,7 +431,7 @@
   "sidebar_deleteOk": "Delete",
   "sidebar_removeProject": "Remove project",
   "sidebar_removeProjectConfirm": "Remove project folder",
-  "sidebar_removeProjectDesc": "This project will be removed from sidebar. Data is kept on disk. Use 'Open folder' to add it back.",
+  "sidebar_removeProjectDesc": "This hides the project and its rooms from the sidebar and room picker. Data stays on disk. Use Hidden rooms or Open folder to restore it.",
   "statusbar_toggleSidebar": "Toggle sidebar (Ctrl+B)",
   "statusbar_contextTitle": "Context usage for the latest turn ({pct}% of {tokens} tokens). The CLI automatically compacts context when approaching the limit.",
   "statusbar_ctx": "ctx {pct}%",
@@ -2083,5 +2083,12 @@
   "room_chooseSourceRepository": "This saved folder is not a Git repository. Choose the project repository for the room.",
   "room_roomDestination": "Create “{title}” in {folder}. The original agent will join paused; the imported chat becomes its room participant entry.",
   "room_createFromSourceAction": "Create room with this agent",
-  "room_createdDestination": "Room “{title}” is ready. The original agent is paused; add agents or resume when ready."
+  "room_createdDestination": "Room “{title}” is ready. The original agent is paused; add agents or resume when ready.",
+  "room_unavailableSelection": "This room is hidden or archived. Use Hidden rooms to restore it, or choose an available room.",
+  "room_hiddenRooms": "Hidden rooms · {count}",
+  "room_hiddenRoomsHelp": "Rooms removed from the sidebar are kept locally. Restore only the rooms you want to see again.",
+  "room_showRoom": "Restore to sidebar",
+  "room_rename": "Rename room",
+  "room_saveName": "Save name",
+  "sidebar_removeFromSidebar": "Remove from sidebar"
 }

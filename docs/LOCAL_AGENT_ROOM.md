@@ -157,3 +157,17 @@ started turn is not cancelled at expiry.
 Verification and real mixed-provider results are recorded in
 [the live acceptance record](LOCAL_AGENT_ROOM_LIVE_ACCEPTANCE.md) and
 [session-room and side-chat acceptance](SESSION_ROOM_ACCEPTANCE_2026-09-30.md).
+
+
+## Fork identity and room visibility
+
+OpenCovibe Local starts independent versioning at 0.3.0. Automatic upstream update
+checks and download prompts are disabled; local bundles are installed manually.
+See [FORK.md](FORK.md). Language, theme and palette controls live in Settings.
+
+Room setup requires an explicit Create action and accepts a name before creation.
+Rename room is available in Room settings. A saved room's URL, heading, picker and
+sidebar use the same identity. Removing a project from the sidebar hides its rooms
+from active room pickers too; it keeps local data. Hidden rooms offers explicit
+Restore to sidebar. Creating/restoring one room reveals that project without
+bringing back its other removed rooms. Archived rooms stay out of active lists.

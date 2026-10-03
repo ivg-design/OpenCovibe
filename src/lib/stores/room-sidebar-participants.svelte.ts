@@ -1,5 +1,7 @@
 import { getTransport } from "$lib/transport";
 import type { RoomSidebarEntry } from "$lib/rooms/types";
+import { visibleRooms, visibleRoomRuns, roomVisibilityEvent } from "$lib/rooms/visibility";
+import type { TaskRun } from "$lib/types";
 
 export interface RoomSidebarParticipant {
   room_id: string;
@@ -10,8 +12,16 @@ export interface RoomSidebarParticipant {
 }
 
 let entries = $state<RoomSidebarEntry[]>([]);
+let visibilityRevision = $state(0);
 export function roomSidebarEntries(): RoomSidebarEntry[] {
-  return entries;
+  void visibilityRevision;
+  return visibleRooms(entries);
+}
+export function roomSidebarRuns(runs: TaskRun[]): TaskRun[] {
+  return visibleRoomRuns(runs, entries, roomSidebarEntries());
+}
+function visibilityChanged() {
+  visibilityRevision++;
 }
 
 let byRunId = $state<Record<string, RoomSidebarParticipant>>({});
@@ -41,6 +51,7 @@ export function retainRoomSidebarParticipants(): () => void {
     void refreshRoomParticipants();
     timer = setInterval(() => void refreshRoomParticipants(), 15_000);
     window.addEventListener("ocv:room-changed", refreshRoomParticipants);
+    window.addEventListener(roomVisibilityEvent, visibilityChanged);
   }
   let released = false;
   return () => {
@@ -51,6 +62,7 @@ export function retainRoomSidebarParticipants(): () => void {
       if (timer) clearInterval(timer);
       timer = undefined;
       window.removeEventListener("ocv:room-changed", refreshRoomParticipants);
+      window.removeEventListener(roomVisibilityEvent, visibilityChanged);
       refreshRequest++;
     }
   };

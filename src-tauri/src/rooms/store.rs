@@ -274,6 +274,23 @@ impl RoomStore {
         Ok(room.clone())
     }
 
+    pub fn save_title(&self, id: &str, title: String, expected: String) -> Result<Room, String> {
+        let title = title.trim();
+        if title.is_empty() || title.chars().count() > 120 {
+            return Err("Enter a room name (up to 120 characters).".into());
+        }
+        self.update(id, |room| {
+            if room.archived {
+                return Err("room is archived".into());
+            }
+            if room.title != expected {
+                return Err("Room name changed elsewhere. Reopen the editor to review it.".into());
+            }
+            room.title = title.to_owned();
+            Ok(())
+        })
+    }
+
     pub fn save_instructions(
         &self,
         id: &str,
@@ -743,6 +760,44 @@ mod tests {
         assert_eq!(recovered.messages[0].body, "Keep the same board");
         assert_eq!(recovered.project_title(), room.project_title());
     }
+    #[test]
+    fn renamed_room_preserves_state_and_rejects_stale_or_invalid_edits() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("rooms.db");
+        let store = RoomStore::open(&path).unwrap();
+        let room = store.create(input(temp.path())).unwrap();
+        store
+            .post_message(&room.id, "Retain this history".into())
+            .unwrap();
+        let renamed = store
+            .save_title(&room.id, " My local room ".into(), room.title.clone())
+            .unwrap();
+        assert_eq!(renamed.title, "My local room");
+        assert_eq!(renamed.messages.len(), 1);
+        assert_eq!(renamed.paused, room.paused);
+        assert!(store
+            .save_title(&room.id, "Old editor".into(), room.title)
+            .is_err());
+        assert!(store
+            .save_title(&room.id, " ".into(), renamed.title.clone())
+            .is_err());
+        assert!(store
+            .save_title(&room.id, "x".repeat(121), renamed.title.clone())
+            .is_err());
+        drop(store);
+        let store = RoomStore::open(&path).unwrap();
+        assert_eq!(store.get(&room.id).unwrap().title, "My local room");
+        store
+            .update(&room.id, |r| {
+                r.archived = true;
+                Ok(())
+            })
+            .unwrap();
+        assert!(store
+            .save_title(&room.id, "Archived edit".into(), renamed.title)
+            .is_err());
+    }
+
     #[test]
     fn edited_instructions_persist_without_overwriting_newer_room_state() {
         let temp = tempfile::tempdir().unwrap();

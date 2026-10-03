@@ -32,6 +32,10 @@ export function createRoom(input: CreateRoomInput): Promise<Room> {
   return getTransport().invoke("create_room", { input });
 }
 
+export function saveRoomTitle(id: string, title: string, expected: string): Promise<Room> {
+  return getTransport().invoke("save_room_title", { id, title, expected });
+}
+
 export function getRoomSessionSeed(
   runId: string,
   repoPath: string | null = null,

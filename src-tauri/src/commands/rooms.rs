@@ -1392,6 +1392,15 @@ pub fn set_room_concurrency(
 }
 
 #[tauri::command]
+pub fn save_room_title(
+    store: State<'_, Arc<RoomStore>>,
+    id: String,
+    title: String,
+    expected: String,
+) -> Result<Room, String> {
+    store.save_title(&id, title, expected)
+}
+#[tauri::command]
 pub fn save_room_instructions(
     store: State<'_, Arc<RoomStore>>,
     id: String,
