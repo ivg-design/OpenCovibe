@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
+  import {
+    hasNewRequest,
+    requestInboxKeys,
+    requestPanelWidth,
+    isOpenRoomRequest,
+  } from "$lib/rooms/requests";
   import { goto } from "$app/navigation";
   import { page } from "$app/stores";
   import Button from "$lib/components/Button.svelte";
@@ -8,6 +14,7 @@
   import Textarea from "$lib/components/Textarea.svelte";
   import RoomBoard from "$lib/components/RoomBoard.svelte";
   import RoomParticipants from "$lib/components/RoomParticipants.svelte";
+  import RoomAttachChat from "$lib/components/RoomAttachChat.svelte";
   import RoomRequests from "$lib/components/RoomRequests.svelte";
   import RoomTimers from "$lib/components/RoomTimers.svelte";
   import RoomConversation from "$lib/components/RoomConversation.svelte";
@@ -15,7 +22,10 @@
   import { getTransport } from "$lib/transport";
   import {
     addRoomParticipant,
+    attachRoomChat,
     approveRoomAgent,
+    closeRoomRequest,
+    archiveRoomRequests,
     archiveRoom,
     attachRoomProject,
     createRoom,
@@ -105,6 +115,71 @@
     targetParticipantId = $state(""),
     activeSidechatId = $state("");
   let attachmentDrafts = $state<RoomAttachment[]>([]);
+  let requestsOpen = $state(true);
+  let requestsWidth = $state(32);
+  let requestsRevealToken = $state("");
+  let chatLayout = $state<HTMLDivElement>();
+  let resizingRequests = false;
+  let panelRoomId = "";
+  let seenRequestKeys: string[] = [];
+  const openRequestCount = $derived(selected?.requests.filter(isOpenRoomRequest).length ?? 0);
+  $effect(() => {
+    if (!ready || !selected || boardOnly || settingsOnly) return;
+    const roomId = selected.id;
+    const next = requestInboxKeys(selected.requests);
+    untrack(() => {
+      if (panelRoomId !== roomId) {
+        panelRoomId = roomId;
+        requestsRevealToken = "";
+        let saved: { open?: boolean; width?: number; seen?: string[] } = {};
+        try {
+          saved = JSON.parse(localStorage.getItem(`ocv:request-panel:${roomId}`) ?? "{}");
+        } catch {
+          /* Optional preference. */
+        }
+        requestsWidth = requestPanelWidth(saved.width ?? 32);
+        requestsOpen = saved.open ?? true;
+        seenRequestKeys = Array.isArray(saved.seen) ? saved.seen : next;
+      }
+      if (hasNewRequest(seenRequestKeys, next)) {
+        if (!requestsOpen)
+          requestsRevealToken = next.find((key) => !seenRequestKeys.includes(key)) ?? "";
+        requestsOpen = true;
+      }
+      seenRequestKeys = next;
+      saveRequestPanel();
+    });
+  });
+  function saveRequestPanel() {
+    if (!panelRoomId) return;
+    try {
+      localStorage.setItem(
+        `ocv:request-panel:${panelRoomId}`,
+        JSON.stringify({ open: requestsOpen, width: requestsWidth, seen: seenRequestKeys }),
+      );
+    } catch {
+      /* Optional preference. */
+    }
+  }
+  function toggleRequests(open = !requestsOpen) {
+    requestsOpen = open;
+    saveRequestPanel();
+  }
+  function resizeRequests(event: PointerEvent) {
+    if (!resizingRequests || !chatLayout) return;
+    const bounds = chatLayout.getBoundingClientRect();
+    requestsWidth = requestPanelWidth(((bounds.right - event.clientX) / bounds.width) * 100);
+    saveRequestPanel();
+  }
+  function resizeRequestsKey(event: KeyboardEvent) {
+    if (!["ArrowLeft", "ArrowRight", "Home"].includes(event.key)) return;
+    event.preventDefault();
+    requestsWidth =
+      event.key === "Home"
+        ? 32
+        : requestPanelWidth(requestsWidth + (event.key === "ArrowLeft" ? 2 : -2));
+    saveRequestPanel();
+  }
   let projectNumber = $state("");
   let editingInstructions = $state(false),
     instructionsDraft = $state(""),
@@ -444,6 +519,12 @@
   function approveAgentRequest(request: RoomRequest) {
     void perform(`request:${request.id}`, (id) => approveRoomAgent(id, request.id));
   }
+  function closeRequest(request: RoomRequest, reason: string) {
+    void perform(`request:${request.id}`, (id) => closeRoomRequest(id, request.id, reason));
+  }
+  function archiveRequests(requestIds: string[], archived: boolean) {
+    void perform("archive-requests", (id) => archiveRoomRequests(id, requestIds, archived));
+  }
   function saveTimer(input: SaveTimerInput) {
     void perform("save-timer", (id) => saveRoomTimer(id, input));
   }
@@ -695,6 +776,10 @@
                 </p>
               </div>
               <div class="flex flex-wrap items-center gap-2 text-xs">
+                <Button size="sm" variant="outline" onclick={() => toggleRequests()}
+                  >{tr("room_requestsTitle")} · {openRequestCount}
+                  {requestsOpen ? "▾" : "▸"}</Button
+                >
                 {#if selected.origin}<a
                     class="text-primary underline underline-offset-4"
                     href={`/chat?run=${encodeURIComponent(selected.origin.run_id)}`}
@@ -909,7 +994,14 @@
           {#if loadingRoom}<p class="text-sm text-muted-foreground" role="status">
               {tr("room_loading")}
             </p>{/if}
-          {#if settingsOnly}<RoomParticipants
+          {#if settingsOnly}<RoomAttachChat
+              roomId={selected.id}
+              disabled={actionsDisabled}
+              onAttach={async (runId, name) => {
+                await perform("attach-chat", (id) => attachRoomChat(id, runId, name));
+                return !error;
+              }}
+            /><RoomParticipants
               participants={selected.participants}
               claims={selected.claims}
               disabled={actionsDisabled}
@@ -938,7 +1030,12 @@
               {tr("room_boardNeedsProject")}
             </p>{/if}
           {#if !boardOnly && !settingsOnly}
-            <div class="room-chat-layout min-h-0 min-w-0 flex-1">
+            <div
+              class="room-chat-layout min-h-0 min-w-0 flex-1"
+              class:requests-hidden={!requestsOpen}
+              style={`--requests-width:${requestsWidth}%`}
+              bind:this={chatLayout}
+            >
               <div class="flex min-h-0 min-w-0 flex-col overflow-hidden">
                 <RoomConversation
                   {selected}
@@ -953,13 +1050,41 @@
                   onParticipantAction={participantAction}
                 />
               </div>
-              {#key selected.id}<RoomRequests
-                  room={selected}
-                  disabled={actionsDisabled}
-                  {busyAction}
-                  onResolve={resolveRequest}
-                  onApproveAgent={approveAgentRequest}
-                />{/key}
+              <button
+                type="button"
+                class="request-resizer"
+                class:hidden={!requestsOpen}
+                aria-label={tr("room_requestsResize")}
+                onkeydown={resizeRequestsKey}
+                onpointerdown={(event) => {
+                  resizingRequests = true;
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                }}
+                onpointermove={resizeRequests}
+                onpointerup={() => {
+                  resizingRequests = false;
+                }}
+                onpointercancel={() => {
+                  resizingRequests = false;
+                }}
+                ondblclick={() => {
+                  requestsWidth = 32;
+                  saveRequestPanel();
+                }}>⋮</button
+              >
+              <div class="min-h-0 min-w-0" class:hidden={!requestsOpen}>
+                {#key selected.id}<RoomRequests
+                    room={selected}
+                    disabled={loadingRoom || !!busyAction || creating}
+                    {busyAction}
+                    onResolve={resolveRequest}
+                    onApproveAgent={approveAgentRequest}
+                    onCloseRequest={closeRequest}
+                    onArchive={archiveRequests}
+                    onClosePanel={() => toggleRequests(false)}
+                    revealToken={requestsRevealToken}
+                  />{/key}
+              </div>
             </div>
           {/if}
           {#if boardOnly && selected.claims.length > 0}<Card class="p-4"
@@ -1039,10 +1164,35 @@
     grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
     gap: 0.5rem;
   }
+  .request-resizer {
+    display: none;
+  }
+  .room-chat-layout.requests-hidden {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
   @container (min-width: 30rem) {
     .room-chat-layout {
-      grid-template-columns: minmax(0, 1fr) clamp(14rem, 32%, 26rem);
+      grid-template-columns: minmax(0, 1fr) 0.375rem clamp(
+          14rem,
+          var(--requests-width),
+          calc(100% - 14rem - 0.875rem)
+        );
       grid-template-rows: minmax(0, 1fr);
+      gap: 0.25rem;
+    }
+    .request-resizer:not(.hidden) {
+      display: block;
+      cursor: col-resize;
+      touch-action: none;
+      border-radius: 0.25rem;
+      font-size: 0.75rem;
+      color: hsl(var(--muted-foreground));
+    }
+    .request-resizer:hover,
+    .request-resizer:focus-visible {
+      background: hsl(var(--accent));
+      outline: 1px solid hsl(var(--ring));
     }
   }
 </style>

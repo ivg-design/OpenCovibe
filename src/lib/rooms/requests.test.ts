@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { filterRoomRequests, isOpenRoomRequest, needsHumanAnswer } from "./requests";
+import {
+  filterRoomRequests,
+  isOpenRoomRequest,
+  needsHumanAnswer,
+  requestInboxKeys,
+  hasNewRequest,
+  requestPanelWidth,
+} from "./requests";
 import type { RoomParticipant, RoomRequest } from "./types";
 const request = (
   id: string,
@@ -26,6 +33,35 @@ const request = (
   updated_at: "2026-10-02T10:00:00Z",
 });
 describe("room request inbox", () => {
+  it("separates waiting, human attention, resolved and archived requests by type", () => {
+    const decision = request("question", "decision", "pending");
+    const review = request("review", "review", "pending");
+    const closed = request("obsolete", "decision", "closed");
+    const archived = { ...request("old", "review", "approved"), archived: true };
+    const requests = [decision, review, closed, archived];
+    expect(filterRoomRequests(requests, "attention", "", [])).toEqual([decision]);
+    expect(filterRoomRequests(requests, "waiting", "", [])).toEqual([review]);
+    expect(filterRoomRequests(requests, "history", "", [])).toEqual([closed]);
+    expect(filterRoomRequests(requests, "archived", "", [])).toEqual([archived]);
+    expect(filterRoomRequests(requests, "all", "", [], "review")).toEqual([review]);
+  });
+  it("reopens for new actionable work, not unchanged polls or completed work", () => {
+    const pending = request("a", "decision", "pending");
+    const known = requestInboxKeys([pending]);
+    expect(hasNewRequest(known, requestInboxKeys([{ ...pending }]))).toBe(false);
+    expect(
+      hasNewRequest(known, requestInboxKeys([pending, request("b", "review", "pending")])),
+    ).toBe(true);
+    expect(hasNewRequest(known, requestInboxKeys([{ ...pending, status: "approved" }]))).toBe(
+      false,
+    );
+    expect(
+      hasNewRequest(["c:pending"], requestInboxKeys([request("c", "completion", "verified")])),
+    ).toBe(true);
+    expect(requestPanelWidth(NaN)).toBe(32);
+    expect(requestPanelWidth(90)).toBe(70);
+    expect(requestPanelWidth(2)).toBe(20);
+  });
   it("distinguishes human decisions from pending peer reviews and closed requests", () => {
     expect(needsHumanAnswer(request("a", "decision", "pending"))).toBe(true);
     expect(needsHumanAnswer(request("b", "agent", "pending"))).toBe(true);

@@ -6,6 +6,11 @@ use std::{
 };
 use uuid::Uuid;
 
+pub async fn current_branch(path: &str) -> Result<Option<String>, String> {
+    let branch = git(&["-C", path, "branch", "--show-current"]).await?;
+    Ok((!branch.is_empty()).then_some(branch))
+}
+
 async fn git(args: &[&str]) -> Result<String, String> {
     let mut c = tokio::process::Command::new("git");
     c.env("PATH", augmented_path())

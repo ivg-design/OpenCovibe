@@ -31,6 +31,8 @@ pub const ROOM_TOOL_NAMES: &[&str] = &[
     "request_review",
     "propose_completion",
     "respond_request",
+    "close_request",
+    "archive_requests",
     "release_task",
 ];
 
@@ -613,6 +615,37 @@ async fn call_tool(
                 json!({"request": updated.requests.iter().rev().find(|r| r.requester_id == participant_id && r.kind == kind && r.title == title)}),
             )
         }
+        "close_request" => {
+            let request_id = required_string(args, "request_id")?;
+            let updated = governance::close_request(
+                &store,
+                room_id,
+                Some(participant_id),
+                request_id,
+                required_string(args, "reason")?,
+            )?;
+            Ok(json!({"request": updated.requests.iter().find(|r| r.id == request_id)}))
+        }
+        "archive_requests" => {
+            let ids: Vec<String> = args
+                .get("request_ids")
+                .map(|v| serde_json::from_value(v.clone()))
+                .transpose()
+                .map_err(|e| format!("invalid request_ids: {e}"))?
+                .unwrap_or_default();
+            let archived = args
+                .get("archived")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            let updated = governance::archive_requests(
+                &store,
+                room_id,
+                Some(participant_id),
+                &ids,
+                archived,
+            )?;
+            Ok(json!({"archived_count":updated.requests.iter().filter(|r| r.archived).count()}))
+        }
         "respond_request" => {
             let verdict = required_string(args, "verdict")?;
             if !matches!(verdict, "approved" | "changes_requested") {
@@ -692,7 +725,7 @@ fn snapshot(room: &Room, peer: &Participant) -> Value {
         "active_sidechat_id":peer.active_sidechat_id,
         "claims":room.claims,
         "timers":room.timers,
-        "requests":room.requests,
+        "requests":room.requests.iter().filter(|request| !request.archived).collect::<Vec<_>>(),
     })
 }
 
@@ -723,6 +756,8 @@ fn tool_definitions() -> Value {
         make("request_decision","Ask the human a durable question with optional choices and evidence. The answer wakes the requester when eligible.",&["title","question"],json!({"title":{"type":"string"},"question":{"type":"string"},"options":{"type":"array","items":{"type":"string"},"maxItems":5},"evidence":{"type":["string","null"]}})),
         make("request_review","Ask another room peer to review evidence. The requester cannot approve their own review.",&["title","instructions","evidence","reviewer_id"],json!({"title":{"type":"string"},"instructions":{"type":"string"},"evidence":{"type":"string"},"reviewer_id":{"type":"string"},"task_id":{"type":["string","null"]}})),
         make("propose_completion","Propose final room completion for independent peer verification, then human acceptance. The canonical board must be fresh and complete. This does not close the room.",&["title","summary","evidence","reviewer_id"],json!({"title":{"type":"string"},"summary":{"type":"string"},"evidence":{"type":"string"},"reviewer_id":{"type":"string"}})),
+        make("close_request","Close an obsolete room request with a concrete reason. Any active room peer may do this. This withdraws the request; it never grants human approval, adds a peer or accepts completion.",&["request_id","reason"],json!({"request_id":{"type":"string"},"reason":{"type":"string"}})),
+        make("archive_requests","Move resolved requests out of the normal queue without deleting their history. Omit request_ids to archive all resolved requests; archived=false restores them. Pending requests must first be answered or explicitly closed with a reason.",&[],json!({"request_ids":{"type":"array","items":{"type":"string"}},"archived":{"type":"boolean"}})),
         make("respond_request","Respond only to a review or completion assigned to you, with concrete review evidence. Only the human can answer decisions, add peers or accept final completion.",&["request_id","verdict","response"],json!({"request_id":{"type":"string"},"verdict":{"enum":["approved","changes_requested"]},"response":{"type":"string"}})),
         make("release_task","Release only your own unfinished task back to the canonical board with a reason. Uncertain writes keep ownership until reconciled.",&["task_id","reason"],json!({"task_id":{"type":"string"},"reason":{"type":"string"}}))
     ])
@@ -1095,6 +1130,8 @@ mod tests {
             "request_review",
             "propose_completion",
             "respond_request",
+            "close_request",
+            "archive_requests",
             "release_task",
         ] {
             let result = call_tool(&data_dir, &room.id, "peer", name, &json!({"title":"No write","question":"Paused","reason":"Paused","instructions":"Paused","summary":"Paused","brief":"Paused","reviewer_id":"peer","verdict":"approved","request_id":request_id,"response":"Paused","task_id":"none"})).await;
@@ -1106,6 +1143,27 @@ mod tests {
         let saved = store.get(&room.id).unwrap();
         assert_eq!(saved.requests.len(), 1);
         assert_eq!(saved.requests[0].status, "pending");
+        store
+            .update(&room.id, |room| {
+                room.participants[0].paused = false;
+                Ok(())
+            })
+            .unwrap();
+        let closed = call_tool(
+            &data_dir,
+            &room.id,
+            "peer",
+            "close_request",
+            &json!({"request_id":request_id,"reason":"Superseded by a settled decision"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(closed["request"]["status"], "closed");
+        let archived = call_tool(&data_dir, &room.id, "peer", "archive_requests", &json!({}))
+            .await
+            .unwrap();
+        assert_eq!(archived["archived_count"], 1);
+        assert!(store.get(&room.id).unwrap().requests[0].archived);
     }
 
     #[tokio::test]
@@ -1145,6 +1203,8 @@ mod tests {
                 "request_decision",
                 "request_review",
                 "propose_completion",
+                "close_request",
+                "archive_requests",
                 "respond_request",
                 "release_task"
             ]
@@ -1189,6 +1249,7 @@ mod tests {
             project_stage: Default::default(),
             board: Default::default(),
             participants: vec![],
+            detached_participants: vec![],
             messages: vec![],
             sidechats: vec![],
             timers: vec![],

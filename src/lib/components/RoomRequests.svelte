@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import Button from "$lib/components/Button.svelte";
   import Input from "$lib/components/Input.svelte";
   import MarkdownContent from "$lib/components/MarkdownContent.svelte";
@@ -13,19 +14,43 @@
     busyAction,
     onResolve,
     onApproveAgent,
+    onCloseRequest,
+    onArchive,
+    onClosePanel,
+    revealToken = "",
   }: {
     room: Room;
     disabled: boolean;
     busyAction: string;
     onResolve: (request: RoomRequest, approve: boolean, response: string) => void;
     onApproveAgent: (request: RoomRequest) => void;
+    onCloseRequest: (request: RoomRequest, reason: string) => void;
+    onArchive: (requestIds: string[], archived: boolean) => void;
+    onClosePanel: () => void;
+    revealToken?: string;
   } = $props();
   let replies = $state<Record<string, string>>({});
   let selectedId = $state("");
   let query = $state("");
-  let scope = $state<"open" | "history" | "all">("open");
+  let scope = $state<"open" | "attention" | "waiting" | "history" | "archived" | "all">("open");
+  let kind = $state("all");
   let page = $state(0);
   const pageSize = 8;
+  const requestKinds = ["decision", "review", "agent", "completion"] as const;
+  $effect(() => {
+    const token = revealToken;
+    if (!token) return;
+    untrack(() => {
+      scope = "open";
+      kind = "all";
+      query = "";
+      selectedId = token.split(":")[0];
+      const index = filterRoomRequests(room.requests, "open", "", room.participants).findIndex(
+        (r) => r.id === selectedId,
+      );
+      page = Math.max(0, Math.floor(index / pageSize));
+    });
+  });
   const nameFor = (id: string | null) =>
     id === "Human"
       ? t("room_requestsHuman")
@@ -34,7 +59,12 @@
         : t("room_requestsUnassigned");
   const openCount = $derived(room.requests.filter(isOpenRoomRequest).length);
   const humanCount = $derived(room.requests.filter(needsHumanAnswer).length);
-  const filtered = $derived(filterRoomRequests(room.requests, scope, query, room.participants));
+  const resolvedCount = $derived(
+    room.requests.filter((r) => !r.archived && !isOpenRoomRequest(r)).length,
+  );
+  const filtered = $derived(
+    filterRoomRequests(room.requests, scope, query, room.participants, kind),
+  );
   const pageCount = $derived(Math.max(1, Math.ceil(filtered.length / pageSize)));
   const currentPage = $derived(Math.min(page, pageCount - 1));
   const pageRequests = $derived(
@@ -66,6 +96,12 @@
     <header class="shrink-0 space-y-2 border-b p-3">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <h2 class="text-sm font-semibold">{t("room_requestsTitle")} · {openCount}</h2>
+        <button
+          type="button"
+          class="shrink-0 rounded px-2 py-1 text-xs hover:bg-accent"
+          aria-label={t("room_requestsHide")}
+          onclick={onClosePanel}>✕</button
+        >
         <span
           class="rounded-md px-2 py-1 text-xs {humanCount
             ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
@@ -93,8 +129,30 @@
           >
             <option value="open">{t("room_requestsOpen")}</option><option value="history"
               >{t("room_requestsResolved")}</option
-            ><option value="all">{t("room_requestsAll")}</option>
+            ><option value="attention">{t("room_requestsYourAnswer")}</option><option
+              value="waiting">{t("room_requestsWaiting")}</option
+            ><option value="archived">{t("room_requestsArchived")}</option><option value="all"
+              >{t("room_requestsAll")}</option
+            >
           </select></label
+        >
+      </div>
+      <div class="flex min-w-0 flex-wrap items-center gap-2">
+        <label class="min-w-0 flex-1"
+          ><span class="sr-only">{t("room_requestsKind")}</span><select
+            class="min-h-8 w-full rounded border bg-background px-2 text-xs"
+            bind:value={kind}
+            onchange={resetFilter}
+            ><option value="all">{t("room_requestsAllKinds")}</option
+            >{#each requestKinds as value}<option {value}>{t(`room_requestKind_${value}`)}</option
+              >{/each}</select
+          ></label
+        >
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={disabled || !!busyAction || !resolvedCount}
+          onclick={() => onArchive([], true)}>{t("room_requestsArchiveResolved")}</Button
         >
       </div>
     </header>
@@ -341,6 +399,13 @@
                   : t("room_requestsReject")}</Button
               >
             {/if}
+            {#if request.status !== "creating"}<Button
+                size="sm"
+                variant="outline"
+                disabled={isBusy || !replies[request.id]?.trim()}
+                onclick={() => onCloseRequest(request, replies[request.id].trim())}
+                >{t("room_requestsCloseObsolete")}</Button
+              >{/if}
           </div>
           {#if request.kind === "agent" && (!!request.approved_participant_id || room.participants.some((participant) => participant.id === request.id))}<p
               class="text-xs text-muted-foreground"
@@ -352,6 +417,16 @@
             >
               {room.paused ? t("room_requestsAcceptPausedHelp") : t("room_requestsPauseFirst")}
             </p>{/if}
+        </div>
+      {:else if !isOpenRoomRequest(request)}
+        <div class="shrink-0 border-t p-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={isBusy}
+            onclick={() => onArchive([request.id], !request.archived)}
+            >{request.archived ? t("room_requestsRestore") : t("room_requestsArchive")}</Button
+          >
         </div>
       {/if}
     {/key}

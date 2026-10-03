@@ -1,3 +1,14 @@
+export interface AttachableRoomChat {
+  run_id: string;
+  title: string;
+  name: string;
+  provider: "codex" | "claude";
+  model: string | null;
+  cwd: string;
+  previous_participant: boolean;
+  started_at: string;
+}
+
 export interface RoomProject {
   id: string;
   number: number;
@@ -194,6 +205,7 @@ export type RoomRequestStatus =
   | "rejected"
   | "changes_requested"
   | "verified"
+  | "closed"
   | "accepted";
 
 export interface RoomRequest {
@@ -209,6 +221,7 @@ export interface RoomRequest {
   brief: string | null;
   options: string[];
   status: RoomRequestStatus;
+  archived?: boolean;
   response: string | null;
   resolved_by: string | null;
   review_response?: string | null;

@@ -1,4 +1,5 @@
 pub mod attachments;
+pub mod chat_attachment;
 pub mod github;
 pub mod github_tasks;
 pub mod governance;

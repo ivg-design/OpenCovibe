@@ -73,3 +73,61 @@ continuation disabled. No real RAV or Nemo messages or requests were answered by
   original automatic-continuation preference. Its real RAV chat displayed the new nested
   sidebar and persistent requests panel (six needing a human answer). Lead and Codex
   delegate remained explicitly paused; no real request was answered.
+
+## Follow-up: active project collapse
+
+The initial sidebar expansion effect tracked the expanded-project set and immediately
+reopened the selected room's project after manual collapse. Expansion now happens on
+navigation or the first arrival of that room's folder. Room participant disclosure tracks
+selection rather than the periodically refreshed room object. Native isolated acceptance
+confirmed both the active RAV project and the selected room's participant list remained
+collapsed across refresh intervals; reopening the project still worked. All 39 sidebar
+tests passed, Svelte checks had zero errors, and packaged Acceptance/Local builds passed.
+
+## Follow-up: request cleanup, panel controls and chat reassociation
+
+Requests can be closed as obsolete with a recorded reason and archived/restored without
+losing status, responses or evidence. Human controls and scoped active-peer MCP tools share
+the same validation. Closure does not grant human approval or accept room completion.
+Archived entries leave the agents' active request snapshot and do not consume the active
+request limit. Inbox scopes distinguish human answers, agent work, resolved and archived
+entries, with a separate request-type filter.
+
+The room toolbar toggles Requests. Hiding keeps the component mounted so reply drafts
+survive. A new actionable request opens the panel and selects that entry when hidden;
+unchanged polls leave filters, selection and drafts alone. Per-room visibility, seen request
+keys and divider width survive restarts. The divider supports dragging, arrow keys and reset.
+
+Native isolated acceptance confirmed multiline draft preservation through hide/show, closure
+of a disposable obsolete request with its exact reason/audit message, bulk archiving of 102
+resolved records, and resizing the panel wider. Injecting one synthetic pending request into
+the isolated paused fixture reopened the hidden panel and selected it. After hiding, quitting
+and reopening, the panel stayed hidden; reopening restored its wider width. Fixture peers
+remained paused. Archived-scope selection/restore was not newly completed through native
+UI automation; filtering and restore have unit/backend coverage.
+
+Room settings also exposes Attach existing chat. Candidate discovery reads metadata, not
+large event logs, and compares Git common directories so linked worktrees qualify while
+unrelated clones do not. Attachment retains provider identity and restores the former peer
+id from retained detached settings or old message provenance. Agents start paused, history
+is not replayed, and ownership validation is atomic across rooms. New removals retain peer
+settings; removed timers are not automatically reinstated.
+
+Automated verification: 1,575 frontend tests passed; the full Rust suite passed 954 tests,
+zero failed, five ignored. Svelte checks reported zero errors and 71 existing warnings.
+New coverage exercises legacy identity recovery, paused restoration, duplicate/foreign-room
+ownership, name conflicts, archived rooms and linked-worktree repository identity.
+
+Native reassociation acceptance used an isolated saved RAV Codex delegate. The picker
+listed it as a former participant and remained open across room polls. Attaching placed its
+named paused row beneath the fixture room. Removing and attaching again retained the same
+participant id, model and saved provider thread; the group history stayed at 1,045 messages.
+No provider turn was sent. Acceptance caught and fixed a polling reset of the picker.
+The final Acceptance and Local bundles built successfully; the acceptance app was closed.
+This confirms UI/store reassociation, not a newly executed provider-resume E2E.
+
+The main Local app was restarted after checking that no room delivery was in flight.
+Original automatic-continuation preferences were restored from fresh room payloads,
+preserving the user's latest removals and renames. Read-only verification of the real RAV
+picker listed Claude delegate, Codex delegate and Lead as former participants. No live
+chat was reassociated, no real request was answered, and no participant was resumed.

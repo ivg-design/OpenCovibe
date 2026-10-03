@@ -30,7 +30,13 @@ pub fn create_request(
             return Err("a request with this title already exists with different content".into());
         }
         validate_request_kind(room, peer_id, &request)?;
-        if room.requests.len() >= MAX_REQUESTS {
+        if room
+            .requests
+            .iter()
+            .filter(|request| !request.archived)
+            .count()
+            >= MAX_REQUESTS
+        {
             return Err("room request limit reached".into());
         }
         if request.kind == "completion" {
@@ -232,6 +238,89 @@ pub fn resolve_request(
     })
 }
 
+/// Withdraw an obsolete request without granting its requested approval.
+pub fn close_request(
+    store: &RoomStore,
+    room_id: &str,
+    peer_id: Option<&str>,
+    request_id: &str,
+    reason: &str,
+) -> Result<Room, String> {
+    let reason = bounded(reason, 8000, "closure reason")?;
+    store.update(room_id, |room| {
+        if room.archived {
+            return Err("room is archived".into());
+        }
+        let (actor_id, actor_name) = if let Some(id) = peer_id {
+            active_writer(room, id)?;
+            (
+                id.to_owned(),
+                operations::active_peer(room, id)?.name.clone(),
+            )
+        } else {
+            ("Human".into(), "Human".into())
+        };
+        let request = room
+            .requests
+            .iter_mut()
+            .find(|r| r.id == request_id)
+            .ok_or("request not found")?;
+        if request.status == "closed" && request.response.as_deref() == Some(&reason) {
+            return Ok(());
+        }
+        if request.status == "creating" {
+            return Err("agent creation is in progress; wait for it to finish".into());
+        }
+        if !UNRESOLVED.contains(&request.status.as_str()) {
+            return Err("request is already resolved; archive it instead".into());
+        }
+        request.status = "closed".into();
+        request.response = Some(reason.clone());
+        request.resolved_by = Some(actor_id);
+        request.updated_at = crate::models::now_iso();
+        let body = format!(
+            "Request {} closed as no longer needed by {}. Reason: {}",
+            request.title, actor_name, reason
+        );
+        let target = request.requester_id.clone();
+        push_message(room, &actor_name, body, peer_id, Some(&target));
+        Ok(())
+    })
+}
+
+/// Archive resolved requests; no deletion or change to approval/review evidence.
+pub fn archive_requests(
+    store: &RoomStore,
+    room_id: &str,
+    peer_id: Option<&str>,
+    request_ids: &[String],
+    archived: bool,
+) -> Result<Room, String> {
+    store.update(room_id, |room| {
+        if let Some(id) = peer_id {
+            active_writer(room, id)?;
+        }
+        for id in request_ids {
+            let request = room
+                .requests
+                .iter()
+                .find(|r| r.id == *id)
+                .ok_or("request not found")?;
+            if UNRESOLVED.contains(&request.status.as_str()) {
+                return Err("only resolved requests can be archived".into());
+            }
+        }
+        for request in &mut room.requests {
+            if (request_ids.is_empty() || request_ids.contains(&request.id))
+                && !UNRESOLVED.contains(&request.status.as_str())
+            {
+                request.archived = archived;
+            }
+        }
+        Ok(())
+    })
+}
+
 pub fn record_agent_approval(
     store: &RoomStore,
     room_id: &str,
@@ -350,6 +439,7 @@ fn normalized_request(
         status: "pending".into(),
         response: None,
         resolved_by: None,
+        archived: false,
         approved_participant_id: None,
         work_signature: None,
         review_response: None,
@@ -772,6 +862,134 @@ mod tests {
             reviewer_id: Some("reviewer".into()),
             ..request("review", "Review implementation")
         }
+    }
+
+    #[test]
+    fn obsolete_requests_close_without_approval_and_archive_without_losing_evidence() {
+        let fixture = Fixture::new();
+        let room = create_request(
+            &fixture.store,
+            &fixture.room_id,
+            "requester",
+            request("decision", "Old question"),
+        )
+        .unwrap();
+        let id = room.requests[0].id.clone();
+        assert!(close_request(&fixture.store, &fixture.room_id, None, &id, " ").is_err());
+        assert!(
+            archive_requests(&fixture.store, &fixture.room_id, None, &[id.clone()], true).is_err()
+        );
+        let closed = close_request(
+            &fixture.store,
+            &fixture.room_id,
+            Some("reviewer"),
+            &id,
+            "Superseded by the published fix",
+        )
+        .unwrap();
+        assert_eq!(closed.requests[0].status, "closed");
+        assert_eq!(closed.requests[0].resolved_by.as_deref(), Some("reviewer"));
+        assert!(!closed.archived);
+        assert_eq!(closed.participants.len(), room.participants.len());
+        let repeated = close_request(
+            &fixture.store,
+            &fixture.room_id,
+            Some("reviewer"),
+            &id,
+            "Superseded by the published fix",
+        )
+        .unwrap();
+        assert_eq!(repeated.messages.len(), closed.messages.len());
+        let archived = archive_requests(
+            &fixture.store,
+            &fixture.room_id,
+            Some("requester"),
+            &[],
+            true,
+        )
+        .unwrap();
+        assert!(archived.requests[0].archived);
+        assert_eq!(archived.requests[0].response, closed.requests[0].response);
+        assert_eq!(archived.requests[0].body, room.requests[0].body);
+        let restored =
+            archive_requests(&fixture.store, &fixture.room_id, None, &[id.clone()], false).unwrap();
+        assert!(!restored.requests[0].archived);
+        assert_eq!(restored.requests[0].status, "closed");
+        assert!(resolve_request(&fixture.store, &fixture.room_id, &id, true, "Approve").is_err());
+        fixture
+            .store
+            .update(&fixture.room_id, |r| {
+                r.requests[0].status = "creating".into();
+                Ok(())
+            })
+            .unwrap();
+        assert!(close_request(&fixture.store, &fixture.room_id, None, &id, "Obsolete").is_err());
+    }
+
+    #[test]
+    fn archiving_is_atomic_and_paused_peers_cannot_clean_up_requests() {
+        let fixture = Fixture::new();
+        let room = create_request(
+            &fixture.store,
+            &fixture.room_id,
+            "requester",
+            request("decision", "Open question"),
+        )
+        .unwrap();
+        let id = room.requests[0].id.clone();
+        assert!(archive_requests(
+            &fixture.store,
+            &fixture.room_id,
+            None,
+            &["missing".into(), id.clone()],
+            true
+        )
+        .is_err());
+        assert!(!fixture.store.get(&fixture.room_id).unwrap().requests[0].archived);
+        fixture
+            .store
+            .update(&fixture.room_id, |r| {
+                r.participants
+                    .iter_mut()
+                    .find(|p| p.id == "reviewer")
+                    .unwrap()
+                    .paused = true;
+                Ok(())
+            })
+            .unwrap();
+        assert!(close_request(
+            &fixture.store,
+            &fixture.room_id,
+            Some("reviewer"),
+            &id,
+            "Obsolete"
+        )
+        .is_err());
+        assert!(archive_requests(
+            &fixture.store,
+            &fixture.room_id,
+            Some("reviewer"),
+            &[],
+            true
+        )
+        .is_err());
+        assert_eq!(
+            fixture.store.get(&fixture.room_id).unwrap().requests[0].status,
+            "pending"
+        );
+        assert_eq!(
+            close_request(
+                &fixture.store,
+                &fixture.room_id,
+                None,
+                &id,
+                "Already handled by human"
+            )
+            .unwrap()
+            .requests[0]
+                .status,
+            "closed"
+        );
     }
 
     fn completion_request() -> CreateRequestInput {

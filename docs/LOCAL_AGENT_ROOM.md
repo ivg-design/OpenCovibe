@@ -27,8 +27,8 @@ GitHub Project, independent peers, and a continuous shared conversation.
    follow GitHub links. Peers change the canonical task through room tools.
 7. The persistent **Requests** panel beside the room chat records agent proposals, questions for the human, independent peer reviews and
    final completion. Approving an agent creates exactly one paused peer with its approved brief;
-   explicitly resume it when ready. Search and filter Open, Resolved or All requests, then select an entry to read its full context and retained responses. Answer in the full-width multiline field beneath the context; buttons stay below and only the context scrolls. Room settings contains configuration, not requests or task claims. Reviews go to a named different
-   peer and retain their evidence. Resolve requests for changes by cancelling the old request and
+   explicitly resume it when ready. Search by text and request type, or filter Open, Your answer needed, Waiting on agents, Resolved, Archived or All requests. Select an entry to read its full context and retained responses. Close obsolete requests with a reason; Archive resolved clears finished entries from the active inbox while preserving their history. Archived entries can be restored. Active room peers can also use close_request and archive_requests; closing a request never grants approval. The Requests toolbar button and panel close button hide or show the panel without discarding drafts. A new actionable request opens a hidden panel and selects the new entry. Drag the divider to resize, or use its arrow keys; width and visibility are saved per room. Answer in the full-width multiline field beneath the context; buttons stay below and only the context scrolls. Room settings contains configuration, not requests or task claims. Reviews go to a named different
+   peer and retain their evidence. Resolve requests for changes by closing the old request with an explanation and
    creating a new one after the correction. Completion needs all board work Done, no unfinished
    claims or other open requests, fresh GitHub data, and independent peer verification. Pause the
    room, refresh the board, and accept with a note to archive the completed room.
@@ -47,6 +47,10 @@ GitHub Project, independent peers, and a continuous shared conversation.
 12. **View source session** opens the session used to start the room, including its full preserved history. **Room settings** is a button in the room header.
 13. The sidebar **Project board** opens the selected room's board directly. Room briefings,
     automation envelopes, and generic protocol outputs render as readable summaries.
+
+Room settings → **Attach existing chat** → **Choose chat** reconnects a saved local Codex or Claude session from the same repository, including linked worktrees. Former room participants appear first and can be renamed before attachment. They return under the room sidebar row, paused, with the same provider conversation and working folder; resume explicitly when ready. A chat already owned by another room or currently running cannot be attached. Future removals retain the participant identity, model, effort and worktree settings; older removals recover the participant id/name from retained message provenance when available. No old transcript is replayed into the room, and removed timers are not recreated.
+
+The Chats/Teams switch is inherited from upstream: **Teams** displays local Claude Code teams, their tasks and inboxes. Mixed Codex/Claude rooms are managed through Rooms and do not require Teams.
 
 Room settings includes **Edit room instructions**. The saved instructions are included in new
 wakeups for every peer. Running or already reserved turns keep their existing prompt. Saving an

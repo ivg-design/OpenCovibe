@@ -271,6 +271,9 @@ pub struct Room {
     pub project_stage: ProjectStage,
     pub board: Board,
     pub participants: Vec<Participant>,
+    /// Detached peers retain their identity/settings for later reassociation.
+    #[serde(default)]
+    pub detached_participants: Vec<Participant>,
     pub messages: Vec<Message>,
     #[serde(default)]
     pub sidechats: Vec<Sidechat>,
@@ -356,6 +359,8 @@ pub struct RoomRequest {
     pub status: String,
     pub response: Option<String>,
     pub resolved_by: Option<String>,
+    #[serde(default)]
+    pub archived: bool,
     #[serde(default)]
     pub review_response: Option<String>,
     #[serde(default)]

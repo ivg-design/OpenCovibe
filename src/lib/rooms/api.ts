@@ -1,6 +1,7 @@
 import { getTransport } from "$lib/transport";
 import type {
   AddParticipantInput,
+  AttachableRoomChat,
   ParticipantSettings,
   CreateRoomInput,
   Room,
@@ -13,6 +14,14 @@ import type { Attachment } from "$lib/types";
 
 export function listRooms(): Promise<Room[]> {
   return getTransport().invoke("list_rooms");
+}
+
+export function listAttachableRoomChats(id: string): Promise<AttachableRoomChat[]> {
+  return getTransport().invoke("list_attachable_room_chats", { id });
+}
+
+export function attachRoomChat(id: string, runId: string, name: string): Promise<Room> {
+  return getTransport().invoke("attach_room_chat", { id, runId, name });
 }
 
 export function getRoom(id: string): Promise<Room> {
@@ -172,6 +181,17 @@ export function resolveRoomRequest(
 
 export function approveRoomAgent(id: string, requestId: string): Promise<Room> {
   return getTransport().invoke("approve_room_agent", { id, requestId });
+}
+
+export function closeRoomRequest(id: string, requestId: string, reason: string): Promise<Room> {
+  return getTransport().invoke("close_room_request", { id, requestId, reason });
+}
+export function archiveRoomRequests(
+  id: string,
+  requestIds: string[],
+  archived: boolean,
+): Promise<Room> {
+  return getTransport().invoke("archive_room_requests", { id, requestIds, archived });
 }
 
 export function saveRoomInstructions(

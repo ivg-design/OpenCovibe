@@ -96,6 +96,7 @@ impl RoomStore {
             project_stage: ProjectStage::NotStarted,
             board: Board::default(),
             participants: vec![],
+            detached_participants: vec![],
             messages: vec![],
             sidechats: vec![],
             timers: vec![],
@@ -208,6 +209,69 @@ impl RoomStore {
         .map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(room)
+    }
+
+    /// Serialize ownership checks across every room, not just the target room.
+    pub fn attach_chat(
+        &self,
+        id: &str,
+        peer: Participant,
+        meta: &crate::models::RunMeta,
+    ) -> Result<Room, String> {
+        let mut conn = self.connection.lock().map_err(|e| e.to_string())?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        let mut rooms = {
+            let mut statement = tx
+                .prepare("SELECT payload FROM rooms")
+                .map_err(|e| e.to_string())?;
+            let rows = statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            rows.map(|row| {
+                serde_json::from_str::<Room>(&row.map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())
+            })
+            .collect::<Result<Vec<_>, String>>()?
+        };
+        if rooms
+            .iter()
+            .any(|r| r.id != id && super::chat_attachment::owns_chat(r, meta))
+        {
+            return Err("This chat already belongs to another room.".into());
+        }
+        let room = rooms
+            .iter_mut()
+            .find(|r| r.id == id)
+            .ok_or("room not found")?;
+        if room.archived {
+            return Err("room is archived".into());
+        }
+        if room.participants.iter().any(|p| p.run_id == peer.run_id) {
+            return Ok(room.clone());
+        }
+        if super::chat_attachment::owns_attached_chat(room, meta) {
+            return Err("This provider session already belongs to the room.".into());
+        }
+        if room
+            .participants
+            .iter()
+            .any(|p| p.id == peer.id || p.name.eq_ignore_ascii_case(&peer.name))
+        {
+            return Err("An agent with that name or identity already belongs to this room. Choose another name.".into());
+        }
+        room.detached_participants
+            .retain(|p| p.run_id != peer.run_id);
+        room.participants.push(peer);
+        room.updated_at = crate::models::now_iso();
+        tx.execute(
+            "UPDATE rooms SET payload=?1 WHERE id=?2",
+            params![serde_json::to_string(room).map_err(|e| e.to_string())?, id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(room.clone())
     }
 
     pub fn save_instructions(

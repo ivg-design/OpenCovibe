@@ -118,6 +118,18 @@ pub async fn inspect(path: &str) -> Result<RepositoryInspection, String> {
     })
 }
 
+/// Linked worktrees share this path even when their checkout roots differ.
+pub async fn common_directory(path: &str) -> Result<String, String> {
+    let common = git(
+        Path::new(path),
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .await?;
+    std::fs::canonicalize(common)
+        .map(|p| p.to_string_lossy().into_owned())
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,6 +165,44 @@ mod tests {
             None
         );
         assert_eq!(github_repository("https://github.com/acme"), None);
+    }
+
+    #[tokio::test]
+    async fn repository_identity_matches_linked_worktrees_but_not_another_checkout() {
+        let temp = TempDir::new().unwrap();
+        let main = temp.path().join("main");
+        let other = temp.path().join("other");
+        let linked = temp.path().join("linked");
+        std::fs::create_dir_all(&main).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        git_at(&main, &["init"]);
+        git_at(&other, &["init"]);
+        git_at(
+            &main,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "Seed",
+            ],
+        );
+        git_at(
+            &main,
+            &["worktree", "add", "-b", "peer", linked.to_str().unwrap()],
+        );
+        let root = common_directory(main.to_str().unwrap()).await.unwrap();
+        assert_eq!(
+            root,
+            common_directory(linked.to_str().unwrap()).await.unwrap()
+        );
+        assert_ne!(
+            root,
+            common_directory(other.to_str().unwrap()).await.unwrap()
+        );
     }
 
     #[tokio::test]

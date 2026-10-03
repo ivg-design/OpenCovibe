@@ -572,6 +572,127 @@ pub async fn add_room_participant(
     add_participant(&store, &id, input, None, None).await
 }
 
+#[tauri::command]
+pub async fn list_attachable_room_chats(
+    store: State<'_, Arc<RoomStore>>,
+    id: String,
+) -> Result<Vec<crate::rooms::chat_attachment::AttachableChat>, String> {
+    use crate::rooms::chat_attachment::{
+        former_peer, owns_attached_chat, owns_chat, validate_chat, AttachableChat,
+    };
+    let room = store.get(&id)?;
+    let rooms = store.list()?;
+    let common = repository::common_directory(&room.repo_path).await?;
+    // Read only small metadata files: opening this picker never scans event logs.
+    let metas = tokio::task::spawn_blocking(storage::runs::list_all_run_metas)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut folders: std::collections::HashMap<String, Option<String>> =
+        std::collections::HashMap::new();
+    let mut chats = vec![];
+    for meta in metas {
+        let former = former_peer(&room, &meta.id);
+        if validate_chat(&meta, former.is_some()).is_err()
+            || owns_attached_chat(&room, &meta)
+            || rooms.iter().any(|r| {
+                (r.id != id || r.participants.iter().any(|p| p.run_id == meta.id))
+                    && owns_chat(r, &meta)
+            })
+        {
+            continue;
+        }
+        let folder_common = if let Some(value) = folders.get(&meta.cwd) {
+            value.clone()
+        } else {
+            let value = repository::common_directory(&meta.cwd).await.ok();
+            folders.insert(meta.cwd.clone(), value.clone());
+            value
+        };
+        if folder_common.as_deref() != Some(common.as_str()) {
+            continue;
+        }
+        chats.push(AttachableChat {
+            run_id: meta.id.clone(),
+            title: crate::rooms::session_seed::source_title(&meta),
+            name: former
+                .as_ref()
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| crate::rooms::session_seed::source_title(&meta)),
+            provider: meta.agent.clone(),
+            model: meta.model.clone(),
+            cwd: meta.cwd.clone(),
+            previous_participant: former.is_some(),
+            started_at: meta.started_at.clone(),
+        });
+    }
+    chats.sort_by(|a, b| {
+        b.previous_participant
+            .cmp(&a.previous_participant)
+            .then_with(|| b.started_at.cmp(&a.started_at))
+    });
+    Ok(chats)
+}
+
+#[tauri::command]
+pub async fn attach_room_chat(
+    store: State<'_, Arc<RoomStore>>,
+    sessions: State<'_, ActorSessionMap>,
+    spawn_locks: State<'_, SpawnLocks>,
+    id: String,
+    run_id: String,
+    name: String,
+) -> Result<Room, String> {
+    let _guard = spawn_locks.acquire(&run_id).await;
+    let room = store.get(&id)?;
+    if room.participants.iter().any(|p| p.run_id == run_id) {
+        return Ok(room);
+    }
+    if room.archived {
+        return Err("room is archived".into());
+    }
+    let mut meta = storage::runs::get_run(&run_id).ok_or("Chat not found")?;
+    crate::rooms::chat_attachment::validate_chat(
+        &meta,
+        crate::rooms::chat_attachment::former_peer(&room, &run_id).is_some(),
+    )?;
+    let common = repository::common_directory(&room.repo_path).await?;
+    if repository::common_directory(&meta.cwd).await? != common {
+        return Err(
+            "Choose a chat from this room's repository or one of its linked worktrees.".into(),
+        );
+    }
+    if store
+        .list()?
+        .iter()
+        .any(|r| r.id != id && crate::rooms::chat_attachment::owns_chat(r, &meta))
+    {
+        return Err("This chat already belongs to another room.".into());
+    }
+    let history_id = run_id.clone();
+    let history =
+        tokio::task::spawn_blocking(move || storage::history::get_summary(&history_id, true))
+            .await
+            .map_err(|e| e.to_string())??;
+    let mut peer = crate::rooms::chat_attachment::restored_peer(
+        &room,
+        &meta,
+        &name,
+        history.last_seq,
+        history.source_size,
+    )?;
+    let root = repository::inspect(&meta.cwd).await?.repo_path;
+    if std::fs::canonicalize(&root).ok() != std::fs::canonicalize(&room.repo_path).ok() {
+        peer.worktree_path = Some(root.clone());
+        peer.branch = worktrees::current_branch(&root).await?;
+    }
+    // An idle standalone actor must restart with this room's tools on explicit resume.
+    crate::commands::session::stop_actor(sessions.inner(), &run_id).await?;
+    meta.execution_path = Some(ExecutionPath::SessionActor);
+    meta.status = RunStatus::Stopped;
+    storage::runs::save_meta(&meta)?;
+    store.attach_chat(&id, peer, &meta)
+}
+
 async fn add_participant(
     store: &RoomStore,
     id: &str,
@@ -889,10 +1010,28 @@ pub async fn remove_room_participant(
         emitter.inner(),
         sessions.inner(),
         spawn_locks.inner(),
-        peer.run_id,
+        peer.run_id.clone(),
     )
     .await?;
     store.update(&id, |r| {
+        if r.claims.iter().any(|c| {
+            c.participant_id == participant_id && !matches!(c.state.as_str(), "done" | "released")
+        }) {
+            return Err("participant still owns an active task claim".into());
+        }
+        if let Some(mut detached) = r
+            .participants
+            .iter()
+            .find(|p| p.id == participant_id)
+            .cloned()
+        {
+            detached.paused = true;
+            detached.state = "paused".into();
+            detached.pending_delivery = None;
+            r.detached_participants
+                .retain(|p| p.run_id != detached.run_id);
+            r.detached_participants.push(detached);
+        }
         r.participants.retain(|p| p.id != participant_id);
         r.timers.retain(|t| t.participant_id != participant_id);
         Ok(())
@@ -1207,6 +1346,27 @@ pub async fn resolve_room_request(
 ) -> Result<Room, String> {
     let _operation = store.project_operation.lock().await;
     governance::resolve_request(&store, &id, &request_id, approve, &response)
+}
+
+#[tauri::command]
+pub async fn close_room_request(
+    store: State<'_, Arc<RoomStore>>,
+    id: String,
+    request_id: String,
+    reason: String,
+) -> Result<Room, String> {
+    let _operation = store.project_operation.lock().await;
+    governance::close_request(&store, &id, None, &request_id, &reason)
+}
+
+#[tauri::command]
+pub fn archive_room_requests(
+    store: State<'_, Arc<RoomStore>>,
+    id: String,
+    request_ids: Vec<String>,
+    archived: bool,
+) -> Result<Room, String> {
+    governance::archive_requests(&store, &id, None, &request_ids, archived)
 }
 
 #[tauri::command]
