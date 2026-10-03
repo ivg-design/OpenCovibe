@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import Button from "$lib/components/Button.svelte";
   import RoomModelEffort from "$lib/components/RoomModelEffort.svelte";
   import RoomTurnLimit from "$lib/components/RoomTurnLimit.svelte";
@@ -36,6 +37,8 @@
       max_turns: number;
     }) => void;
   } = $props();
+  // Preserve the user's disclosure choice while editing and during room refreshes.
+  let addOpen = $state(untrack(() => participants.length === 0));
   let name = $state("");
   let provider = $state<"codex" | "claude">("codex");
   let model = $state("");
@@ -251,7 +254,7 @@
       </Card>
     {/each}
   </div>
-  <details class="rounded-lg border bg-card px-3 py-2" open={participants.length === 0}>
+  <details class="rounded-lg border bg-card px-3 py-2" bind:open={addOpen}>
     <summary class="cursor-pointer text-sm font-medium">{t("room_addParticipant")}</summary>
     <form class="room-form mt-2 grid gap-2 pb-1" onsubmit={submit}>
       <label class="min-w-0 space-y-1 text-xs text-muted-foreground"

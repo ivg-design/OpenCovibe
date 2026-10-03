@@ -17,12 +17,25 @@ export function guardRpc(raw: unknown, room: string, conversation: string): Guar
   if (["initialize", "ping", "server/discover", "tools/list", "events/list"].includes(method)) return { request: { jsonrpc: "2.0", id: raw.id, method, params } };
   if (method === "tools/call") {
     const name = params.name, args = params.arguments;
-    if (typeof name !== "string" || !["ocv.list_agents", "ocv.send_message", "ocv.get_message", "ocv.read_replies"].includes(name) || !object(args)) return { error: "Unsupported tool or arguments" };
+    if (typeof name !== "string" || !["ocv.list_agents", "ocv.send_message", "ocv.get_message", "ocv.read_replies", "ocv.resume_room", "ocv.wake_agent"].includes(name) || !object(args)) return { error: "Unsupported tool or arguments" };
     const a = { ...args };
     if (name === "ocv.list_agents") {
       if (a.room_id !== undefined && (allSessions ? typeof a.room_id !== "string" || !new RegExp(`^${uuid}$`).test(a.room_id) : a.room_id !== room)) return { error: "Forbidden room" };
       if (Object.keys(a).some(k => k !== "room_id")) return { error: "Unsupported room filter" };
       if (!allSessions) a.room_id = room;
+    } else if (name === "ocv.resume_room" || name === "ocv.wake_agent") {
+      if (a.conversation_ref !== undefined && a.conversation_ref !== conversation) return { error: "Forbidden conversation" };
+      if (typeof a.client_action_id !== "string" || a.client_action_id.length < 1 || a.client_action_id.length > 160) return { error: "Invalid action id" };
+      if (name === "ocv.resume_room") {
+        if (typeof a.room_id !== "string" || (allSessions ? !new RegExp(`^${uuid}$`).test(a.room_id) : a.room_id !== room)) return { error: "Forbidden room" };
+        if (Object.keys(a).some(k => !["room_id", "conversation_ref", "client_action_id"].includes(k))) return { error: "Unsupported room control" };
+      } else {
+        const pattern = allSessions ? `^${uuid}/${uuid}$` : `^${room}/${uuid}$`;
+        if (typeof a.agent_id !== "string" || !new RegExp(pattern).test(a.agent_id)) return { error: "Forbidden room agent" };
+        if (typeof a.text !== "string" || !a.text.trim() || a.text.length > 32000 || (a.reset_turn_budget !== undefined && typeof a.reset_turn_budget !== "boolean")) return { error: "Invalid wake message" };
+        if (Object.keys(a).some(k => !["agent_id", "conversation_ref", "client_action_id", "text", "reset_turn_budget"].includes(k))) return { error: "Unsupported agent control" };
+      }
+      a.conversation_ref = conversation;
     } else if (name === "ocv.send_message") {
       if (a.conversation_ref !== undefined && a.conversation_ref !== conversation) return { error: "Forbidden conversation" };
       const agentPattern = allSessions ? `^(?:${uuid}/${uuid}|session/${uuid})$` : `^${room}/${uuid}$`;

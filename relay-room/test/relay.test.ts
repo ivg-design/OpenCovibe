@@ -47,6 +47,52 @@ it("allows session discovery and routing only with explicit all-session owner sc
   expect(guardRpc(rpc("ocv.send_message", { ...send, agent_id: "session/../../system" }), "*", conversation)).toHaveProperty("error", "Forbidden agent");
 });
 
+it("binds explicit controls to the exact conversation and room, excluding standalone starts", () => {
+  const rpc = (name: string, args: object) => ({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } });
+  const peer = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+  const resume = { room_id: room, client_action_id: "resume-1" };
+  expect(guardRpc(rpc("ocv.resume_room", resume), "*", conversation)).toHaveProperty("request.params.arguments.conversation_ref", conversation);
+  expect(guardRpc(rpc("ocv.resume_room", { ...resume, room_id: "../outside" }), "*", conversation)).toHaveProperty("error", "Forbidden room");
+  expect(guardRpc(rpc("ocv.resume_room", { ...resume, room_id: peer }), room, conversation)).toHaveProperty("error", "Forbidden room");
+  expect(guardRpc(rpc("ocv.resume_room", { ...resume, unpause_all: true }), "*", conversation)).toHaveProperty("error", "Unsupported room control");
+  const wake = { agent_id: room + "/" + peer, client_action_id: "wake-1", text: "Reply, then stop" };
+  expect(guardRpc(rpc("ocv.wake_agent", wake), "*", conversation)).toHaveProperty("request.params.arguments.conversation_ref", conversation);
+  expect(guardRpc(rpc("ocv.wake_agent", { ...wake, agent_id: "session/" + peer }), "*", conversation)).toHaveProperty("error", "Forbidden room agent");
+  expect(guardRpc(rpc("ocv.wake_agent", { ...wake, conversation_ref: "other" }), "*", conversation)).toHaveProperty("error", "Forbidden conversation");
+  expect(guardRpc(rpc("ocv.wake_agent", { ...wake, reset_turn_budget: "yes" }), "*", conversation)).toHaveProperty("error", "Invalid wake message");
+  expect(guardRpc(rpc("ocv.wake_agent", { ...wake, client_action_id: "" }), "*", conversation)).toHaveProperty("error", "Invalid action id");
+});
+
+it("read-only OAuth cannot use room resume or agent wake", async () => {
+  const { fetch, mac } = testRelay();
+  const registration = await fetch("/register", { method: "POST", body: JSON.stringify({ client_name: "Read only", redirect_uris: ["https://client.example/callback"] }) });
+  const { client_id } = await registration.json() as { client_id: string };
+  const q = new URLSearchParams({ client_id, redirect_uri: "https://client.example/callback", response_type: "code", code_challenge: challenge, code_challenge_method: "S256", resource: origin + "/mcp", scope: "room.read" });
+  await fetch("/authorize?" + q);
+  const { pending } = await (await mac("/bridge/pending")).json() as { pending: { id: string; code: string }[] };
+  const consent = await fetch("/consent", { method: "POST", body: new URLSearchParams(pending[0]), redirect: "manual" });
+  const code = new URL(consent.headers.get("location")!).searchParams.get("code")!;
+  const tokenResponse = await fetch("/token", { method: "POST", body: new URLSearchParams({ grant_type: "authorization_code", client_id, code, code_verifier: verifier, redirect_uri: "https://client.example/callback", resource: origin + "/mcp" }) });
+  const { access_token } = await tokenResponse.json() as { access_token: string };
+  const initPending = fetch("/mcp", { method: "POST", headers: { authorization: "Bearer " + access_token }, body: JSON.stringify({ jsonrpc: "2.0", id: "init", method: "initialize", params: { protocolVersion: "2025-11-25" } }) });
+  let next: { request: { key: string } | null } = { request: null };
+  for (let i = 0; i < 20 && !next.request; i++) {
+    next = await (await mac("/bridge/next")).json() as typeof next;
+    if (!next.request) await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  expect(next.request).not.toBeNull();
+  await mac("/bridge/respond", { method: "POST", body: JSON.stringify({ key: next.request!.key, response: { jsonrpc: "2.0", id: "init", result: { protocolVersion: "2025-11-25" } } }) });
+  const session = (await initPending).headers.get("mcp-session-id")!;
+  // Valid read-only session, but controls never reach the Mac or create a lease.
+  for (const name of ["ocv.resume_room", "ocv.wake_agent"]) {
+    const args = name === "ocv.resume_room" ? { room_id: room, client_action_id: "resume" } : { agent_id: room + "/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", client_action_id: "wake", text: "Reply" };
+    const response = await fetch("/mcp", { method: "POST", headers: { authorization: "Bearer " + access_token, "mcp-session-id": session }, body: JSON.stringify({ jsonrpc: "2.0", id: name, method: "tools/call", params: { name, arguments: args } }) });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toHaveProperty("error.message", "Scope denied");
+  }
+  expect((await (await mac("/bridge/next")).json() as { request: unknown }).request).toBeNull();
+});
+
 it("requires Mac-only consent, exact PKCE and audience, rotates refresh and burns replay", async () => {
   const { fetch, mac } = testRelay();
   expect((await fetch("/.well-known/openid-configuration")).status).toBe(404);

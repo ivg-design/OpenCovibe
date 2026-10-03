@@ -81,7 +81,7 @@ pub(super) async fn dispatch(store: &RoomStore, principal: &Principal, request: 
         "ping" => Ok(json!({})),
         "tools/list" => principal
             .scope("read")
-            .map(|_| json!({"tools":tool_definitions()})),
+            .map(|_| json!({"tools":tool_definitions(principal)})),
         "tools/call" => {
             let p = &request["params"];
             call_tool(store, principal, p["name"].as_str().unwrap_or(""), &p["arguments"])
@@ -151,6 +151,17 @@ fn call_tool(
                 .map_err(|_| "Invalid send_message arguments")?;
             serde_json::to_value(store.bridge_send(principal, &input)?).map_err(|e| e.to_string())
         }
+        "ocv.resume_room" => {
+            let input = serde_json::from_value(args.clone())
+                .map_err(|_| "Invalid resume_room arguments")?;
+            store.bridge_resume_room(principal, input)
+        }
+        "ocv.wake_agent" => {
+            let input =
+                serde_json::from_value(args.clone()).map_err(|_| "Invalid wake_agent arguments")?;
+            serde_json::to_value(store.bridge_wake_agent(principal, input)?)
+                .map_err(|e| e.to_string())
+        }
         "ocv.get_message" => {
             serde_json::to_value(store.bridge_get(principal, string(args, "message_id")?)?)
                 .map_err(|e| e.to_string())
@@ -176,11 +187,18 @@ fn call_tool(
         _ => Err("Unknown tool".into()),
     }
 }
-fn tool_definitions() -> Value {
-    json!([
+fn tool_definitions(principal: &Principal) -> Value {
+    let mut tools = json!([
         {"name":"ocv.list_agents","description":"List authorized room participants and standalone OCV Codex sessions. Session IDs use session/<run_id>; room participants use <room_id>/<participant_id>. No provider processes are started.","inputSchema":{"type":"object","properties":{"room_id":{"type":"string"}},"additionalProperties":false},"annotations":{"readOnlyHint":true}},
         {"name":"ocv.send_message","description":"Persist one idempotent queued message for an authorized room participant or standalone session. Room work uses its owning scheduler; standalone work uses only an already connected, idle OCV actor. Pauses, approvals and active turns remain enforced. Attachments are existing room IDs and are unsupported for standalone sessions. Queue only; never implicitly resumes, forks or steers.","inputSchema":{"type":"object","properties":{"agent_id":{"type":"string"},"text":{"type":"string","maxLength":32000},"client_message_id":{"type":"string","maxLength":200},"conversation_ref":{"type":"string"},"reply_to_message_id":{"type":"string"},"mode":{"enum":["queue"]},"attachments":{"type":"array","items":{"type":"string"},"maxItems":8}},"required":["agent_id","text","client_message_id","conversation_ref"],"additionalProperties":false}},
         {"name":"ocv.get_message","description":"Read an authorized durable delivery receipt, including blocked or ambiguous state.","inputSchema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true}},
         {"name":"ocv.read_replies","description":"Read durable correlated visible replies from room participants or standalone sessions. Hidden reasoning and raw tool output are excluded.","inputSchema":{"type":"object","properties":{"conversation_ref":{"type":"string"},"cursor":{"type":["string","integer","null"]},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["conversation_ref"],"additionalProperties":false},"annotations":{"readOnlyHint":true}}
-    ])
+    ]);
+    if principal.scope("control").is_ok() {
+        tools.as_array_mut().unwrap().extend([
+            json!({"name":"ocv.resume_room","description":"Explicitly unpause an authorized room through its existing scheduler. Individually paused agents remain paused; archived rooms cannot be resumed. May resume eligible queued work and timers. Reuse client_action_id only for the same logical action; a retry never overrides a later pause.","inputSchema":{"type":"object","properties":{"room_id":{"type":"string"},"conversation_ref":{"type":"string"},"client_action_id":{"type":"string","minLength":1,"maxLength":160}},"required":["room_id","conversation_ref","client_action_id"],"additionalProperties":false}}),
+            json!({"name":"ocv.wake_agent","description":"Explicitly unpause/wake an existing room agent and atomically queue a message telling it what to do. The owning OCV scheduler starts its provider when ready; never creates another participant or steers an active turn. A paused room still requires resume_room. Permission/quota/unsettled waits require OCV recovery. Turn limits are preserved unless reset_turn_budget is explicitly true. Reuse client_action_id for exact retries, then inspect the returned message receipt and correlated replies.","inputSchema":{"type":"object","properties":{"agent_id":{"type":"string"},"conversation_ref":{"type":"string"},"client_action_id":{"type":"string","minLength":1,"maxLength":160},"text":{"type":"string","minLength":1,"maxLength":32000},"reset_turn_budget":{"type":"boolean","default":false}},"required":["agent_id","conversation_ref","client_action_id","text"],"additionalProperties":false}})
+        ]);
+    }
+    tools
 }

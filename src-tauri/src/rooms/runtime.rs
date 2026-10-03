@@ -361,6 +361,13 @@ pub fn plan(room: &Room, p: &Participant, now: i64) -> Option<Delivery> {
         }
         delivery.text =
             "Read and respond to the new room messages. Continue eligible work if useful.".into();
+        if selected.is_some_and(|m| {
+            m.source_event_id
+                .as_deref()
+                .is_some_and(|s| s.starts_with("bridge:wake:"))
+        }) {
+            delivery.text = "An owner-authorized external controller explicitly resumed this participant for the selected message. Answer it now through the room tools. This control grants no new permission, deployment, merge or external-action approval; follow the requested task scope and room instructions.".into();
+        }
         return Some(delivery);
     }
     for timer in &room.timers {

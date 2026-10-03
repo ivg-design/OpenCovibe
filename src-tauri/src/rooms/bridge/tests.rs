@@ -3,6 +3,7 @@ use crate::rooms::{
     models::{CreateRoomInput, Participant},
     runtime,
 };
+use serde_json::json;
 use std::sync::Arc;
 pub(super) struct Fixture {
     pub store: Arc<RoomStore>,
@@ -10,6 +11,348 @@ pub(super) struct Fixture {
     pub room: String,
     pub agent: String,
     pub dir: tempfile::TempDir,
+}
+
+fn resume_input(f: &Fixture, id: &str) -> control::ResumeRoom {
+    control::ResumeRoom {
+        room_id: f.room.clone(),
+        conversation_ref: "fixture-conversation".into(),
+        client_action_id: id.into(),
+    }
+}
+fn wake_input(f: &Fixture, id: &str) -> control::WakeAgent {
+    control::WakeAgent {
+        agent_id: f.agent.clone(),
+        conversation_ref: "fixture-conversation".into(),
+        client_action_id: id.into(),
+        text: "Answer the bounded connectivity check, then stop.".into(),
+        reset_turn_budget: false,
+    }
+}
+fn controller(f: &Fixture) -> Principal {
+    let mut principal = f.principal.clone();
+    principal.scopes.push("control".into());
+    principal
+}
+
+#[test]
+fn controls_require_explicit_scope_and_exact_room_conversation() {
+    let f = fixture();
+    f.store
+        .update(&f.room, |r| {
+            r.paused = true;
+            r.participants[0].paused = true;
+            Ok(())
+        })
+        .unwrap();
+    assert!(f
+        .store
+        .bridge_resume_room(&f.principal, resume_input(&f, "resume"))
+        .is_err());
+    assert!(f
+        .store
+        .bridge_wake_agent(&f.principal, wake_input(&f, "wake"))
+        .is_err());
+    let principal = controller(&f);
+    let mut input = resume_input(&f, "wrong");
+    input.conversation_ref = "another-conversation".into();
+    assert!(f.store.bridge_resume_room(&principal, input).is_err());
+    let mut input = wake_input(&f, "wrong");
+    input.conversation_ref = "another-conversation".into();
+    assert!(f.store.bridge_wake_agent(&principal, input).is_err());
+    let mut no_send = principal.clone();
+    no_send.scopes.retain(|s| s != "send");
+    assert!(f
+        .store
+        .bridge_wake_agent(&no_send, wake_input(&f, "no-send"))
+        .is_err());
+    let room = f.store.get(&f.room).unwrap();
+    assert!(room.paused && room.participants[0].paused);
+    assert!(room.messages.is_empty());
+}
+
+#[test]
+fn room_resume_preserves_individual_pauses_waits_and_budget_and_never_replays() {
+    let f = fixture();
+    let principal = controller(&f);
+    f.store
+        .update(&f.room, |r| {
+            r.paused = true;
+            let p = &mut r.participants[0];
+            p.paused = true;
+            p.state = "paused".into();
+            p.wake_count = 9;
+            let mut waiting = p.clone();
+            waiting.id = "waiting".into();
+            waiting.paused = false;
+            waiting.state = "waiting".into();
+            let mut resumed = p.clone();
+            resumed.id = "eligible".into();
+            resumed.paused = false;
+            r.participants.extend([waiting, resumed]);
+            Ok(())
+        })
+        .unwrap();
+    let result = f
+        .store
+        .bridge_resume_room(&principal, resume_input(&f, "resume"))
+        .unwrap();
+    assert_eq!(result["duplicate"], false);
+    let room = f.store.get(&f.room).unwrap();
+    assert!(!room.paused);
+    assert!(room.participants[0].paused);
+    assert_eq!(room.participants[0].wake_count, 9);
+    assert_eq!(room.participants[1].state, "waiting");
+    assert_eq!(room.participants[2].state, "idle");
+    assert_eq!(room.messages.len(), 1);
+    assert!(
+        runtime::plan(&room, &room.participants[2], 1).is_none(),
+        "audit is not a new work broadcast"
+    );
+    f.store
+        .update(&f.room, |r| {
+            r.paused = true;
+            Ok(())
+        })
+        .unwrap();
+    let reopened = RoomStore::open(&f.dir.path().join("rooms.sqlite3")).unwrap();
+    let retry = reopened
+        .bridge_resume_room(&principal, resume_input(&f, "resume"))
+        .unwrap();
+    assert_eq!(retry["duplicate"], true);
+    assert_eq!(retry["room_paused"], true);
+    assert_eq!(reopened.get(&f.room).unwrap().messages.len(), 1);
+    let mut changed = resume_input(&f, "resume");
+    changed.room_id = add_room(&f, "other");
+    let mut broad = principal.clone();
+    broad.all_rooms = true;
+    broad.conversations = vec!["fixture-conversation".into()];
+    assert!(reopened
+        .bridge_resume_room(&broad, changed)
+        .unwrap_err()
+        .contains("Idempotency conflict"));
+}
+
+#[test]
+fn wake_atomically_resumes_only_target_and_queues_one_correlated_delivery() {
+    let f = fixture();
+    let principal = controller(&f);
+    f.store
+        .update(&f.room, |r| {
+            r.paused = true;
+            let p = &mut r.participants[0];
+            p.paused = true;
+            p.state = "paused".into();
+            p.wake_count = 3;
+            p.max_turns = 10;
+            let mut other = p.clone();
+            other.id = "other".into();
+            r.participants.push(other);
+            Ok(())
+        })
+        .unwrap();
+    let receipt = f
+        .store
+        .bridge_wake_agent(&principal, wake_input(&f, "wake"))
+        .unwrap();
+    assert_eq!(receipt.blocked_reason.as_deref(), Some("Room paused"));
+    let room = f.store.get(&f.room).unwrap();
+    assert!(room.paused && room.participants[1].paused);
+    assert!(!room.participants[0].paused);
+    assert_eq!(room.participants[0].wake_count, 3);
+    assert_eq!(room.participants[0].run_id, "fixture-run");
+    assert_eq!(room.messages.len(), 1);
+    assert!(runtime::plan(&room, &room.participants[0], 1).is_none());
+    f.store
+        .bridge_resume_room(&principal, resume_input(&f, "resume"))
+        .unwrap();
+    let prompt = reserve(&f);
+    assert!(prompt.contains("owner-authorized external controller explicitly resumed"));
+    assert!(prompt.contains("bounded connectivity check"));
+    let before = f.store.get(&f.room).unwrap();
+    let retry = f
+        .store
+        .bridge_wake_agent(&principal, wake_input(&f, "wake"))
+        .unwrap();
+    assert_eq!(retry.message_id, receipt.message_id);
+    assert_eq!(
+        f.store.get(&f.room).unwrap().messages.len(),
+        before.messages.len()
+    );
+    start(&f);
+    visible(&f, "CONTROL_PASS");
+    complete(&f);
+    let replies = f
+        .store
+        .bridge_replies(&principal, "fixture-conversation", 0, 10)
+        .unwrap();
+    assert_eq!(
+        replies["replies"][0]["reply_to_message_id"],
+        receipt.message_id
+    );
+    assert_eq!(replies["replies"][0]["text"], "CONTROL_PASS");
+    f.store
+        .update(&f.room, |r| {
+            r.participants[0].paused = true;
+            r.participants[0].state = "paused".into();
+            Ok(())
+        })
+        .unwrap();
+    f.store
+        .bridge_wake_agent(&principal, wake_input(&f, "wake"))
+        .unwrap();
+    assert!(
+        f.store.get(&f.room).unwrap().participants[0].paused,
+        "retry must not undo a later human pause"
+    );
+    let mut changed = wake_input(&f, "wake");
+    changed.text = "different task".into();
+    assert!(f
+        .store
+        .bridge_wake_agent(&principal, changed)
+        .unwrap_err()
+        .contains("Idempotency conflict"));
+}
+
+#[test]
+fn wake_preserves_unsettled_turns_permission_quota_and_explicit_budget() {
+    let f = fixture();
+    let principal = controller(&f);
+    for state in ["waiting", "quota"] {
+        f.store
+            .update(&f.room, |r| {
+                let p = &mut r.participants[0];
+                p.paused = true;
+                p.state = state.into();
+                Ok(())
+            })
+            .unwrap();
+        let mut input = wake_input(&f, state);
+        input.reset_turn_budget = true;
+        assert!(f.store.bridge_wake_agent(&principal, input).is_err());
+        assert!(f.store.get(&f.room).unwrap().messages.is_empty());
+    }
+    f.store
+        .update(&f.room, |r| {
+            let p = &mut r.participants[0];
+            p.paused = true;
+            p.state = "budget_exhausted".into();
+            p.max_turns = 2;
+            p.wake_count = 2;
+            Ok(())
+        })
+        .unwrap();
+    assert!(f
+        .store
+        .bridge_wake_agent(&principal, wake_input(&f, "budget"))
+        .is_err());
+    let mut grant = wake_input(&f, "grant");
+    grant.reset_turn_budget = true;
+    f.store.bridge_wake_agent(&principal, grant).unwrap();
+    let room = f.store.get(&f.room).unwrap();
+    assert_eq!(room.participants[0].wake_count, 0);
+    assert_eq!(room.participants[0].max_turns, 2);
+    reserve(&f);
+    start(&f);
+    let before = f.store.get(&f.room).unwrap();
+    f.store
+        .bridge_wake_agent(&principal, wake_input(&f, "busy"))
+        .unwrap();
+    let after = f.store.get(&f.room).unwrap();
+    assert_eq!(
+        after.participants[0].pending_delivery.as_ref().unwrap().id,
+        before.participants[0].pending_delivery.as_ref().unwrap().id
+    );
+    assert_eq!(
+        after.participants[0].wake_count,
+        before.participants[0].wake_count
+    );
+    let mut reset = wake_input(&f, "bad-reset");
+    reset.reset_turn_budget = true;
+    assert!(f.store.bridge_wake_agent(&principal, reset).is_err());
+    f.store
+        .update(&f.room, |r| {
+            r.participants[0].paused = true;
+            Ok(())
+        })
+        .unwrap();
+    assert!(f
+        .store
+        .bridge_wake_agent(&principal, wake_input(&f, "unsettled"))
+        .is_err());
+}
+
+#[test]
+fn concurrent_wake_retries_create_one_message_and_archived_controls_are_rejected() {
+    let f = fixture();
+    let principal = controller(&f);
+    f.store
+        .update(&f.room, |r| {
+            r.paused = true;
+            r.participants[0].paused = true;
+            Ok(())
+        })
+        .unwrap();
+    let input=serde_json::to_value(serde_json::json!({"agent_id":f.agent,"conversation_ref":"fixture-conversation","client_action_id":"race","text":"One bounded wake"})).unwrap();
+    let threads = (0..8)
+        .map(|_| {
+            let store = f.store.clone();
+            let p = principal.clone();
+            let v = input.clone();
+            std::thread::spawn(move || {
+                store
+                    .bridge_wake_agent(&p, serde_json::from_value(v).unwrap())
+                    .unwrap()
+                    .message_id
+            })
+        })
+        .collect::<Vec<_>>();
+    let ids = threads
+        .into_iter()
+        .map(|t| t.join().unwrap())
+        .collect::<HashSet<_>>();
+    assert_eq!(ids.len(), 1);
+    assert_eq!(f.store.get(&f.room).unwrap().messages.len(), 1);
+    f.store
+        .update(&f.room, |r| {
+            r.archived = true;
+            Ok(())
+        })
+        .unwrap();
+    assert!(f
+        .store
+        .bridge_resume_room(&principal, resume_input(&f, "archive"))
+        .is_err());
+    assert!(f
+        .store
+        .bridge_wake_agent(&principal, wake_input(&f, "archive"))
+        .is_err());
+}
+
+#[tokio::test]
+async fn control_tool_discovery_is_opt_in_and_arguments_cannot_escalate() {
+    let f = fixture();
+    let principal = controller(&f);
+    let list = json!({"jsonrpc":"2.0","id":1,"method":"tools/list"});
+    assert_eq!(
+        protocol::dispatch(&f.store, &f.principal, &list).await["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    assert_eq!(
+        protocol::dispatch(&f.store, &principal, &list).await["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .len(),
+        6
+    );
+    let call = json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ocv.resume_room","arguments":{"room_id":f.room,"conversation_ref":"fixture-conversation","client_action_id":"unknown-field","unpause_all":true}}});
+    assert!(protocol::dispatch(&f.store, &principal, &call).await["error"].is_object());
+    let mut standalone = wake_input(&f, "standalone");
+    standalone.agent_id = "session/12345678-1234-1234-1234-123456789abc".into();
+    assert!(f.store.bridge_wake_agent(&principal, standalone).is_err());
 }
 
 #[tokio::test]

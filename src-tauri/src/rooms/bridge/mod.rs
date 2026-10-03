@@ -1,4 +1,5 @@
 //! Private, scoped external messaging. This module never owns a provider process.
+mod control;
 mod direct;
 mod events;
 mod protocol;
@@ -240,6 +241,9 @@ pub(super) fn schema(conn: &Connection) -> Result<(), String> {
       receipt_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, phase TEXT NOT NULL,
       cursor INTEGER NOT NULL DEFAULT 0, offset INTEGER NOT NULL DEFAULT 0);
       CREATE INDEX IF NOT EXISTS bridge_direct_run ON bridge_direct(run_id,phase);
+      CREATE TABLE IF NOT EXISTS bridge_controls (
+      principal TEXT NOT NULL, client_id TEXT NOT NULL, payload TEXT NOT NULL,
+      result TEXT NOT NULL, PRIMARY KEY(principal,client_id));
       CREATE TABLE IF NOT EXISTS bridge_subscriptions (
       id TEXT PRIMARY KEY, principal TEXT NOT NULL, payload TEXT NOT NULL);",
     )
@@ -296,7 +300,7 @@ impl RoomStore {
         let rooms = self.list()?;
         let mut agents: Vec<_> = rooms.iter().filter(|r| principal.room(&r.id).is_ok() && room_id.is_none_or(|id| id == r.id)).flat_map(|r| r.participants.iter().map(move |p| {
             let meta = crate::storage::runs::get_run(&p.run_id);
-            serde_json::json!({"agent_id":format!("{}/{}",r.id,p.id),"room_id":r.id,"participant_id":p.id,"name":p.name,"provider":p.provider,"provider_thread_id":meta.as_ref().and_then(|m| m.resolved_conversation_ref()).map(|reference| match reference { crate::models::ConversationRef::ClaudeSession(id) | crate::models::ConversationRef::CodexThread(id) => id }),"run_id":p.run_id,"state":p.state,"room_paused":r.paused,"participant_paused":p.paused,"blocked_reason":blocked(r,p),"allowed_actions":if r.archived || !principal.scopes.contains(&"send".into()) { vec!["read"] } else { vec!["read","queue"] }})
+            serde_json::json!({"agent_id":format!("{}/{}",r.id,p.id),"room_id":r.id,"participant_id":p.id,"name":p.name,"provider":p.provider,"provider_thread_id":meta.as_ref().and_then(|m| m.resolved_conversation_ref()).map(|reference| match reference { crate::models::ConversationRef::ClaudeSession(id) | crate::models::ConversationRef::CodexThread(id) => id }),"run_id":p.run_id,"state":p.state,"room_paused":r.paused,"participant_paused":p.paused,"blocked_reason":blocked(r,p),"turn_limit_reached":p.turn_limit_reached(),"wake_count":p.wake_count,"max_turns":p.max_turns,"allowed_actions":control::allowed_actions(principal,r,p)})
         })).collect();
         if room_id.is_none() {
             agents.extend(direct::agents(principal, &rooms));
@@ -304,9 +308,24 @@ impl RoomStore {
         Ok(serde_json::json!({"agents":agents}))
     }
     pub fn bridge_send(&self, principal: &Principal, input: &Send) -> Result<Receipt, String> {
+        self.bridge_send_mode(principal, input, false, false)
+    }
+    pub(super) fn bridge_send_mode(
+        &self,
+        principal: &Principal,
+        input: &Send,
+        wake: bool,
+        reset_turn_budget: bool,
+    ) -> Result<Receipt, String> {
         principal.scope("send")?;
+        if wake {
+            principal.scope("control")?;
+        }
         principal.conversation(&input.conversation_ref)?;
         if let Some(run_id) = input.agent_id.strip_prefix("session/") {
+            if wake {
+                return Err("Wake controls apply to room participants only".into());
+            }
             return direct::send(self, principal, input, run_id);
         }
         let (room_id, peer_id) = input.agent_id.split_once('/').ok_or("Invalid agent_id")?;
@@ -323,7 +342,11 @@ impl RoomStore {
         {
             return Err("Invalid message text or client_message_id".into());
         }
-        let payload = serde_json::to_string(input).map_err(|e| e.to_string())?;
+        let payload = if wake {
+            serde_json::json!({"action":"wake_agent","reset_turn_budget":reset_turn_budget,"message":input}).to_string()
+        } else {
+            serde_json::to_string(input).map_err(|e| e.to_string())?
+        };
         // A durable retry must work even if an attachment has since been removed.
         {
             let conn = self.connection.lock().map_err(|e| e.to_string())?;
@@ -366,6 +389,14 @@ impl RoomStore {
         if room.archived {
             return Err("Room archived".into());
         }
+        if wake {
+            let peer = room
+                .participants
+                .iter_mut()
+                .find(|p| p.id == peer_id)
+                .ok_or("Participant unavailable")?;
+            control::resume_peer(peer, reset_turn_budget)?;
+        }
         let peer = room
             .participants
             .iter()
@@ -395,13 +426,22 @@ impl RoomStore {
         };
         room.messages.push(Message {
             id: room_message_id,
-            sender: "External message".into(),
+            sender: if wake {
+                "Dotcliffe · resumed agent"
+            } else {
+                "External message"
+            }
+            .into(),
             body: input.text.clone(),
             created_at: now.clone(),
             participant_id: None,
             target_participant_id: Some(peer_id.into()),
             target_participant_ids: vec![],
-            source_event_id: Some(format!("bridge:{id}")),
+            source_event_id: Some(if wake {
+                format!("bridge:wake:{id}")
+            } else {
+                format!("bridge:{id}")
+            }),
             sidechat_id: None,
             attachments: files,
         });

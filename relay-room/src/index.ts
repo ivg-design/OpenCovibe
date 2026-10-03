@@ -213,7 +213,7 @@ export class Broker implements DurableObject {
     else if (!/^s_[0-9a-f]{48}$/.test(session) || !this.first<{ id: string }>("SELECT id FROM sessions WHERE id=? AND family=? AND expires>?", session, g.family, now())) return json(400, jsonRpcError(object(input) ? input.id ?? null : null, "MCP session missing or expired; initialize a new session"));
     if ("notification" in checked) return new Response(null, { status: 202 });
     const rpc = checked.request;
-    const needed = rpc.method.startsWith("events/") ? "room.events" : rpc.method === "tools/call" && rpc.params?.name === "ocv.send_message" ? "room.send" : "room.read";
+    const needed = rpc.method.startsWith("events/") ? "room.events" : rpc.method === "tools/call" && ["ocv.send_message", "ocv.resume_room", "ocv.wake_agent"].includes(String(rpc.params?.name)) ? "room.send" : "room.read";
     if (!g.scope.split(" ").includes(needed)) return json(403, jsonRpcError(rpc.id, "Scope denied"));
     const payload = JSON.stringify(rpc), payloadHash = await sha256(payload);
     // A client may reuse JSON-RPC IDs after 24h. Within that window an exact retry

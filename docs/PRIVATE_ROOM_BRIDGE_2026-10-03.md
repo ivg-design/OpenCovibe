@@ -1,4 +1,4 @@
-# Private room messaging and approval controls — 0.3.5
+# Private room messaging and approval controls — 0.3.6
 
 ## Completion approval
 
@@ -10,7 +10,7 @@ At the initial BidBot inspection, the verified proposal was in an unpaused room 
 
 The existing web listener has an additional private, scoped MCP endpoint at `/mcp/ocv`. It only accepts requests when the listener is bound to a loopback IP. An absent owner access file disables authentication. Ordinary app cookies and the unrestricted app access token do not authorize this endpoint.
 
-The bridge exposes four tools:
+The bridge exposes four messaging tools, plus two explicit controls for owner-granted principals:
 
 | Tool | Behavior |
 | --- | --- |
@@ -18,8 +18,10 @@ The bridge exposes four tools:
 | `ocv.send_message` | Atomically saves a queued message and its receipt in the room database. Exact retries return that receipt; a changed payload with the same client ID is rejected. |
 | `ocv.get_message` | Returns the durable delivery state, timestamps, owning delivery/run, provider turn ID when available, and blocked/error information. |
 | `ocv.read_replies` | Replays authorized, correlated visible replies after a durable cursor. |
+| `ocv.resume_room` | Explicitly unpauses a room; preserves individual pauses, budgets and provider waits. Exact control retries do not undo a later pause. |
+| `ocv.wake_agent` | Atomically unpauses an existing room agent and queues one instruction through its owning scheduler. Starts cold sessions, preserves the room pause, and returns the normal correlated receipt. |
 
-Messages are routed through the room's existing scheduler and provider session actor. The bridge neither starts a competing provider writer nor forks, resumes or unpauses a participant. It advertises queue mode only and explicitly rejects steering. Busy participants receive queued messages on subsequent eligible turns. Each external request is selected separately; later queued external payloads are excluded from the earlier turn's prompt.
+Messages are routed through the room's existing scheduler and provider session actor. Ordinary `ocv.send_message` never starts a competing provider writer, forks, resumes or unpauses a participant. Explicit owner-granted controls can resume the existing scheduler and start its owning actor. It advertises queue mode only and explicitly rejects steering. Busy participants receive queued messages on subsequent eligible turns. Each external request is selected separately; later queued external payloads are excluded from the earlier turn's prompt.
 
 Manual pauses, provider permission waits, turn budgets, concurrency and claim/review rules remain in force. A receipt can remain queued with a blocked reason. A delivery whose outcome cannot be established is marked ambiguous rather than replayed or declared successful. Attachments are references to files already attached to that room, never arbitrary local filesystem paths.
 
@@ -29,7 +31,7 @@ Only visible messages projected into the room are written to the reply outbox. R
 
 Activation requires an owner-provisioned `bridge-access.json` in the selected app data directory. The owner authorized a single persistent connection covering all OCV rooms and standalone Codex sessions, bound to the exact named Dotcliffe conversation, with read/send scopes. The 0.3.5 source supports explicit `all_rooms` and `all_sessions` flags plus nonempty exact `conversations`; omitted flags retain narrow legacy grants. Callback subscription access remains disabled until the actual platform callback host is approved.
 
-Each authenticated principal has an owner-defined ID, a SHA-256 digest of a bearer token, explicit room/conversation binding pairs, callback DNS hosts and scopes (`read`, `send`, `subscribe`). The bearer must contain at least 32 characters; use a high-entropy randomly generated token when provisioning. The configuration rejects duplicate identities/digests and invalid hashes. On macOS/Unix it must be owned by the app's user and have no group/world permissions. Authentication and delivery re-read grants so removal revokes access. Callers cannot supply a principal or pair a granted room with another room's conversation.
+Each authenticated principal has an owner-defined ID, a SHA-256 digest of a bearer token, explicit room/conversation binding pairs, callback DNS hosts and scopes (`read`, `send`, `subscribe`, optional `control`). The bearer must contain at least 32 characters; use a high-entropy randomly generated token when provisioning. The configuration rejects duplicate identities/digests and invalid hashes. On macOS/Unix it must be owned by the app's user and have no group/world permissions. Authentication and delivery re-read grants so removal revokes access. Callers cannot supply a principal or pair a granted room with another room's conversation.
 
 The SQLite database contains signing secrets for authorized subscriptions and is private to the local user. Protect its backups as credentials. Removing a principal stops its event delivery. Removing a room/conversation binding prevents reads and event delivery for that binding.
 
@@ -60,3 +62,11 @@ These tests exercise the scheduler boundary and durable projections; they do not
 The explicit all-session grant adds `session/<run_id>` targets. Only persisted Codex chats managed through OCV's SessionActor are eligible, including imported chats after OCV actor conversion. Room participants retain room IDs and are not duplicated as standalone targets. Queues and tagged visible replies survive database reopening. Dispatch uses an already connected idle actor, waits through busy or user-input states, rechecks authorization and ownership, and marks interrupted execution ambiguous instead of replaying it. It never launches or resumes a provider. Remote slash text remains ordinary message text. Standalone attachments are not yet supported; room attachment IDs remain supported.
 
 The all-session relay deployment is `689cb206-a05e-48f9-8da2-f8b8d46d3dd2`. It retains the existing OAuth grants and service identity. Native 0.3.5 is installed, notarized and running. The live loopback bridge reports the version and lists five rooms plus a connected standalone test session. Direct cloud results are recorded separately in the acceptance report.
+
+## Explicit room controls — 0.3.6
+
+The owner requested delegated room and individual-agent resume/start controls. The exact existing Dotcliffe principal now has `control` in addition to read/send. The relay requires OAuth `room.send` for both controls and still enforces exact room/conversation binding; read-only accounts cannot use them. No extra OAuth flow or persistent bearer was created. Standalone-session control is outside this change.
+
+Controls use stable `client_action_id` values. Room actions are saved durably; wake actions commit the participant state, queued message and receipt atomically. Same-ID retries reuse the original result and never resume a second time after a later human pause. Changed payloads conflict. Busy unpaused agents keep their active turn and writer. Permission, quota and unsettled paused turns require recovery in OCV. Turn counters reset only when the caller explicitly grants `reset_turn_budget=true`; existing limits stay unchanged. Archived rooms are rejected.
+
+The resume audit is human-readable but does not broadcast a new work instruction. Wake messages identify the explicit resume instruction while retaining room rules and task scope. Native and direct cloud acceptance are recorded in [room-control acceptance](DOTCLIFFE_ROOM_CONTROLS_ACCEPTANCE_2026-10-03.md).

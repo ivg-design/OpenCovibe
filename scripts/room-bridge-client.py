@@ -13,7 +13,7 @@ import urllib.request
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("tool", choices=["ocv.list_agents", "ocv.send_message", "ocv.get_message", "ocv.read_replies"])
+    parser.add_argument("tool", choices=["ocv.list_agents", "ocv.send_message", "ocv.get_message", "ocv.read_replies", "ocv.resume_room", "ocv.wake_agent"])
     parser.add_argument("--arguments-file", type=Path, help="JSON arguments file; defaults to an empty object")
     parser.add_argument("--client", type=Path, default=Path.home() / ".opencovibe-local/bridge-local-client.json")
     args = parser.parse_args()
@@ -25,7 +25,7 @@ def main():
     if url.scheme != "http" or url.hostname not in ("127.0.0.1", "::1") or url.path != "/mcp/ocv" or url.username or url.password or url.query or url.fragment:
         raise ValueError("Client endpoint must be the local room bridge")
     arguments = json.loads(args.arguments_file.read_text()) if args.arguments_file else {}
-    if args.tool in ("ocv.send_message", "ocv.read_replies"):
+    if args.tool in ("ocv.send_message", "ocv.read_replies", "ocv.resume_room", "ocv.wake_agent"):
         arguments.setdefault("conversation_ref", client["conversation_ref"])
     request = urllib.request.Request(client["endpoint"], data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": args.tool, "arguments": arguments}}).encode(), headers={"Content-Type": "application/json", "Authorization": "Bearer " + client["bearer"]})
     # No proxy/redirect path can forward the local credential elsewhere.
