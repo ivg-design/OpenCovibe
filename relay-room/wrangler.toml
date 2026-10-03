@@ -1,0 +1,24 @@
+name = "opencovibe-private-room-relay"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+workers_dev = true
+preview_urls = false
+
+[vars]
+# Explicit owner-authorized all-room and standalone-session routing.
+ROOM_ID = "*"
+CONVERSATION_REF = "dotcliffe:01a0f942-ad0f-7640-bd9b-e12d096430eb"
+
+# Required secret: wrangler secret put MAC_TOKEN_SHA256
+# Hex SHA-256 of a high-entropy private Mac bearer, never the bearer itself.
+
+[[durable_objects.bindings]]
+name = "BROKER"
+class_name = "Broker"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Broker"]
+
+[observability]
+enabled = false

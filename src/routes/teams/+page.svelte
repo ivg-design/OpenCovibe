@@ -170,6 +170,56 @@
     }
   }
 
+  function humanFieldName(name: string): string {
+    return name
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .replace(/[_-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/^./, (first) => first.toUpperCase());
+  }
+
+  function humanValue(value: unknown, depth = 0): string {
+    if (value === null || value === undefined) return "—";
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    if (Array.isArray(value)) {
+      return value
+        .map((item, index) => {
+          const formatted = humanValue(item, depth + 1);
+          return typeof item === "object" && item !== null
+            ? `Item ${index + 1}: ${formatted}`
+            : formatted;
+        })
+        .join(" · ");
+    }
+    if (typeof value === "object") {
+      return Object.entries(value as Record<string, unknown>)
+        .map(
+          ([key, nested]) =>
+            `${humanFieldName(key)}: ${depth > 3 ? "…" : humanValue(nested, depth + 1)}`,
+        )
+        .join(" · ");
+    }
+    return String(value);
+  }
+
+  function permissionFields(input: unknown): { label: string; value: string }[] {
+    if (input && typeof input === "object" && !Array.isArray(input)) {
+      return Object.entries(input as Record<string, unknown>).map(([key, value]) => ({
+        label: humanFieldName(key),
+        value: humanValue(value),
+      }));
+    }
+    if (Array.isArray(input)) {
+      return input.map((value, index) => ({
+        label: `Item ${index + 1}`,
+        value: humanValue(value),
+      }));
+    }
+    return [{ label: "Details", value: humanValue(input) }];
+  }
+
   /** Color dot CSS class from member color string. */
   function memberColorClass(color: string): string {
     const map: Record<string, string> = {
@@ -342,12 +392,12 @@
             </div>
           </div>
 
-          <!-- Row 2: member chips horizontal scroll -->
-          <div class="flex items-center gap-1.5 px-4 py-1.5 overflow-x-auto">
+          <!-- Member chips wrap as complete controls when the sidebar is narrow. -->
+          <div class="flex min-w-0 flex-wrap items-center gap-1.5 px-4 py-1.5">
             {#each teamStore.teamConfig.members as member}
               {@const isLead = member.agentId === teamStore.teamConfig.leadAgentId}
               <button
-                class="shrink-0 flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors {expandedMemberName ===
+                class="max-w-full shrink-0 flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs transition-colors {expandedMemberName ===
                 member.name
                   ? 'border-primary/40 bg-primary/5'
                   : 'border-border/40 bg-card hover:bg-accent/50'}"
@@ -366,7 +416,9 @@
                     ></span>
                   {/if}
                 </span>
-                <span class="font-medium text-foreground">{member.name}</span>
+                <span class="max-w-[10rem] truncate font-medium text-foreground" title={member.name}
+                  >{member.name}</span
+                >
                 {#if member.agentType}
                   <span class="rounded bg-muted px-1 py-0.5 text-[10px] font-medium"
                     >{member.agentType}</span
@@ -463,9 +515,9 @@
         <div class="flex flex-1 flex-col min-h-0">
           {#if teamStore.teamConfig.members.length > 0}
             <!-- Agent tabs -->
-            <div class="shrink-0 flex gap-0.5 border-b border-border px-4 overflow-x-auto">
+            <div class="flex min-w-0 shrink-0 flex-wrap gap-0.5 border-b border-border px-4">
               <button
-                class="shrink-0 px-3 py-1.5 text-xs font-medium transition-colors border-b-2 {inboxTab ===
+                class="shrink-0 whitespace-nowrap px-3 py-1.5 text-xs font-medium transition-colors border-b-2 {inboxTab ===
                 'all'
                   ? 'text-foreground border-primary'
                   : 'text-muted-foreground hover:text-foreground border-transparent'}"
@@ -473,7 +525,7 @@
               >
               {#each teamStore.teamConfig.members as member}
                 <button
-                  class="shrink-0 px-3 py-1.5 text-xs font-medium transition-colors border-b-2 {inboxTab ===
+                  class="max-w-full shrink-0 whitespace-nowrap px-3 py-1.5 text-xs font-medium transition-colors border-b-2 {inboxTab ===
                   member.name
                     ? 'text-foreground border-primary'
                     : 'text-muted-foreground hover:text-foreground border-transparent'}"
@@ -483,7 +535,9 @@
                     class="inline-block h-1.5 w-1.5 rounded-full mr-1 {memberColorClass(
                       member.color,
                     )}"
-                  ></span>{member.name}
+                  ></span><span class="max-w-[12rem] truncate" title={member.name}
+                    >{member.name}</span
+                  >
                 </button>
               {/each}
             </div>
@@ -655,11 +709,22 @@
                                 tool: String(parsed.data.tool_name ?? "tool"),
                               })}{parsed.data.description ? ` — ${parsed.data.description}` : ""}
                               {#if isExpMsg && parsed.data.input}
-                                <pre
-                                  class="mt-1 text-[10px] text-muted-foreground bg-muted/50 rounded p-1.5 overflow-x-auto whitespace-pre-wrap break-words">{typeof parsed
-                                    .data.input === "string"
-                                    ? parsed.data.input
-                                    : JSON.stringify(parsed.data.input, null, 2)}</pre>
+                                <dl class="mt-1 grid gap-1 rounded bg-muted/50 p-1.5 text-[10px]">
+                                  {#each permissionFields(parsed.data.input) as field (field.label)}
+                                    <div
+                                      class="grid min-w-0 grid-cols-[minmax(4.5rem,auto)_1fr] gap-2"
+                                    >
+                                      <dt class="font-medium text-muted-foreground">
+                                        {field.label}
+                                      </dt>
+                                      <dd
+                                        class="min-w-0 whitespace-pre-wrap break-words text-foreground/80"
+                                      >
+                                        {field.value}
+                                      </dd>
+                                    </div>
+                                  {/each}
+                                </dl>
                               {/if}
                             </div>
                           {:else if parsed.type === "mode_set_request"}
@@ -876,7 +941,7 @@
                                 {#each Object.entries(task.metadata as Record<string, unknown>) as [k, v]}
                                   <span
                                     class="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                                    >{k}: {typeof v === "string" ? v : JSON.stringify(v)}</span
+                                    >{humanFieldName(k)}: {humanValue(v)}</span
                                   >
                                 {/each}
                               </div>
@@ -993,7 +1058,7 @@
                                 {#each Object.entries(task.metadata as Record<string, unknown>) as [k, v]}
                                   <span
                                     class="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                                    >{k}: {typeof v === "string" ? v : JSON.stringify(v)}</span
+                                    >{humanFieldName(k)}: {humanValue(v)}</span
                                   >
                                 {/each}
                               </div>
@@ -1113,7 +1178,7 @@
                                 {#each Object.entries(task.metadata as Record<string, unknown>) as [k, v]}
                                   <span
                                     class="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                                    >{k}: {typeof v === "string" ? v : JSON.stringify(v)}</span
+                                    >{humanFieldName(k)}: {humanValue(v)}</span
                                   >
                                 {/each}
                               </div>

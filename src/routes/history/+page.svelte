@@ -225,15 +225,15 @@
 
 <div class="flex h-full flex-col overflow-hidden">
   <!-- Header -->
-  <div class="shrink-0 border-b border-border px-6 py-4">
+  <div class="shrink-0 border-b border-border px-4 py-3 sm:px-6 sm:py-4">
     <h1 class="text-xl font-semibold text-foreground">{t("history_title")}</h1>
     <p class="mt-1 text-sm text-muted-foreground">{t("history_subtitle")}</p>
   </div>
 
-  <div class="flex-1 overflow-y-auto px-6 py-4">
+  <div class="min-w-0 flex-1 overflow-y-auto px-4 py-3 sm:px-6 sm:py-4">
     <!-- Search + Filter toggle -->
-    <div class="mb-4 flex items-center gap-3">
-      <div class="relative flex-1">
+    <div class="mb-4 flex flex-wrap items-center gap-2 sm:gap-3">
+      <div class="relative min-w-0 flex-1 basis-64">
         <svg
           class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
           viewBox="0 0 24 24"
@@ -283,14 +283,17 @@
     {#if showAdvancedFilters}
       <div class="mb-4 rounded-lg border border-border bg-muted/20 p-4">
         <!-- Row 1: Dropdowns + Date range -->
-        <div class="grid grid-cols-4 gap-3">
+        <div class="grid grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),1fr))] gap-3">
           <!-- Project -->
           <div>
-            <label class="mb-1.5 block text-xs font-medium text-muted-foreground"
+            <label
+              for="history-project-filter"
+              class="mb-1.5 block text-xs font-medium text-muted-foreground"
               >{t("history_project")}</label
             >
             <div class="relative">
               <select
+                id="history-project-filter"
                 onchange={(e) => onProjectFilter(e.currentTarget.value || undefined)}
                 class="h-8 w-full appearance-none rounded-md border border-border bg-background px-2.5 pr-7 text-[13px] text-foreground transition-colors hover:border-muted-foreground/40 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
               >
@@ -315,11 +318,14 @@
 
           <!-- Agent -->
           <div>
-            <label class="mb-1.5 block text-xs font-medium text-muted-foreground"
+            <label
+              for="history-agent-filter"
+              class="mb-1.5 block text-xs font-medium text-muted-foreground"
               >{t("history_agent")}</label
             >
             <div class="relative">
               <select
+                id="history-agent-filter"
                 onchange={(e) => onAgentFilter(e.currentTarget.value || undefined)}
                 class="h-8 w-full appearance-none rounded-md border border-border bg-background px-2.5 pr-7 text-[13px] text-foreground transition-colors hover:border-muted-foreground/40 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
               >
@@ -343,15 +349,15 @@
           </div>
 
           <!-- Date range presets -->
-          <div class="col-span-2">
-            <label class="mb-1.5 block text-xs font-medium text-muted-foreground"
-              >{t("history_dateRange")}</label
+          <fieldset class="min-w-0">
+            <legend class="mb-1.5 block text-xs font-medium text-muted-foreground"
+              >{t("history_dateRange")}</legend
             >
-            <div class="flex gap-1">
+            <div class="flex flex-wrap gap-1">
               {#each [{ key: "all", label: t("history_dateAll") }, { key: "today", label: t("history_dateToday") }, { key: "7d", label: t("history_date7d") }, { key: "30d", label: t("history_date30d") }, { key: "90d", label: t("history_date90d") }] as opt}
                 <button
                   onclick={() => onDateRange(opt.key)}
-                  class="h-8 rounded-md px-3 text-[13px] transition-colors {activeDateRange ===
+                  class="h-8 rounded-md px-2 text-[13px] transition-colors sm:px-3 {activeDateRange ===
                   opt.key
                     ? 'bg-foreground/10 text-foreground font-medium'
                     : 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
@@ -360,13 +366,15 @@
                 </button>
               {/each}
             </div>
-          </div>
+          </fieldset>
         </div>
 
         <!-- Row 2: Cost range -->
-        <div class="mt-3 grid grid-cols-4 gap-3">
+        <div class="mt-3 grid grid-cols-[repeat(auto-fit,minmax(min(100%,10rem),1fr))] gap-3">
           <div>
-            <label class="mb-1.5 block text-xs font-medium text-muted-foreground"
+            <label
+              for="history-cost-min"
+              class="mb-1.5 block text-xs font-medium text-muted-foreground"
               >{t("history_costMin")}</label
             >
             <div class="relative">
@@ -375,6 +383,7 @@
                 >$</span
               >
               <input
+                id="history-cost-min"
                 type="number"
                 step="0.01"
                 min="0"
@@ -385,7 +394,9 @@
             </div>
           </div>
           <div>
-            <label class="mb-1.5 block text-xs font-medium text-muted-foreground"
+            <label
+              for="history-cost-max"
+              class="mb-1.5 block text-xs font-medium text-muted-foreground"
               >{t("history_costMax")}</label
             >
             <div class="relative">
@@ -394,6 +405,7 @@
                 >$</span
               >
               <input
+                id="history-cost-max"
                 type="number"
                 step="0.01"
                 min="0"
@@ -404,7 +416,7 @@
             </div>
           </div>
           <!-- Clear filters button -->
-          <div class="col-span-2 flex items-end justify-end">
+          <div class="flex items-end justify-start sm:justify-end">
             <button
               onclick={clearFilters}
               class="rounded-md px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
@@ -443,17 +455,17 @@
     <!-- Summary bar (always visible once we have data; subtle opacity during reload) -->
     {#if response}
       <div
-        class="mb-3 flex items-center justify-between text-sm text-muted-foreground transition-opacity"
+        class="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground transition-opacity"
         class:opacity-50={loading}
       >
-        <span>
+        <span class="min-w-0 flex-1 basis-64 break-words">
           {t("history_runsMatching", { count: String(response.totalMatching) })}{#if costMeaningful}
             · {totalCostDisplay}
             {t("history_totalCost")}{/if}
         </span>
 
         <!-- Sort buttons -->
-        <div class="flex items-center gap-1">
+        <div class="flex min-w-0 flex-wrap items-center gap-1">
           {#each [{ key: "date", label: t("history_sortDate") }, { key: "cost", label: t("history_sortCost") }, { key: "tokens", label: t("history_sortTokens") }, { key: "turns", label: t("history_sortTurns") }] as sortOpt}
             <button
               onclick={() => onSortChange(sortOpt.key as "date" | "cost" | "tokens" | "turns")}
@@ -521,7 +533,9 @@
                     </span>
                   {/if}
                 </div>
-                <div class="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                <div
+                  class="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground [overflow-wrap:anywhere]"
+                >
                   <span>{projectDisplayName(run.cwd)}</span>
                   <span>·</span>
                   <span>{formatRelativeTime(run.startedAt)}</span>

@@ -52,6 +52,10 @@ AGENTS.md
 # Git hooks (shared via .githooks/, activated by `npm run prepare`)
 
 .metadata_never_index
+.local-data/
 
 # Unrelated binaries
 forget_ptr
+
+# Python helper caches
+__pycache__/

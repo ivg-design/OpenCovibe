@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Button from "$lib/components/Button.svelte";
   import { page } from "$app/stores";
   import { goto, replaceState } from "$app/navigation";
   import { tick, onMount, untrack, getContext } from "svelte";
@@ -67,7 +68,6 @@
   import PermissionPanel from "$lib/components/PermissionPanel.svelte";
   import ElicitationDialog from "$lib/components/ElicitationDialog.svelte";
   import AgentAuthBadge from "$lib/components/AgentAuthBadge.svelte";
-  import AgentSelector from "$lib/components/AgentSelector.svelte";
 
   import ToolActivity from "$lib/components/ToolActivity.svelte";
   import ShortcutHelpPanel from "$lib/components/ShortcutHelpPanel.svelte";
@@ -82,6 +82,7 @@
   import ReleaseNotesCard from "$lib/components/ReleaseNotesCard.svelte";
   import { t } from "$lib/i18n/index.svelte";
   import { dbg, dbgWarn } from "$lib/utils/debug";
+  import { IS_WEBKIT } from "$lib/utils/platform";
   import { yieldToMain } from "$lib/utils/yield";
   import {
     getLastTarget,
@@ -102,9 +103,12 @@
     CONTEXT_CLEARED_MARKER,
     parseRalphArgs,
     VIRTUAL_COMMANDS,
+    supportsVirtualAction,
   } from "$lib/utils/slash-commands";
   import { executeAddDir } from "$lib/utils/add-dir";
+  import { setRoomParticipantPaused } from "$lib/rooms/api";
   import { CODEX_INIT_PROMPT } from "$lib/utils/codex-init-prompt";
+  import { readableProtocolOutput } from "$lib/utils/room-presentation";
   import {
     CODEX_REVIEW_UNCOMMITTED_PROMPT,
     codexReviewBasePrompt,
@@ -214,7 +218,17 @@
   let previewInstanceId = $state("");
   let previewOpen = $derived(previewInstanceId !== "");
   let previewUrlBarOpen = $state(false);
-  let previewUrlInput = $state(localStorage.getItem("ocv:preview-url") ?? "http://localhost:");
+  let previewUrlInput = $state("");
+  let previewOpening = $state(false);
+  let previewError = $state("");
+  const previewStorageKey = $derived(
+    `ocv:preview-url:${store.sessionCwd || store.run?.cwd || "new-chat"}`,
+  );
+  $effect(() => {
+    previewUrlInput = localStorage.getItem(previewStorageKey) ?? "";
+    previewError = "";
+    previewUrlBarOpen = false;
+  });
 
   // ── Model contamination helpers ──
 
@@ -419,7 +433,9 @@
   let renderLimit = $state(INITIAL_RENDER_LIMIT);
   let progressiveGen = 0; // generation counter for stale-callback protection
   let loadingMore = $state(false);
-  let loadMoreArmed = $state(true); // throttle: re-armed by handleChatScroll
+  let positioningRun = $state(false);
+  let lastChatScrollTop = 0;
+  let loadMoreArmed = $state(false); // throttle: re-armed by handleChatScroll
   let _suppressLoadMoreRearm = false; // raised during programmatic scrollTop adjustment
 
   async function syncVerboseState(runId: string | undefined) {
@@ -741,6 +757,43 @@
 
   let effectiveModels = $derived(getModelsForAgent(effectiveAgent, { platformModels }));
   let currentEffort = $state("");
+  type RoomRunSettingsBinding = {
+    runId: string;
+    room_id: string;
+    room_title: string;
+    participant_id: string;
+    model: string | null;
+    effort: string | null;
+  };
+  let runId = $derived($page.url.searchParams.get("run") ?? "");
+  let roomSettingsLoadingRunId = $state<string | null>(null);
+  let roomRunSettings = $state<RoomRunSettingsBinding | null>(null);
+  let isRoomSettingsScope = $derived(
+    !!runId &&
+      (store.run?.id !== runId ||
+        roomSettingsLoadingRunId === runId ||
+        roomRunSettings?.runId === runId),
+  );
+  let statusBarModel = $derived.by(() => {
+    const roomSettings = roomRunSettings;
+    if (isRoomSettingsScope) {
+      return roomSettings && roomSettings.runId === store.run?.id ? (roomSettings.model ?? "") : "";
+    }
+    return effectiveAgent === "codex"
+      ? codexDisplayModel(store.run?.model) ||
+          codexDisplayModel(store.model) ||
+          getCodexDefaultModel() ||
+          ""
+      : store.model;
+  });
+  let statusBarEffort = $derived.by(() => {
+    if (!store.features.effortSelector) return undefined;
+    if (!isRoomSettingsScope) return currentEffort;
+    const roomSettings = roomRunSettings;
+    return roomSettings && roomSettings.runId === store.run?.id
+      ? roomSettings.effort || undefined
+      : undefined;
+  });
   let isCodexAgent = $derived(store.agent === "codex");
   let assistantDisplayName = $derived(isCodexAgent ? "Codex" : t("chat_claude"));
 
@@ -748,6 +801,7 @@
   // also auto-populate default effort ("high") when empty and model supports it.
   $effect(() => {
     if (!store.features.effortSelector) return;
+    if (isRoomSettingsScope) return;
 
     // Codex: effort is user-driven and persisted to agent settings (not CLI config).
     // No auto-default — empty means "use Codex's own default" (spawn skips the flag).
@@ -874,7 +928,7 @@
    * by the delta.
    */
   async function loadMoreEarlier() {
-    if (loadingMore || !loadMoreArmed) return;
+    if (positioningRun || loadingMore || !loadMoreArmed) return;
     loadingMore = true;
     loadMoreArmed = false; // re-armed by handleChatScroll on next user scroll
     _suppressLoadMoreRearm = true;
@@ -959,7 +1013,8 @@
     // an anchor jump) doesn't leak into the new run.
     renderLimit = INITIAL_RENDER_LIMIT;
     loadingMore = false;
-    loadMoreArmed = true;
+    loadMoreArmed = false;
+    positioningRun = true;
     const gen = nextProgressiveGen();
 
     // Capture scrollTo BEFORE loadRun — URL may change during async load
@@ -969,6 +1024,7 @@
     if (scrollTo) _scrollToInFlight = true;
 
     await store.loadRun(id, xtermRef);
+    if (gen !== progressiveGen) return;
     if (id) folderCwdOverride = ""; // clear folder override when a real run loads
 
     // Reload project data with the run's cwd
@@ -1013,12 +1069,16 @@
       clean.searchParams.delete("scrollTo");
       replaceState(clean, {});
     } else {
-      // Scroll to bottom after DOM update — ensures content-visibility triggers re-layout
       await tick();
-      requestAnimationFrame(() => {
-        if (chatAreaRef) chatAreaRef.scrollTop = chatAreaRef.scrollHeight;
-      });
+      if (gen !== progressiveGen) return;
+      if (chatAreaRef) {
+        chatAreaRef.scrollTop = chatAreaRef.scrollHeight;
+        lastChatScrollTop = chatAreaRef.scrollTop;
+      }
+      isChatAutoScroll = true;
+      showChatScrollHint = false;
     }
+    if (gen === progressiveGen) positioningRun = false;
   }
 
   let welcomeVisible = $derived(
@@ -1265,11 +1325,42 @@
   }
 
   // ── URL-derived (primitive values only — avoids $effect re-trigger on unrelated URL changes) ──
-  let runId = $derived($page.url.searchParams.get("run") ?? "");
   let hasResumeParam = $derived($page.url.searchParams.has("resume"));
   let folderParam = $derived($page.url.searchParams.get("folder"));
   let hostParam = $derived($page.url.searchParams.get("host"));
   let agentParam = $derived($page.url.searchParams.get("agent"));
+
+  let roomSettingsLookupSequence = 0;
+  async function loadRoomRunSettingsForRoute(id: string) {
+    const sequence = ++roomSettingsLookupSequence;
+    roomRunSettings = null;
+    roomSettingsLoadingRunId = id || null;
+    if (!id) return;
+
+    try {
+      const roomSettings = await getTransport().invoke<Omit<
+        RoomRunSettingsBinding,
+        "runId"
+      > | null>("get_room_run_settings", { runId: id });
+      if (sequence !== roomSettingsLookupSequence || runId !== id) return;
+      roomRunSettings = roomSettings ? { ...roomSettings, runId: id } : null;
+    } catch (error) {
+      if (sequence !== roomSettingsLookupSequence || runId !== id) return;
+      roomRunSettings = null;
+      dbg("chat", "room run settings lookup unavailable", { runId: id, error: String(error) });
+    } finally {
+      if (sequence === roomSettingsLookupSequence && runId === id) {
+        roomSettingsLoadingRunId = null;
+      }
+    }
+  }
+
+  // Resolve room-owned settings on every route change, including runs whose live
+  // session lets the run loader skip its normal history reload path.
+  $effect(() => {
+    const id = runId;
+    untrack(() => void loadRoomRunSettingsForRoute(id));
+  });
 
   // Consume ?agent= param: switch agent for new sessions, then clean URL
   $effect(() => {
@@ -1447,7 +1538,7 @@
     let selfHealDone = false;
     let selfHealInFlight = false;
     // Codex model catalog (live from app-server). Fire-and-forget; 5min TTL cache.
-    void loadCodexModels();
+    void loadCodexModels(true);
     loadCliInfo().then(() => {
       // Self-heal: detect and fix contaminated default_model
       if (settings?.default_model && !selfHealDone && !selfHealInFlight) {
@@ -1957,7 +2048,7 @@
   let prevSt = 0;
 
   $effect(() => {
-    if (store.useStreamSession && chatAreaRef) {
+    if (store.useStreamSession && chatAreaRef && !positioningRun) {
       const tl = store.timeline.length;
       const st = store.streamingText.length;
       const _rid = store.run?.id;
@@ -1966,7 +2057,7 @@
       prevSt = st;
       if (isChatAutoScroll) {
         requestAnimationFrame(() => {
-          if (chatAreaRef) chatAreaRef.scrollTop = chatAreaRef.scrollHeight;
+          if (!positioningRun && chatAreaRef) chatAreaRef.scrollTop = chatAreaRef.scrollHeight;
         });
       } else if (changed) {
         showChatScrollHint = true;
@@ -2058,7 +2149,9 @@
   const SCROLL_BOTTOM_THRESHOLD = 40;
 
   function handleChatScroll() {
-    if (!chatAreaRef) return;
+    if (!chatAreaRef || positioningRun) return;
+    const movedUp = chatAreaRef.scrollTop < lastChatScrollTop;
+    lastChatScrollTop = chatAreaRef.scrollTop;
     const dist = chatAreaRef.scrollHeight - chatAreaRef.scrollTop - chatAreaRef.clientHeight;
     isChatAutoScroll = dist < SCROLL_BOTTOM_THRESHOLD;
     if (isChatAutoScroll) showChatScrollHint = false;
@@ -2067,7 +2160,7 @@
     // sentinel remains in view after a prepend. Programmatic scrollTop adjustments
     // (loadMoreEarlier's anchor compensation) raise `_suppressLoadMoreRearm` so the
     // anchor-correction scroll doesn't immediately re-arm the observer.
-    if (!loadMoreArmed && !_suppressLoadMoreRearm) loadMoreArmed = true;
+    if (movedUp && !_suppressLoadMoreRearm) loadMoreArmed = true;
     const hasEarlier = filteredTimeline.length > renderLimit || store.historyHasMore;
     if (loadMoreArmed && !loadingMore && hasEarlier && chatAreaRef.scrollTop <= 200) {
       void loadMoreEarlier();
@@ -2700,6 +2793,7 @@
   }
 
   async function handleModelChange(newModel: string) {
+    if (isRoomSettingsScope) return;
     dbg("chat", "model change", { agent: effectiveAgent, from: store.model, to: newModel });
     store.model = newModel;
 
@@ -2763,6 +2857,7 @@
   }
 
   async function handleEffortChange(newEffort: string) {
+    if (isRoomSettingsScope) return;
     dbg("chat", "effort change", { agent: effectiveAgent, from: currentEffort, to: newEffort });
     currentEffort = newEffort;
 
@@ -2959,7 +3054,9 @@
     }
   }
 
-  async function openPreview(url: string): Promise<"ok" | "invalid_url" | "open_failed"> {
+  async function openPreview(
+    url: string,
+  ): Promise<"ok" | "invalid_url" | "open_failed" | "unreachable"> {
     dbg("preview", "openPreview", { url });
     if (!isLocalhostUrl(url)) return "invalid_url";
 
@@ -2969,13 +3066,14 @@
 
     try {
       await api.openPreviewWindow(url, instanceId);
-      localStorage.setItem("ocv:preview-url", url);
+      localStorage.setItem(previewStorageKey, url);
       return "ok";
     } catch (e) {
       dbgWarn("preview", "openPreview failed", e);
       resetPreviewState();
       const msg = String(e);
       if (msg.startsWith("preview_invalid_url:")) return "invalid_url";
+      if (msg.includes("preview_unreachable")) return "unreachable";
       return "open_failed";
     }
   }
@@ -2992,13 +3090,27 @@
 
   /** Open preview + show result as command output. Returns true on success. */
   async function openPreviewAndNotify(url: string): Promise<boolean> {
-    const result = await openPreview(url);
-    if (result === "ok") {
-      appendCommandOutput(t("preview_opened"));
-      return true;
+    if (previewOpening) return false;
+    previewOpening = true;
+    previewError = "";
+    try {
+      const result = await openPreview(url);
+      if (result === "ok") {
+        appendCommandOutput(t("preview_opened"));
+        return true;
+      }
+      previewError = t(
+        result === "invalid_url"
+          ? "preview_invalidUrl"
+          : result === "unreachable"
+            ? "preview_unreachable"
+            : "preview_openFailed",
+      );
+      previewUrlBarOpen = true;
+      return false;
+    } finally {
+      previewOpening = false;
     }
-    appendCommandOutput(t(result === "invalid_url" ? "preview_invalidUrl" : "preview_openFailed"));
-    return false;
   }
 
   function formatElementContext(sel: ElementSelection): string {
@@ -3048,8 +3160,7 @@
     // history replay, and tests can still reach here).
     const vDef = VIRTUAL_COMMANDS.find((v) => v["_action"] === action);
     if (vDef) {
-      const excluded = vDef["_excludeAgents"];
-      if (Array.isArray(excluded) && excluded.includes(effectiveAgent)) {
+      if (!supportsVirtualAction(action, effectiveAgent)) {
         dbg("chat", "virtualCommand blocked for agent", { action, agent: effectiveAgent });
         appendCommandOutput(
           t("slash_notSupportedForAgent", {
@@ -3374,6 +3485,19 @@
         return;
       }
 
+      if (roomRunSettings) {
+        try {
+          await setRoomParticipantPaused(
+            roomRunSettings.room_id,
+            roomRunSettings.participant_id,
+            true,
+          );
+        } catch (cause) {
+          store.error = String(cause);
+          return;
+        }
+      }
+
       if (store.useStreamSession) {
         // Claude: stop active session actor
         dbg("chat", "clear-context: stopping Claude session", { runId: store.run.id });
@@ -3389,7 +3513,10 @@
         dbg("chat", "clear-context: leaving Codex run", { runId: store.run.id });
       }
 
-      goto("/chat", { replaceState: true });
+      goto(
+        `/chat?agent=${effectiveAgent}&cwd=${encodeURIComponent(store.effectiveCwd || store.run.cwd)}`,
+        { replaceState: true },
+      );
       window.dispatchEvent(new Event("ocv:runs-changed"));
     } else if (action === "rewind") {
       if (!store.run) {
@@ -3417,7 +3544,7 @@
     } else if (action === "open-feedback") {
       // Source-of-truth: matches package.json `bugs.url`. If the repo URL ever
       // changes, update both this constant AND package.json.
-      const url = "https://github.com/AnyiWang/OpenCovibe/issues";
+      const url = "https://github.com/ivg-design/OpenCovibe/issues";
       dbg("chat", "open-feedback", { url });
       try {
         const { open } = await import("@tauri-apps/plugin-shell");
@@ -3483,7 +3610,7 @@
         await closePreview();
         appendCommandOutput(t("preview_closed"));
       } else {
-        const lastUrl = localStorage.getItem("ocv:preview-url");
+        const lastUrl = localStorage.getItem(previewStorageKey);
         if (lastUrl) {
           await openPreviewAndNotify(lastUrl);
         } else {
@@ -4485,7 +4612,9 @@
 {/snippet}
 
 {#snippet heroMetaFooter()}
-  <div class="mt-4 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+  <div
+    class="mt-3 flex flex-wrap items-center justify-center gap-1.5 text-xs text-muted-foreground"
+  >
     {@render heroMetaItems()}
   </div>
 {/snippet}
@@ -4540,12 +4669,7 @@
       running={store.sessionAlive}
       run={store.run}
       agent={store.run?.agent ?? store.agent}
-      model={effectiveAgent === "codex"
-        ? codexDisplayModel(store.run?.model) ||
-          codexDisplayModel(store.model) ||
-          getCodexDefaultModel() ||
-          ""
-        : store.model}
+      model={statusBarModel}
       cost={store.usage.cost}
       costAvailable={store.usage.costAvailable}
       inputTokens={cumulativeTokens.input}
@@ -4555,9 +4679,28 @@
       parentRunId={store.run?.parent_run_id}
       onEndSession={handleStop}
       onFork={forkOverlay ? undefined : () => handleResume("fork")}
-      onModelChange={handleModelChange}
-      effort={store.features.effortSelector ? currentEffort : undefined}
-      onEffortChange={store.features.effortSelector ? handleEffortChange : undefined}
+      onModelChange={isRoomSettingsScope ? undefined : handleModelChange}
+      onModelRefresh={() => {
+        if (effectiveAgent === "codex") void loadCodexModels(true);
+        else void loadCliInfo(true);
+      }}
+      onCreateRoom={store.run &&
+      !store.isRunning &&
+      !store.run.remote_host_name &&
+      store.run.session_id
+        ? () =>
+            goto(
+              roomRunSettings
+                ? `/rooms?room=${encodeURIComponent(roomRunSettings.room_id)}`
+                : `/rooms?fromSession=${encodeURIComponent(store.run!.id)}`,
+            )
+        : undefined}
+      roomExists={!!roomRunSettings}
+      roomTitle={roomRunSettings?.room_title ?? ""}
+      effort={statusBarEffort}
+      onEffortChange={store.features.effortSelector && !isRoomSettingsScope
+        ? handleEffortChange
+        : undefined}
       onNavigateParent={store.run?.parent_run_id
         ? () => goto(`/chat?run=${store.run!.parent_run_id}`)
         : undefined}
@@ -4710,80 +4853,106 @@
 
     <!-- Preview URL input bar -->
     {#if previewUrlBarOpen}
-      <div class="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-muted/30 text-xs">
-        <svg
-          class="w-3.5 h-3.5 shrink-0 text-muted-foreground"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-        >
-          <circle cx="12" cy="12" r="10" /><path
-            d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"
-          />
-        </svg>
-        <input
-          id="__preview-url-input"
-          type="text"
-          bind:value={previewUrlInput}
-          placeholder="http://localhost:3000"
-          class="flex-1 bg-transparent border-none outline-none text-xs text-foreground placeholder:text-muted-foreground/50 font-mono"
-          onkeydown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              const url = previewUrlInput.trim();
-              if (url) {
-                openPreviewAndNotify(url).then((ok) => {
-                  if (ok) previewUrlBarOpen = false;
-                });
-              }
-            } else if (e.key === "Escape") {
-              previewUrlBarOpen = false;
-            }
-          }}
-        />
-        {#if previewOpen}
-          <button
-            onclick={() => {
-              closePreview();
-              previewUrlBarOpen = false;
-            }}
-            class="px-2 py-0.5 rounded text-xs bg-muted hover:bg-accent text-foreground transition-colors"
-          >
-            {t("preview_close")}
-          </button>
-        {/if}
-        <button
-          onclick={() => {
-            previewUrlBarOpen = false;
-          }}
-          class="text-muted-foreground hover:text-foreground transition-colors"
-        >
+      <div class="min-w-0 shrink-0 space-y-2 px-3 py-2 border-b border-border bg-muted/30 text-xs">
+        <p class="text-muted-foreground">{t("preview_help")}</p>
+        {#if previewError}<p class="text-destructive" role="alert">{previewError}</p>{/if}
+        <div class="flex min-w-0 flex-wrap items-center gap-2">
           <svg
-            class="w-3.5 h-3.5"
+            class="w-3.5 h-3.5 shrink-0 text-muted-foreground"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
-            stroke-width="2"><path d="M18 6 6 18M6 6l12 12" /></svg
+            stroke-width="2"
           >
-        </button>
+            <circle cx="12" cy="12" r="10" /><path
+              d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"
+            />
+          </svg>
+          <input
+            id="__preview-url-input"
+            type="text"
+            bind:value={previewUrlInput}
+            oninput={(e) => {
+              if (!e.currentTarget.value.trim()) localStorage.removeItem(previewStorageKey);
+              previewError = "";
+            }}
+            placeholder="http://localhost:3000"
+            aria-label={t("preview_label")}
+            class="min-w-0 flex-[1_1_12rem] bg-transparent border rounded px-2 py-2 outline-none text-xs text-foreground placeholder:text-muted-foreground/50 font-mono"
+            onkeydown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                const url = previewUrlInput.trim();
+                if (url) {
+                  openPreviewAndNotify(url).then((ok) => {
+                    if (ok) previewUrlBarOpen = false;
+                  });
+                }
+              } else if (e.key === "Escape") {
+                previewUrlBarOpen = false;
+              }
+            }}
+          />
+          <Button
+            type="button"
+            size="sm"
+            disabled={!isLocalhostUrl(previewUrlInput.trim())}
+            loading={previewOpening}
+            onclick={() => {
+              void openPreviewAndNotify(previewUrlInput.trim()).then((ok) => {
+                if (ok) previewUrlBarOpen = false;
+              });
+            }}>{t("preview_open")}</Button
+          >
+          {#if previewOpen}
+            <button
+              onclick={() => {
+                closePreview();
+                previewUrlBarOpen = false;
+              }}
+              class="px-2 py-0.5 rounded text-xs bg-muted hover:bg-accent text-foreground transition-colors"
+            >
+              {t("preview_close")}
+            </button>
+          {/if}
+          <button
+            onclick={() => {
+              previewUrlBarOpen = false;
+            }}
+            class="text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <svg
+              class="w-3.5 h-3.5"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"><path d="M18 6 6 18M6 6l12 12" /></svg
+            >
+          </button>
+        </div>
       </div>
     {/if}
 
     <!-- Main area -->
     <div class="flex-1 overflow-hidden relative">
+      {#if positioningRun}<div
+          class="absolute inset-0 z-10 flex items-center justify-center text-sm text-muted-foreground"
+          role="status"
+        >
+          {t("room_loadingLatest")}
+        </div>{/if}
       {#if store.useChatTimeline}
         <!-- API / Codex bus-events mode: chat messages -->
         <div
           class="h-full overflow-y-auto"
-          style="overflow-anchor:none"
+          style={`overflow-anchor:none;visibility:${positioningRun ? "hidden" : "visible"}`}
           bind:this={chatAreaRef}
           onscroll={handleChatScroll}
         >
           {#if welcomeVisible}
             <!-- Welcome state -->
             <div class="flex h-full items-center justify-center">
-              <div class="flex flex-col items-center max-w-sm">
+              <div class="flex min-w-0 flex-col items-center w-full max-w-sm px-4">
                 <div class="text-center animate-slide-up">
                   <img src="/logo.png?v=2" alt="OC" class="mx-auto mb-4 h-12 w-12 rounded-2xl" />
                   <h2 class="text-lg font-semibold text-primary mb-1">{t("layout_appName")}</h2>
@@ -4835,13 +5004,8 @@
                 </div>
                 <!-- Footer outside animate-slide-up: AuthSourceBadge needs transform-free ancestor for fixed dropdown -->
                 <div
-                  class="mt-4 flex items-center justify-center gap-1.5 text-xs text-muted-foreground"
+                  class="mt-3 flex flex-wrap items-center justify-center gap-1.5 text-xs text-muted-foreground"
                 >
-                  <!-- Agent switcher in the hero, synced with the composer's AgentSelector
-                       (both call handleAgentChange → store.agent). Switching here also swaps the
-                       auth badge below (OAuth / API Key, per agent). -->
-                  <AgentSelector value={effectiveAgent} onchange={(a) => handleAgentChange(a)} />
-                  <span class="text-muted-foreground">·</span>
                   <AgentAuthBadge
                     agent={effectiveAgent}
                     {authOverview}
@@ -4951,7 +5115,7 @@
                   <div
                     id="msg-{entry.anchorId}"
                     data-entry-id={entry.id}
-                    class:cv-auto={true}
+                    class:cv-auto={!IS_WEBKIT}
                     class="group/msg"
                     class:opacity-40={lastClearSepId !== null &&
                       (timelineIdIndex.get(entry.id) ?? 0) <
@@ -5100,7 +5264,7 @@
                                   entry.content,
                                 )}</pre>
                             {:else}
-                              <MarkdownContent text={entry.content} />
+                              <MarkdownContent text={readableProtocolOutput(entry.content)} />
                             {/if}
                             {#if entry.historyContent && store.run && store.historySummary}
                               <HistoryContentPager
@@ -5320,7 +5484,10 @@
                       >
                     </div>
                     <div class="pl-7 prose-chat">
-                      <MarkdownContent text={store.streamingText} streaming={true} />
+                      <MarkdownContent
+                        text={readableProtocolOutput(store.streamingText)}
+                        streaming={true}
+                      />
                     </div>
                   </div>
                 </div>
@@ -5691,7 +5858,10 @@
             {#if btwState.error}
               <p class="text-destructive">{btwState.error}</p>
             {:else if btwState.answer}
-              <MarkdownContent text={btwState.answer} streaming={btwState.loading} />
+              <MarkdownContent
+                text={readableProtocolOutput(btwState.answer)}
+                streaming={btwState.loading}
+              />
             {/if}
             {#if btwState.loading}
               <span class="inline-block w-2 h-4 bg-blue-400 animate-pulse rounded-sm"></span>

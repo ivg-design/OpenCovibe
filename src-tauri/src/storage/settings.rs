@@ -691,8 +691,22 @@ fn validate_ui_zoom(v: &serde_json::Value) -> Result<Option<f64>, String> {
     Ok(Some(f))
 }
 
+fn normalize_identity_name(value: &serde_json::Value) -> Result<Option<String>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let name = value.as_str().ok_or("Identity name must be text")?.trim();
+    if name.chars().any(char::is_control) || name.chars().count() > 80 {
+        return Err("Identity name must be one line, up to 80 characters".into());
+    }
+    Ok((!name.is_empty()).then(|| name.to_string()))
+}
+
 pub fn update_user_settings(patch: serde_json::Value) -> Result<UserSettings, String> {
     let mut all = load();
+    if let Some(name) = patch.get("identity_name") {
+        all.user.identity_name = normalize_identity_name(name)?;
+    }
     if let Some(agent) = patch.get("default_agent").and_then(|v| v.as_str()) {
         all.user.default_agent = agent.to_string();
     }
@@ -924,6 +938,9 @@ fn apply_agent_patch(settings: &mut AgentSettings, patch: &serde_json::Value) {
     if let Some(v) = patch.get("ignore_rules") {
         settings.ignore_rules = if v.is_null() { None } else { v.as_bool() };
     }
+    if let Some(v) = patch.get("web_search") {
+        settings.web_search = if v.is_null() { None } else { v.as_bool() };
+    }
 }
 
 pub fn update_agent_settings(
@@ -947,6 +964,33 @@ pub fn update_agent_settings(
 mod tests {
     use super::*;
     use crate::models::{AllSettings, CodexProviderCredential, PlatformCredential};
+
+    #[test]
+    fn identity_name_validates_and_preserves_legacy_settings() {
+        assert_eq!(
+            normalize_identity_name(&serde_json::json!("  Ilya  ")).unwrap(),
+            Some("Ilya".into())
+        );
+        assert_eq!(
+            normalize_identity_name(&serde_json::json!(" ")).unwrap(),
+            None
+        );
+        assert_eq!(
+            normalize_identity_name(&serde_json::Value::Null).unwrap(),
+            None
+        );
+        assert!(normalize_identity_name(&serde_json::json!("a\nb")).is_err());
+        assert!(normalize_identity_name(&serde_json::json!("a".repeat(81))).is_err());
+        assert!(normalize_identity_name(&serde_json::json!(42)).is_err());
+        let mut saved = serde_json::to_value(UserSettings::default()).unwrap();
+        assert!(saved.get("identity_name").is_none());
+        let old: UserSettings = serde_json::from_value(saved.clone()).unwrap();
+        assert!(old.identity_name.is_none());
+        saved["identity_name"] = serde_json::json!("Илья");
+        let restored: UserSettings = serde_json::from_value(saved).unwrap();
+        assert_eq!(restored.identity_name.as_deref(), Some("Илья"));
+        assert_eq!(restored.permission_mode, old.permission_mode);
+    }
 
     fn make_settings_with_cred(cred: PlatformCredential) -> AllSettings {
         let mut s = AllSettings::default();
@@ -1141,8 +1185,9 @@ mod tests {
         assert_eq!(s.profile, None);
         assert_eq!(s.ignore_user_config, None);
         assert_eq!(s.ignore_rules, None);
+        assert_eq!(s.web_search, None);
 
-        // Set all four
+        // Set all five
         apply_agent_patch(
             &mut s,
             &serde_json::json!({
@@ -1150,14 +1195,17 @@ mod tests {
                 "profile": "dev",
                 "ignore_user_config": true,
                 "ignore_rules": true,
+                "web_search": true,
             }),
         );
         assert_eq!(s.ephemeral, Some(true));
         assert_eq!(s.profile.as_deref(), Some("dev"));
         assert_eq!(s.ignore_user_config, Some(true));
         assert_eq!(s.ignore_rules, Some(true));
+        assert_eq!(s.web_search, Some(true));
 
-        // Clear booleans with false (explicit off), profile with null
+        // Clear booleans with false (explicit off), profile with null.
+        // The web_search false value must remain distinct from unset.
         apply_agent_patch(
             &mut s,
             &serde_json::json!({
@@ -1165,12 +1213,18 @@ mod tests {
                 "profile": null,
                 "ignore_user_config": false,
                 "ignore_rules": false,
+                "web_search": false,
             }),
         );
         assert_eq!(s.ephemeral, Some(false));
         assert_eq!(s.profile, None);
         assert_eq!(s.ignore_user_config, Some(false));
         assert_eq!(s.ignore_rules, Some(false));
+        assert_eq!(s.web_search, Some(false));
+
+        // Clear web_search to return to the user's Codex config.toml preference.
+        apply_agent_patch(&mut s, &serde_json::json!({ "web_search": null }));
+        assert_eq!(s.web_search, None);
 
         // Clear profile with empty string
         apply_agent_patch(&mut s, &serde_json::json!({ "profile": "ci" }));
@@ -1182,6 +1236,7 @@ mod tests {
         apply_agent_patch(&mut s, &serde_json::json!({ "ephemeral": true }));
         apply_agent_patch(&mut s, &serde_json::json!({ "model": "gpt-5" }));
         assert_eq!(s.ephemeral, Some(true));
+        assert_eq!(s.web_search, None);
     }
 
     #[test]

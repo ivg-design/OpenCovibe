@@ -1791,7 +1791,9 @@
           {/if}
           <span class="text-xs text-muted-foreground">· {codexCollabOp}</span>
           {#if subToolCount > 0}
-            <span class="text-[10px] px-1 py-0.5 rounded bg-muted text-muted-foreground">
+            <span
+              class="shrink-0 whitespace-nowrap rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground"
+            >
               {#if tool.status === "running"}
                 {subToolCompleted}/{subToolCount} tools
               {:else}
@@ -1812,7 +1814,9 @@
             <span class="text-xs text-muted-foreground truncate">{taskMeta.description}</span>
           {/if}
           {#if subToolCount > 0}
-            <span class="text-[10px] px-1 py-0.5 rounded bg-muted text-muted-foreground">
+            <span
+              class="shrink-0 whitespace-nowrap rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground"
+            >
               {#if tool.status === "running"}
                 {subToolCompleted}/{subToolCount} tools
               {:else}
@@ -1821,7 +1825,10 @@
             </span>
           {/if}
         {:else}
-          <span class="text-xs font-medium text-foreground">{tool.tool_name}</span>
+          <span
+            class="max-w-[40%] shrink-0 truncate whitespace-nowrap text-xs font-medium text-foreground"
+            >{tool.tool_name}</span
+          >
           {#if displayDetail && !bashPreview}
             <span
               class="text-xs text-muted-foreground truncate"
@@ -1837,7 +1844,9 @@
             <span class="text-xs text-muted-foreground italic">{t("inline_starting")}</span>
           {/if}
           {#if subToolCount > 0}
-            <span class="text-[10px] px-1 py-0.5 rounded bg-muted text-muted-foreground">
+            <span
+              class="shrink-0 whitespace-nowrap rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground"
+            >
               {#if tool.status === "running"}
                 {subToolCompleted}/{subToolCount} tools
               {:else}

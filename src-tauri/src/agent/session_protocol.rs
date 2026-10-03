@@ -94,6 +94,8 @@ pub enum LifecycleSignal {
 /// Result of parsing one line of child stdout.
 #[derive(Debug, Default)]
 pub struct ParsedLine {
+    /// Handshake/open failure before any turn can be submitted.
+    pub startup_error: Option<String>,
     /// BusEvents to persist + emit (message deltas, tool start/end, usage, and any
     /// interactive prompt events).
     pub events: Vec<BusEvent>,

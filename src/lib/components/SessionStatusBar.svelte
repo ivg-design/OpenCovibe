@@ -8,6 +8,7 @@
   import { t } from "$lib/i18n/index.svelte";
   import { fmtNumber } from "$lib/i18n/format";
   import { truncate, formatTokenCount, formatDuration, formatCostDisplay } from "$lib/utils/format";
+  import { roomChatTitle } from "$lib/utils/room-presentation";
 
   let {
     run = null,
@@ -62,6 +63,10 @@
     previewOpen = false,
     onStatusClick,
     onExportHtml,
+    onCreateRoom,
+    roomExists = false,
+    roomTitle = "",
+    onModelRefresh,
   }: {
     run?: TaskRun | null;
     agent?: string;
@@ -116,6 +121,10 @@
     previewOpen?: boolean;
     onStatusClick?: () => void;
     onExportHtml?: () => void;
+    onCreateRoom?: () => void;
+    roomExists?: boolean;
+    roomTitle?: string;
+    onModelRefresh?: () => void;
   } = $props();
 
   $effect(() => {
@@ -225,6 +234,7 @@
   function toggleModelDropdown() {
     dropdownOpen = !dropdownOpen;
     if (dropdownOpen && modelBtnEl) {
+      onModelRefresh?.();
       const rect = modelBtnEl.getBoundingClientRect();
       const spaceBelow = window.innerHeight - rect.bottom;
       if (spaceBelow < 200) {
@@ -442,9 +452,9 @@
               ? 'font-medium'
               : 'italic text-foreground/40'}"
             onclick={startTitleEdit}
-            title={run.name || run.prompt || t("statusbar_sessionTitle")}
+            title={roomChatTitle(run.name || run.prompt || t("statusbar_sessionTitle"), run.prompt)}
           >
-            {truncate(run.name || run.prompt, 30)}
+            {truncate(roomChatTitle(run.name || run.prompt, run.prompt), 30)}
           </button>
         {/if}
         <span class="text-foreground/30">&middot;</span>
@@ -467,15 +477,19 @@
         </span>
       {/if}
 
-      {#if model}
+      {#if model || onModelChange}
         <span class="text-foreground/30">&middot;</span>
         {#if onModelChange}
           <button
             bind:this={modelBtnEl}
             class="flex items-center gap-1 shrink-0 rounded border border-transparent px-1.5 py-0.5 -my-0.5 text-foreground/80 hover:text-foreground hover:bg-accent hover:border-border transition-colors"
             onclick={toggleModelDropdown}
+            aria-label={t("statusbar_modelPicker")}
+            aria-expanded={dropdownOpen}
+            aria-haspopup="listbox"
           >
-            {modelLabel}
+            <span class="text-muted-foreground">{t("statusbar_modelPicker")}:</span>
+            {modelLabel || t("room_defaultModel")}
             {#if !effortDisabled && effort}
               <span class="text-foreground/60 text-[10px]">{effort}</span>
             {/if}
@@ -489,6 +503,7 @@
           </button>
         {:else}
           <span class="truncate text-foreground/80">{model}</span>
+          {#if effort}<span class="text-foreground/60 text-[10px]">{effort}</span>{/if}
         {/if}
       {/if}
 
@@ -552,6 +567,26 @@
 
     <!-- Right: actions + chevron -->
     <div class="flex items-center gap-2">
+      {#if onCreateRoom}<button
+          class="flex items-center gap-1 rounded px-2 py-0.5 text-primary hover:bg-accent transition-colors"
+          onclick={onCreateRoom}
+          title={roomExists && roomTitle
+            ? t("room_openNamedRoom", { title: roomTitle })
+            : t(roomExists ? "room_openRoom" : "room_fromSession")}
+          ><svg
+            class="h-3.5 w-3.5"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            aria-hidden="true"
+            ><circle cx="9" cy="7" r="4" /><path
+              d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"
+            /></svg
+          >{roomExists && roomTitle
+            ? t("room_openNamedRoom", { title: roomTitle })
+            : t(roomExists ? "room_openRoom" : "room_fromSession")}</button
+        >{/if}
       {#if onExportHtml}
         <button
           class="flex items-center gap-1 rounded px-2 py-0.5 text-foreground/50 hover:text-foreground hover:bg-accent transition-colors"
@@ -581,7 +616,7 @@
             ? 'text-primary hover:bg-primary/10'
             : 'text-foreground/50 hover:text-foreground hover:bg-accent'}"
           onclick={onPreviewToggle}
-          title="Preview"
+          title={t("preview_label")}
         >
           <svg
             class="h-3 w-3"
@@ -593,7 +628,7 @@
             stroke-linejoin="round"
             ><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /></svg
           >
-          Preview
+          {t("preview_label")}
         </button>
       {/if}
       {#if !running && onRewind && persistedFiles && persistedFiles.length > 0}
@@ -890,11 +925,14 @@
     bind:this={dropdownEl}
     tabindex="-1"
     role="listbox"
-    class="min-w-[560px] w-max rounded-md border bg-background shadow-lg animate-fade-in outline-none"
+    class="max-h-[min(70vh,520px)] w-[min(560px,90vw)] overflow-y-auto rounded-md border bg-background shadow-lg animate-fade-in outline-none"
     style={dropdownStyle}
     onkeydown={handleDropdownKeydown}
   >
     <div class="p-1">
+      {#if models.length === 0}<p class="px-3 py-2 text-xs text-muted-foreground">
+          {t("statusbar_modelsUnavailable")}
+        </p>{/if}
       {#each models as m, i}
         <button
           class="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-xs hover:bg-accent transition-colors {model ===

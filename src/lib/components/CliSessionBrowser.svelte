@@ -1,9 +1,18 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { getTransport } from "$lib/transport";
   import { t } from "$lib/i18n/index.svelte";
   import { dbg, dbgWarn } from "$lib/utils/debug";
+  import { modalFocus } from "$lib/utils/modal-focus";
   import { fmtRelative } from "$lib/i18n/format";
   import { cwdDisplayLabel } from "$lib/utils/format";
+  import {
+    sessionTitle,
+    sessionProject,
+    sessionPreview,
+    isBackgroundSession,
+    filterSessions,
+  } from "$lib/utils/session-browser";
   import type { CliSessionSummary, DiscoverResult, ImportResult, SyncResult } from "$lib/types";
 
   function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -24,7 +33,15 @@
   let totalSessions = $state(0);
   let truncated = $state(false);
   let loading = $state(true);
+  let discoverySequence = 0;
   let searchQuery = $state("");
+  let scopeCwd = $state(untrack(() => cwd));
+  let includeSubagents = $state(false);
+  let includeBackground = $state(false);
+  let includeArchived = $state(false);
+  let projectChoices = $state<{ path: string; label: string; count: number }[]>([]);
+  let choosingFolder = $state(false);
+  let visibleLimit = $state(25);
   let importingId = $state<string | null>(null);
   let error = $state<string | null>(null);
   let warning = $state<string | null>(null);
@@ -37,48 +54,44 @@
   );
 
   function setAgent(next: "claude" | "codex") {
-    if (next === agent) return;
+    if (next === agent || importingId || importingAll) return;
     agent = next;
     if (typeof localStorage !== "undefined") {
       localStorage.setItem("cliImport_agent", next);
     }
-    discoverSessions();
   }
 
   // ── Project filter ──
-  const isShowAll = $derived(!cwd || cwd === "/");
-  let selectedProject = $state<string | null>(null); // null = all
+  const isShowAll = $derived(!scopeCwd || scopeCwd === "/");
 
-  const projects = $derived.by(() => {
-    const cwdMap = new Map<string, number>();
-    for (const s of sessions) {
-      if (s.cwd) {
-        cwdMap.set(s.cwd, (cwdMap.get(s.cwd) ?? 0) + 1);
+  const filtered = $derived(
+    filterSessions(
+      sessions,
+      agent === "codex" ? "" : searchQuery,
+      includeSubagents,
+      includeArchived,
+      includeBackground,
+    ),
+  );
+
+  async function chooseFolder() {
+    choosingFolder = true;
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const path = await open({
+        directory: true,
+        title: t("layout_selectProjectFolder"),
+        defaultPath: scopeCwd && scopeCwd !== "/" ? scopeCwd : undefined,
+      });
+      if (typeof path === "string") {
+        scopeCwd = path;
       }
+    } catch {
+      error = t("room_folderPickerError");
+    } finally {
+      choosingFolder = false;
     }
-    return Array.from(cwdMap.entries())
-      .sort((a, b) => b[1] - a[1])
-      .map(([path, count]) => ({ path, label: cwdDisplayLabel(path), count }));
-  });
-
-  const filtered = $derived.by(() => {
-    let list = sessions;
-    // Project filter
-    if (selectedProject) {
-      list = list.filter((s) => s.cwd === selectedProject);
-    }
-    // Search filter
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      list = list.filter(
-        (s) =>
-          s.firstPrompt.toLowerCase().includes(q) ||
-          (s.model ?? "").toLowerCase().includes(q) ||
-          (s.cwd ?? "").toLowerCase().includes(q),
-      );
-    }
-    return list;
-  });
+  }
 
   const newCount = $derived(filtered.filter((s) => !s.alreadyImported).length);
 
@@ -90,18 +103,59 @@
   // ── Load sessions on mount ──
 
   $effect(() => {
-    discoverSessions();
+    const sourceCwd = scopeCwd;
+    const sourceAgent = agent;
+    const subagents = includeSubagents,
+      archived = includeArchived;
+    const query = sourceAgent === "codex" ? searchQuery : "";
+    const timer = window.setTimeout(
+      () =>
+        untrack(() => void discoverSessions(sourceCwd, sourceAgent, subagents, archived, query)),
+      query ? 250 : 0,
+    );
+    return () => {
+      window.clearTimeout(timer);
+      discoverySequence++;
+    };
   });
 
-  async function discoverSessions() {
+  async function discoverSessions(
+    sourceCwd = scopeCwd,
+    sourceAgent = agent,
+    subagents = includeSubagents,
+    archived = includeArchived,
+    query = searchQuery,
+  ) {
+    const sequence = ++discoverySequence;
     loading = true;
+    visibleLimit = 25;
+    sessions = [];
+    totalSessions = 0;
+    truncated = false;
     error = null;
     dbg("cli-browser", "discovering sessions", { cwd });
     try {
-      const result = await invoke<DiscoverResult>("discover_cli_sessions", { cwd, agent });
+      const result = await invoke<DiscoverResult>("discover_cli_sessions", {
+        cwd: sourceCwd,
+        agent: sourceAgent,
+        includeSubagents: subagents,
+        includeArchived: archived,
+        query: sourceAgent === "codex" ? query : "",
+      });
+      if (sequence !== discoverySequence) return;
       sessions = result.sessions;
       totalSessions = result.total;
       truncated = result.truncated;
+      if (!sourceCwd || sourceCwd === "/") {
+        const counts = new Map<string, number>();
+        for (const session of result.sessions) {
+          const path = sessionProject(session);
+          if (path) counts.set(path, (counts.get(path) ?? 0) + 1);
+        }
+        projectChoices = [...counts]
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .map(([path, count]) => ({ path, label: cwdDisplayLabel(path), count }));
+      }
       dbg("cli-browser", "discovered", {
         count: sessions.length,
         total: totalSessions,
@@ -110,9 +164,9 @@
     } catch (e) {
       const msg = String(e);
       dbgWarn("cli-browser", "discover failed", msg);
-      error = msg;
+      if (sequence === discoverySequence) error = msg;
     } finally {
-      loading = false;
+      if (sequence === discoverySequence) loading = false;
     }
   }
 
@@ -230,21 +284,23 @@
   class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-fade-in"
   role="dialog"
   aria-modal="true"
+  aria-label={agent === "codex" ? t("cliSync_title_codex") : t("cliSync_title_claude")}
   tabindex="-1"
+  use:modalFocus
   onclick={handleBackdropClick}
   onkeydown={handleKeydown}
 >
   <div
-    class="relative flex max-h-[80vh] w-full max-w-2xl flex-col rounded-xl border border-border bg-background shadow-2xl animate-slide-up"
+    class="relative flex max-h-[85dvh] min-h-0 min-w-0 w-[calc(100%-2rem)] max-w-4xl flex-col rounded-xl border border-border bg-background shadow-2xl animate-slide-up"
   >
     <!-- Header -->
-    <div class="border-b border-border px-6 py-4">
-      <div class="flex items-center justify-between">
-        <div>
+    <div class="border-b border-border px-4 py-4 sm:px-6">
+      <div class="flex min-w-0 items-start justify-between gap-2">
+        <div class="min-w-0">
           <h2 class="text-base font-semibold text-foreground">
             {agent === "codex" ? t("cliSync_title_codex") : t("cliSync_title_claude")}
           </h2>
-          <p class="mt-0.5 text-xs text-muted-foreground">
+          <p class="mt-0.5 break-words text-xs text-muted-foreground">
             {#if isShowAll}
               {t("cliSync_allProjects")} &middot;
               {#if truncated}
@@ -263,7 +319,7 @@
                 {t("cliSync_found", { count: String(sessions.length) })}
               {/if}
             {:else}
-              {cwd} &middot;
+              {scopeCwd} &middot;
               {#if truncated && agent === "codex"}
                 {t("cliSync_foundTruncated_codex_filtered", {
                   threads: String(sessions.length),
@@ -317,36 +373,62 @@
         </button>
       </div>
 
-      <!-- Project filter (inline in header) -->
-      {#if isShowAll && projects.length > 1}
-        <div class="mt-3 flex items-center gap-1.5 overflow-x-auto">
-          <button
-            class="shrink-0 rounded-md px-2.5 py-1 text-xs font-medium transition-colors
-              {selectedProject === null
-              ? 'bg-accent text-accent-foreground'
-              : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}"
-            onclick={() => (selectedProject = null)}
+      <div class="mt-3 flex flex-wrap items-end gap-2">
+        <label class="min-w-0 flex-1 space-y-1 text-xs text-muted-foreground">
+          <span>{t("cliSync_filterProject")}</span>
+          <select
+            class="min-h-9 w-full min-w-0 rounded-md border border-border bg-background px-2 text-sm"
+            value={scopeCwd === "/" ? "" : scopeCwd}
+            disabled={!!importingId || importingAll}
+            onchange={(event) => {
+              scopeCwd = event.currentTarget.value;
+            }}
           >
-            {t("cliSync_filterAll")} ({sessions.length})
-          </button>
-          {#each projects as proj (proj.path)}
-            <button
-              class="shrink-0 rounded-md px-2.5 py-1 text-xs font-medium transition-colors
-                {selectedProject === proj.path
-                ? 'bg-accent text-accent-foreground'
-                : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'}"
-              onclick={() => (selectedProject = proj.path)}
-              title={proj.path}
-            >
-              {proj.label} ({proj.count})
-            </button>
-          {/each}
-        </div>
+            <option value="">{t("cliSync_allProjects")}</option>
+            {#if scopeCwd && scopeCwd !== "/" && !projectChoices.some((p) => p.path === scopeCwd)}<option
+                value={scopeCwd}>{cwdDisplayLabel(scopeCwd)}</option
+              >{/if}
+            {#each projectChoices as proj (proj.path)}<option value={proj.path}>{proj.label}</option
+              >{/each}
+          </select>
+        </label>
+        <button
+          class="min-h-9 rounded-md border border-border px-3 text-xs"
+          disabled={choosingFolder || !!importingId || importingAll}
+          onclick={chooseFolder}>{t("room_chooseFolder")}</button
+        >
+      </div>
+      {#if agent === "codex"}<div class="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
+          <label class="flex flex-wrap items-center gap-2"
+            ><input
+              type="checkbox"
+              bind:checked={includeSubagents}
+              disabled={!!importingId || importingAll}
+            />{t("cliSync_showSubagents")}</label
+          >
+          <label class="flex flex-wrap items-center gap-2"
+            ><input
+              type="checkbox"
+              bind:checked={includeArchived}
+              disabled={!!importingId || importingAll}
+            />{t("cliSync_showArchived")}</label
+          >
+        </div>{/if}
+      {#if agent === "claude"}
+        <label class="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            bind:checked={includeBackground}
+            disabled={!!importingId || importingAll}
+          />
+          {t("cliSync_includeBackground")}
+        </label>
       {/if}
+      <p class="mt-2 text-xs text-muted-foreground">{t("cliSync_mainChatsHelp")}</p>
     </div>
 
     <!-- Search -->
-    <div class="border-b border-border px-6 py-3">
+    <div class="border-b border-border px-4 py-3 sm:px-6">
       <div class="relative">
         <svg
           class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
@@ -369,7 +451,7 @@
     </div>
 
     <!-- Session list -->
-    <div class="flex-1 overflow-y-auto px-6 py-3">
+    <div class="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-3 sm:px-6">
       {#if loading}
         <div class="flex items-center justify-center py-12">
           <div
@@ -410,16 +492,16 @@
         </div>
       {:else}
         <div class="space-y-2">
-          {#each filtered as session (session.sessionId)}
+          {#each filtered.slice(0, visibleLimit) as session (session.sessionId)}
             {@const isImporting = importingId === session.sessionId}
             {@const isImported = session.alreadyImported}
             <div
               class="group rounded-lg border border-border p-3 transition-colors hover:bg-muted/30"
             >
-              <div class="flex items-start justify-between gap-3">
+              <div class="flex flex-wrap items-start justify-between gap-3">
                 <!-- Left: status dot + time + prompt -->
-                <div class="min-w-0 flex-1">
-                  <div class="flex items-center gap-2">
+                <div class="min-w-0 flex-[1_1_14rem]">
+                  <div class="flex flex-wrap items-center gap-2">
                     <span
                       class="inline-block h-2 w-2 shrink-0 rounded-full {isImported
                         ? 'bg-emerald-500'
@@ -428,7 +510,7 @@
                     <span class="text-xs text-muted-foreground shrink-0">
                       {fmtRelative(session.lastActivityAt)}
                     </span>
-                    {#if isShowAll && !selectedProject && session.cwd}
+                    {#if isShowAll && session.cwd}
                       <span
                         class="shrink-0 truncate max-w-[140px] rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
                         title={session.cwd}
@@ -444,24 +526,44 @@
                       </span>
                     {/if}
                   </div>
-                  <p class="mt-1 truncate text-sm font-medium text-foreground">
-                    {session.firstPrompt || "\u2014"}
+                  <p class="mt-1 break-words text-sm font-medium text-foreground">
+                    {sessionTitle(session, (project) =>
+                      t("cliSync_sessionFromProject", { project }),
+                    )}
                   </p>
-                  <div class="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                    {#if session.agent === "codex"}
-                      <span>{t("cliSync_turns", { count: String(session.messageCount) })}</span>
-                      {#if session.rolloutPaths && session.rolloutPaths.length > 1}
-                        <span>&middot;</span>
-                        <span
-                          >{t("cliSync_rollouts", {
-                            count: String(session.rolloutPaths.length),
-                          })}</span
+                  {#if sessionPreview(session)}<p
+                      class="mt-1 line-clamp-2 break-words text-xs text-muted-foreground"
+                    >
+                      {sessionPreview(session)}
+                    </p>{/if}
+                  <p
+                    class="mt-1 break-words text-xs text-muted-foreground [overflow-wrap:anywhere]"
+                  >
+                    {t("room_sourceFolder")}: {session.cwd}
+                  </p>
+                  <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    {#if session.isAutomated}<span>{t("cliSync_automatedChat")}</span>{/if}
+                    {#if session.isSubagent}<span>{t("cliSync_subagentChat")}</span>{/if}
+                    {#if isBackgroundSession(session) && !session.isAutomated && !session.isSubagent}<span
+                        >{t("cliSync_backgroundChat")}</span
+                      >{/if}
+                    {#if session.archived}<span>{t("cliSync_archived")}</span>{/if}
+                    {#if session.countsExact !== false}
+                      {#if session.agent === "codex"}
+                        <span>{t("cliSync_turns", { count: String(session.messageCount) })}</span>
+                        {#if session.rolloutPaths && session.rolloutPaths.length > 1}
+                          <span>&middot;</span>
+                          <span
+                            >{t("cliSync_rollouts", {
+                              count: String(session.rolloutPaths.length),
+                            })}</span
+                          >
+                        {/if}
+                      {:else}
+                        <span>{t("cliSync_messages", { count: String(session.messageCount) })}</span
                         >
                       {/if}
-                    {:else}
-                      <span>{t("cliSync_messages", { count: String(session.messageCount) })}</span>
                     {/if}
-                    <span>&middot;</span>
                     <span>{formatSize(session.fileSize)}</span>
                     {#if session.hasSubagents}
                       <span>&middot;</span>
@@ -517,17 +619,25 @@
               </div>
             </div>
           {/each}
+          {#if filtered.length > visibleLimit}<button
+              class="w-full rounded-md border border-border px-3 py-2 text-sm"
+              onclick={() => (visibleLimit += 25)}>{t("common_showMore")}</button
+            >{/if}
         </div>
       {/if}
     </div>
 
     <!-- Footer -->
     {#if !loading && filtered.length > 0}
-      <div class="flex items-center justify-between border-t border-border px-6 py-3">
+      <div
+        class="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-3 sm:px-6"
+      >
         {#if error}
-          <p class="text-xs text-destructive truncate max-w-[60%]">{error}</p>
+          <p class="min-w-0 flex-1 truncate text-xs text-destructive">{error}</p>
         {:else if warning}
-          <p class="text-xs text-yellow-600 dark:text-yellow-400 truncate max-w-[60%]">{warning}</p>
+          <p class="min-w-0 flex-1 truncate text-xs text-yellow-600 dark:text-yellow-400">
+            {warning}
+          </p>
         {:else}
           <div></div>
         {/if}
@@ -538,7 +648,7 @@
             disabled={!!importingId || importingAll}
           >
             {#if importingAll}
-              <span class="flex items-center gap-2">
+              <span class="flex flex-wrap items-center gap-2">
                 <span
                   class="inline-block h-3.5 w-3.5 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin"
                 ></span>

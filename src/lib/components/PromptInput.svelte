@@ -448,7 +448,9 @@
   let isComposing = $state(false);
 
   let allCommands = $derived(mergeWithVirtual(cliCommands ?? [], agent));
-  let quickActions = $derived(getQuickActions(allCommands, agent));
+  let quickActions = $derived(
+    getQuickActions(allCommands, agent).filter((command) => command.name !== "model"),
+  );
   let skillNameSet = $derived(new Set(availableSkills));
 
   // Skill picker source: Codex draws from the live runtime list (carries the path needed to send
@@ -1986,6 +1988,8 @@
      When dragDropEnabled: true, Tauri intercepts OS drag events and Web drag events do not fire. -->
 <div
   class="border-t border-border bg-muted/30 px-4 py-3 relative"
+  role="region"
+  aria-label={t("prompt_dropFiles")}
   ondragenter={handleDragEnter}
   ondragleave={handleDragLeave}
   ondragover={handleDragOver}
@@ -2019,7 +2023,7 @@
       >
         <circle cx="12" cy="12" r="10" /><path d="M12 8v4" /><path d="M12 16h.01" />
       </svg>
-      <span>{toastMessage}</span>
+      <span class="min-w-0 break-words">{toastMessage}</span>
     </div>
   {/if}
 
@@ -2029,7 +2033,7 @@
       {#each pendingSkills as skill (skill.name)}
         <!-- Picked Codex skill — sent as a structured {type:"skill"} ref, not text. -->
         <span
-          class="inline-flex items-center gap-1.5 rounded-md border border-violet-200 dark:border-violet-800 bg-violet-50 dark:bg-violet-950/50 text-violet-700 dark:text-violet-300 px-2 py-1 text-xs"
+          class="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md border border-violet-200 dark:border-violet-800 bg-violet-50 dark:bg-violet-950/50 text-violet-700 dark:text-violet-300 px-2 py-1 text-xs"
         >
           <!-- Sparkles icon (matches SkillSelector) -->
           <svg
@@ -2045,7 +2049,7 @@
               d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"
             />
           </svg>
-          <span class="font-medium">{skill.name}</span>
+          <span class="max-w-[200px] truncate font-medium">{skill.name}</span>
           <button
             onclick={() => removeSkill(skill.name)}
             class="ml-0.5 rounded p-0.5 transition-colors hover:bg-violet-200/50 dark:hover:bg-violet-800/50"
@@ -2126,7 +2130,7 @@
               </svg>
             {/if}
             <span class="truncate max-w-[200px]">{block.preview}</span>
-            <span class="text-blue-400 dark:text-blue-500"
+            <span class="shrink-0 whitespace-nowrap text-blue-400 dark:text-blue-500"
               >{formatPasteSize(block.lineCount, block.charCount)}</span
             >
           </button>
@@ -2154,9 +2158,9 @@
 
   <!-- L3: Quick action pills + git branch (above input container) -->
   {#if (slashEnabled && quickActions.length > 0) || gitBranch}
-    <div class="flex items-center gap-1 px-1 pb-1.5">
+    <div class="flex min-w-0 flex-wrap items-center gap-1 px-1 pb-1.5">
       {#if slashEnabled && quickActions.length > 0}
-        <div class="flex items-center gap-1 overflow-x-auto scrollbar-hide">
+        <div class="flex min-w-0 flex-wrap items-center gap-1">
           {#each quickActions as cmd (cmd.name)}
             <button
               class="shrink-0 rounded-md border border-border/50 px-2 py-0.5 text-[11px]
@@ -2290,9 +2294,9 @@
     {/if}
 
     <!-- Bottom action bar -->
-    <div class="flex items-center justify-between px-2 pb-2">
+    <div class="flex flex-wrap items-center justify-between gap-2 px-2 pb-2">
       <!-- Left: agent selector + permission mode -->
-      <div class="flex items-center gap-1">
+      <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1">
         {#if !hasRun && onAgentChange}
           <AgentSelector value={agent} onchange={(a) => onAgentChange?.(a)} />
         {/if}
@@ -2396,7 +2400,7 @@
       </div>
 
       <!-- Right: actions -->
-      <div class="flex items-center gap-0.5">
+      <div class="ml-auto flex shrink-0 items-center gap-0.5">
         {#if slashEnabled}
           <button
             bind:this={slashBtnEl}

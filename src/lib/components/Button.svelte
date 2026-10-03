@@ -10,6 +10,7 @@
     class: className = "",
     onclick,
     children,
+    type,
   }: {
     variant?: Variant;
     size?: Size;
@@ -18,10 +19,11 @@
     class?: string;
     onclick?: (e: MouseEvent) => void;
     children?: import("svelte").Snippet;
+    type?: "button" | "submit" | "reset";
   } = $props();
 
   const base =
-    "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50";
+    "inline-flex min-w-0 max-w-full items-center justify-center whitespace-normal rounded-md text-sm font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50";
 
   const variants: Record<Variant, string> = {
     default: "bg-primary text-primary-foreground hover:bg-primary/90",
@@ -32,14 +34,15 @@
   };
 
   const sizes: Record<Size, string> = {
-    sm: "h-8 rounded-md px-3 text-xs",
-    default: "h-9 px-4 py-2",
-    lg: "h-10 rounded-md px-8",
+    sm: "min-h-8 rounded-md px-3 py-1 text-xs",
+    default: "min-h-9 px-4 py-2",
+    lg: "min-h-10 px-8 py-2",
     icon: "h-9 w-9",
   };
 </script>
 
 <button
+  {type}
   class="{base} {variants[variant]} {sizes[size]} {className}"
   disabled={disabled || loading}
   {onclick}

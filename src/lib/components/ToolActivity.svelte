@@ -892,7 +892,7 @@
           {#if subagents.length > 0}
             <div class="px-3 py-2 border-b border-border/50">
               <div
-                class="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5"
+                class="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
               >
                 {t("tool_subagents", { count: String(subagents.length) })}
               </div>
@@ -963,7 +963,7 @@
               {#each toolStats.summary as [name, count]}
                 {@const style = getToolColor(name)}
                 <span
-                  class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded {style.bg} {style.text} font-medium"
+                  class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium {style.bg} {style.text}"
                 >
                   {name}
                   <span class="opacity-70">{count}</span>
@@ -989,7 +989,7 @@
                   class="flex items-center w-full px-2.5 py-1.5 hover:bg-accent/50 transition-colors border-b border-border/30"
                 >
                   <button
-                    class="flex-1 flex items-center gap-1.5 text-left min-w-0"
+                    class="flex min-w-0 flex-1 items-center gap-1.5 text-left"
                     onclick={() => {
                       if (hasTools) {
                         toggleTurn(turn.turnIndex);
@@ -1035,7 +1035,7 @@
                       {/if}
                       {#if hasTools}
                         <span
-                          class="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground font-medium"
+                          class="shrink-0 whitespace-nowrap rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
                           >{countToolNodes(turn.tools)}</span
                         >
                       {/if}

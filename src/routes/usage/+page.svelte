@@ -230,12 +230,12 @@
   });
 </script>
 
-<div class="max-w-4xl mx-auto p-6 space-y-6 animate-slide-up">
+<div class="min-w-0 space-y-4 p-4 animate-slide-up sm:space-y-5 sm:p-5">
   <!-- Header -->
-  <div class="flex items-center gap-4">
-    <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/10">
+  <div class="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
+    <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10">
       <svg
-        class="h-7 w-7 text-emerald-600 dark:text-emerald-400"
+        class="h-5 w-5 text-emerald-600 dark:text-emerald-400"
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
@@ -245,16 +245,16 @@
       >
     </div>
     <div>
-      <h1 class="text-2xl font-bold">{t("usage_title")}</h1>
-      <p class="text-sm text-muted-foreground">{t("usage_subtitle")}</p>
+      <h1 class="text-xl font-semibold">{t("usage_title")}</h1>
+      <p class="text-xs text-muted-foreground">{t("usage_subtitle")}</p>
     </div>
   </div>
 
   <!-- Scope tabs: App / Global -->
-  <div class="flex items-center gap-4">
+  <div class="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
     <div class="flex gap-1 bg-muted/40 rounded-lg p-0.5">
       <button
-        class="px-3 py-1.5 text-xs font-medium rounded-md transition-colors
+        class="whitespace-nowrap px-3 py-1.5 text-xs font-medium rounded-md transition-colors
           {scope === 'global'
           ? 'bg-background text-foreground shadow-sm'
           : 'text-muted-foreground hover:text-foreground'}"
@@ -263,7 +263,7 @@
         {t("usage_scopeGlobal")}
       </button>
       <button
-        class="px-3 py-1.5 text-xs font-medium rounded-md transition-colors
+        class="whitespace-nowrap px-3 py-1.5 text-xs font-medium rounded-md transition-colors
           {scope === 'app'
           ? 'bg-background text-foreground shadow-sm'
           : 'text-muted-foreground hover:text-foreground'}"
@@ -274,10 +274,10 @@
     </div>
 
     <!-- Date range tabs -->
-    <div class="flex gap-1">
+    <div class="flex flex-wrap gap-1">
       {#each DATE_RANGES as range}
         <button
-          class="px-3 py-1.5 text-xs font-medium rounded-md transition-colors
+          class="whitespace-nowrap px-3 py-1.5 text-xs font-medium rounded-md transition-colors
             {selectedDays === range.days
             ? 'bg-primary text-primary-foreground'
             : 'bg-muted/50 text-muted-foreground hover:bg-muted'}"
@@ -338,7 +338,7 @@
     </div>
   {:else if data}
     <!-- Summary cards -->
-    <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+    <div class="grid grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-3">
       <Card class="p-4 text-center">
         <p class="text-2xl font-bold">
           {data.costComplete ? formatCost(data.totalCostUsd) : "\u2014"}
@@ -377,11 +377,11 @@
     <!-- Activity Heatmap (always 52 weeks, independent of date filter) -->
     {#if heatmapDaily}
       <Card class="p-6 space-y-3">
-        <div class="flex items-center justify-between">
+        <div class="flex flex-wrap items-center justify-between gap-2">
           <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
             {t("usage_activityHeatmap")}
           </h2>
-          <div class="flex gap-3 text-xs text-muted-foreground">
+          <div class="flex flex-wrap gap-3 text-xs text-muted-foreground">
             {#if data.activeDays > 0}
               <span>{t("usage_activeDays", { count: String(data.activeDays) })}</span>
             {/if}
@@ -396,11 +396,11 @@
 
     <!-- Daily trend chart -->
     <Card class="p-6 space-y-4">
-      <div class="flex items-center justify-between">
+      <div class="flex flex-wrap items-center justify-between gap-2">
         <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
           {t("usage_dailyTrend")}
         </h2>
-        <div class="flex gap-1">
+        <div class="flex flex-wrap gap-1">
           <button
             class="px-2 py-0.5 text-[10px] font-medium rounded transition-colors
               {chartMode === 'cost'
@@ -499,13 +499,13 @@
     </Card>
 
     <!-- By Model -->
-    <Card class="p-6 space-y-4">
+    <Card class="space-y-4 p-4 sm:p-6">
       <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
         {t("usage_byModel")}
       </h2>
       {#if data.byModel.length > 0}
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm">
+        <div class="usage-table-container">
+          <table aria-label={t("usage_byModel")} class="usage-model-table w-full text-sm">
             <thead>
               <tr class="text-xs text-muted-foreground border-b border-border">
                 <th class="text-left py-2 font-medium">{t("usage_thModel")}</th>
@@ -523,28 +523,49 @@
             <tbody>
               {#each data.byModel as modelRow}
                 <tr class="border-b border-border/50 hover:bg-muted/30">
-                  <td class="py-2 font-mono text-xs truncate max-w-[180px]" title={modelRow.model}>
+                  <td
+                    data-label={t("usage_thModel")}
+                    class="py-2 font-mono text-xs truncate max-w-[180px]"
+                    title={modelRow.model}
+                  >
                     {modelRow.model}
                   </td>
                   {#if scope === "app"}
-                    <td class="py-2 text-right tabular-nums">{modelRow.runs}</td>
+                    <td data-label={t("usage_thRuns")} class="py-2 text-right tabular-nums"
+                      >{modelRow.runs}</td
+                    >
                   {/if}
-                  <td class="py-2 text-right tabular-nums font-mono text-xs">
+                  <td
+                    data-label={t("usage_thInTokens")}
+                    class="py-2 text-right tabular-nums font-mono text-xs"
+                  >
                     {formatTokenCount(modelRow.inputTokens)}
                   </td>
-                  <td class="py-2 text-right tabular-nums font-mono text-xs">
+                  <td
+                    data-label={t("usage_thOutTokens")}
+                    class="py-2 text-right tabular-nums font-mono text-xs"
+                  >
                     {formatTokenCount(modelRow.outputTokens)}
                   </td>
-                  <td class="py-2 text-right tabular-nums font-mono text-xs text-muted-foreground">
+                  <td
+                    data-label={t("usage_thCacheRead")}
+                    class="py-2 text-right tabular-nums font-mono text-xs text-muted-foreground"
+                  >
                     {formatTokenCount(modelRow.cacheReadTokens)}
                   </td>
-                  <td class="py-2 text-right tabular-nums font-mono text-xs text-muted-foreground">
+                  <td
+                    data-label={t("usage_thCacheWrite")}
+                    class="py-2 text-right tabular-nums font-mono text-xs text-muted-foreground"
+                  >
                     {formatTokenCount(modelRow.cacheWriteTokens)}
                   </td>
-                  <td class="py-2 text-right tabular-nums font-mono text-xs">
+                  <td
+                    data-label={t("usage_thCost")}
+                    class="py-2 text-right tabular-nums font-mono text-xs"
+                  >
                     {modelRow.costComplete ? formatCost(modelRow.costUsd) : "\u2014"}
                   </td>
-                  <td class="py-2 text-right">
+                  <td data-label="%" class="py-2 text-right">
                     {#if data.costComplete && modelRow.costComplete}
                       <div class="flex items-center justify-end gap-2">
                         <div class="w-12 h-1.5 bg-muted rounded-full overflow-hidden">
@@ -558,7 +579,7 @@
                         </span>
                       </div>
                     {:else}
-                      <span class="text-xs text-muted-foreground">\u2014</span>
+                      <span class="text-xs text-muted-foreground">—</span>
                     {/if}
                   </td>
                 </tr>
@@ -573,13 +594,13 @@
 
     <!-- Run History (App mode only) -->
     {#if scope === "app"}
-      <Card class="p-6 space-y-4">
+      <Card class="space-y-4 p-4 sm:p-6">
         <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
           {t("usage_runHistory")}
         </h2>
         {#if sortedRuns.length > 0}
-          <div class="overflow-x-auto">
-            <table class="w-full text-sm">
+          <div class="usage-table-container">
+            <table aria-label={t("usage_runHistory")} class="usage-run-table w-full text-sm">
               <thead>
                 <tr class="text-xs text-muted-foreground border-b border-border">
                   <th
@@ -616,13 +637,21 @@
                     class="border-b border-border/50 hover:bg-muted/30 cursor-pointer"
                     onclick={() => goto(`/chat?run=${run.runId}`)}
                   >
-                    <td class="py-2 text-xs text-muted-foreground whitespace-nowrap">
+                    <td
+                      data-label={t("usage_thDate")}
+                      class="py-2 text-xs text-muted-foreground whitespace-nowrap"
+                    >
                       {formatDate(run.startedAt)}
                     </td>
-                    <td class="py-2 truncate max-w-[200px]" title={run.name}>
+                    <td
+                      data-label={t("usage_thName")}
+                      class="py-2 truncate max-w-[200px]"
+                      title={run.name}
+                    >
                       {run.name}
                     </td>
                     <td
+                      data-label={t("usage_thModel")}
                       class="py-2 font-mono text-xs text-muted-foreground truncate max-w-[120px]"
                       title={run.model ?? run.agent}
                     >
@@ -633,10 +662,14 @@
                       {/if}
                       {run.model ?? "\u2014"}
                     </td>
-                    <td class="py-2 text-right tabular-nums font-mono text-xs">
+                    <td
+                      data-label={t("usage_thTokens")}
+                      class="py-2 text-right tabular-nums font-mono text-xs"
+                    >
                       {formatTokenCount(run.inputTokens + run.outputTokens)}
                     </td>
                     <td
+                      data-label={t("usage_thCost")}
                       class="py-2 text-right tabular-nums font-mono text-xs"
                       title={run.costEstimated ? "Estimated from token count" : undefined}
                     >
@@ -646,7 +679,7 @@
                           class="text-[9px] text-muted-foreground/50 ml-0.5">~</span
                         >{/if}
                     </td>
-                    <td class="py-2 text-right tabular-nums">
+                    <td data-label={t("usage_thTurns")} class="py-2 text-right tabular-nums">
                       {run.numTurns}
                     </td>
                   </tr>
@@ -663,3 +696,121 @@
     {/if}
   {/if}
 </div>
+
+<style>
+  .usage-table-container {
+    min-width: 0;
+    container-type: inline-size;
+  }
+
+  @container (max-width: 720px) {
+    .usage-model-table thead {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .usage-model-table tbody {
+      display: grid;
+      gap: 0.5rem;
+    }
+
+    .usage-model-table tbody tr {
+      display: grid;
+      min-width: 0;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.25rem 0.75rem;
+      border: 1px solid hsl(var(--border) / 0.5);
+      border-radius: 0.5rem;
+      padding: 0.5rem;
+    }
+
+    .usage-model-table tbody td {
+      display: block;
+      min-width: 0;
+      max-width: none;
+      overflow-wrap: break-word;
+      padding: 0.25rem !important;
+      text-align: left !important;
+      white-space: normal;
+    }
+
+    .usage-model-table tbody td::before {
+      display: block;
+      margin-bottom: 0.125rem;
+      color: hsl(var(--muted-foreground));
+      content: attr(data-label);
+      font-family: inherit;
+      font-size: 0.625rem;
+      font-weight: 500;
+      line-height: 1rem;
+    }
+
+    .usage-model-table tbody td:first-child {
+      grid-column: 1 / -1;
+      overflow-wrap: break-word;
+    }
+
+    .usage-run-table thead {
+      display: block;
+      margin-bottom: 0.5rem;
+    }
+
+    .usage-run-table thead tr {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.25rem;
+    }
+
+    .usage-run-table thead th {
+      display: block;
+      min-width: 0;
+      overflow-wrap: break-word;
+      padding: 0.375rem !important;
+      text-align: left !important;
+      white-space: normal;
+    }
+
+    .usage-run-table tbody {
+      display: grid;
+      gap: 0.5rem;
+    }
+
+    .usage-run-table tbody tr {
+      display: grid;
+      min-width: 0;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.25rem 0.75rem;
+      border: 1px solid hsl(var(--border) / 0.5);
+      border-radius: 0.5rem;
+      padding: 0.5rem;
+    }
+
+    .usage-run-table tbody td {
+      display: block;
+      min-width: 0;
+      max-width: none;
+      overflow-wrap: break-word;
+      padding: 0.25rem !important;
+      text-align: left !important;
+      white-space: normal;
+    }
+
+    .usage-run-table tbody td::before {
+      display: block;
+      margin-bottom: 0.125rem;
+      color: hsl(var(--muted-foreground));
+      content: attr(data-label);
+      font-family: inherit;
+      font-size: 0.625rem;
+      font-weight: 500;
+      line-height: 1rem;
+    }
+  }
+</style>

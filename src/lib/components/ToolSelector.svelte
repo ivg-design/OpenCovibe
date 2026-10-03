@@ -43,14 +43,16 @@
   <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
     {#each commonTools as tool}
       <button
-        class="flex items-center gap-2 rounded-md border px-3 py-2 text-sm transition-all duration-150
+        class="flex min-w-0 items-start gap-2 rounded-md border px-3 py-2 text-sm transition-all duration-150
           {value.includes(tool.id)
           ? 'border-primary bg-primary/5 ring-1 ring-primary/20'
           : 'hover:bg-accent hover:border-ring/30'}"
         onclick={() => toggle(tool.id)}
       >
         <div
-          class="flex h-4 w-4 items-center justify-center rounded border {value.includes(tool.id)
+          class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border {value.includes(
+            tool.id,
+          )
             ? 'bg-primary border-primary'
             : 'border-muted-foreground/30'}"
         >
@@ -64,9 +66,9 @@
             >
           {/if}
         </div>
-        <div class="text-left">
-          <div class="font-medium">{tool.id}</div>
-          <div class="text-xs text-muted-foreground">{tool.desc()}</div>
+        <div class="min-w-0 text-left">
+          <div class="whitespace-nowrap font-medium">{tool.id}</div>
+          <div class="break-words text-xs text-muted-foreground">{tool.desc()}</div>
         </div>
       </button>
     {/each}
@@ -80,6 +82,8 @@
           <button
             class="hover:text-destructive transition-colors"
             onclick={() => removeCustom(tool)}
+            aria-label={`Remove ${tool}`}
+            title={`Remove ${tool}`}
           >
             <svg
               class="h-3 w-3"

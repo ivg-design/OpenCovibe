@@ -1,6 +1,22 @@
 use crate::agent::adapter::{self, AdapterSettings};
 use crate::models::CodexProviderCredential;
 
+/// Encode the per-agent web-search preference as a Codex config override. Codex's mode accepts
+/// `live`, `cached`, and `disabled`; the boolean UI exposes live/on and disabled/off, while None
+/// intentionally preserves the user's config.toml value (which may be cached).
+pub fn codex_web_search_config_args(mode: Option<bool>) -> Vec<String> {
+    let Some(enabled) = mode else {
+        return Vec::new();
+    };
+    vec![
+        "-c".to_string(),
+        format!(
+            "web_search=\"{}\"",
+            if enabled { "live" } else { "disabled" }
+        ),
+    ]
+}
+
 /// Build the `-c model_providers.*` config overrides for a Codex third-party provider
 /// (OpenAI Responses API gateway). Accepted on `codex exec`, `codex exec resume`, and
 /// `codex app-server`. The API key is supplied separately via [`codex_provider_env`].
@@ -75,13 +91,9 @@ pub fn build_agent_command(
             Ok((program, args))
         }
         "codex" => {
-            // `--search` is a TOP-LEVEL codex flag (NOT a `codex exec` flag — `codex exec
-            // --search` errors "unexpected argument"). It must precede the `exec` subcommand:
-            // `codex --search exec ...`. Verified accepted on both new sessions and resume.
-            let mut args: Vec<String> = vec![];
-            if settings.web_search {
-                args.push("--search".to_string());
-            }
+            // Preserve the app-level on/off override even when Codex config.toml enables search.
+            // The config override must precede the subcommand, and None leaves config.toml alone.
+            let mut args = codex_web_search_config_args(settings.web_search);
             args.push("exec".to_string());
             // Resume: `codex exec resume <thread_id> --json "prompt"`
             if let Some(tid) = resume_thread_id {
@@ -265,7 +277,7 @@ mod tests {
             profile: None,
             ignore_user_config: false,
             ignore_rules: false,
-            web_search: false,
+            web_search: None,
             codex_provider: None,
         }
     }
@@ -383,20 +395,26 @@ mod tests {
     #[test]
     fn codex_web_search_flag() {
         let mut s = make_settings();
-        s.web_search = true;
-        // --search is a TOP-LEVEL flag (before `exec`), accepted on both new and resume.
+        s.web_search = Some(true);
         let (_, args) = build_agent_command("codex", "q", &s, false, None, &[]).unwrap();
-        assert_eq!(args.first().unwrap(), "--search");
-        assert_eq!(args[1], "exec");
+        assert_eq!(args[..3], ["-c", "web_search=\"live\"", "exec"]);
         let (_, resume_args) =
             build_agent_command("codex", "q", &s, false, Some("tid-1"), &[]).unwrap();
-        assert_eq!(resume_args.first().unwrap(), "--search");
         assert!(resume_args.contains(&"resume".to_string()));
-        // No web_search → no --search, exec is first.
-        s.web_search = false;
+        assert_eq!(resume_args[2], "exec");
+
+        // Explicit Off must defeat a Codex config.toml setting of live.
+        s.web_search = Some(false);
         let (_, none_args) = build_agent_command("codex", "q", &s, false, None, &[]).unwrap();
-        assert_eq!(none_args.first().unwrap(), "exec");
-        assert!(!none_args.contains(&"--search".to_string()));
+        assert_eq!(none_args[..3], ["-c", "web_search=\"disabled\"", "exec"]);
+
+        // An unset preference leaves user's config (including cached mode) untouched.
+        s.web_search = None;
+        let (_, default_args) = build_agent_command("codex", "q", &s, false, None, &[]).unwrap();
+        assert_eq!(default_args.first().unwrap(), "exec");
+        assert!(!default_args
+            .iter()
+            .any(|arg| arg.starts_with("web_search=")));
     }
 
     #[test]

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { readableProtocolOutput } from "$lib/utils/room-presentation";
   import * as api from "$lib/api";
   import type { HistoryContent } from "$lib/types";
   import { dbg, dbgWarn } from "$lib/utils/debug";
@@ -105,7 +106,10 @@
         {t("historyContent_window", { offset: windowStart.toLocaleString() })}
       </div>
     {/if}
-    <pre class="max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono">{decoded}</pre>
+    <pre
+      class="max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono">{readableProtocolOutput(
+        decoded,
+      )}</pre>
   {:else}
     <div class="text-muted-foreground">
       {t("historyContent_preview", { bytes: content.byteLength.toLocaleString() })}

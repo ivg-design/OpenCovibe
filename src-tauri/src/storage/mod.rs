@@ -4,6 +4,7 @@ pub mod claude_usage;
 pub mod cli_config;
 pub mod cli_sessions;
 pub mod cli_sessions_common;
+pub mod codex_catalog;
 pub mod codex_sessions;
 pub mod codex_usage;
 pub mod community_skills;
@@ -13,6 +14,7 @@ pub mod history;
 pub mod mcp_registry;
 pub mod plugins;
 pub mod prompt_index;
+pub mod room_events;
 pub mod run_index;
 pub mod runs;
 pub mod settings;
@@ -91,6 +93,14 @@ impl DataDirLock {
 }
 
 pub fn data_dir() -> PathBuf {
+    if let Some(override_path) = std::env::var_os("OPENCOVIBE_DATA_DIR") {
+        let path = PathBuf::from(override_path);
+        assert!(
+            path.is_absolute(),
+            "OPENCOVIBE_DATA_DIR must be an absolute path"
+        );
+        return path;
+    }
     let home = dirs_next().expect("Could not determine home directory");
     home.join(".opencovibe")
 }

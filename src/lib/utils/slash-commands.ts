@@ -444,6 +444,11 @@ function isExcludedForAgent(cmd: CliCommand, agent: string): boolean {
   return Array.isArray(excluded) && excluded.includes(agent);
 }
 
+export function supportsVirtualAction(action: string, agent: string): boolean {
+  const variants = VIRTUAL_COMMANDS.filter((command) => command["_action"] === action);
+  return variants.length === 0 || variants.some((command) => !isExcludedForAgent(command, agent));
+}
+
 /**
  * Resolve a virtual command name/alias to the agent-correct variant.
  * Some names (rewind, compact, …) have per-agent variants distinguished only by

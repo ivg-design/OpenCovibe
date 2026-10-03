@@ -89,6 +89,10 @@ fn pending_kind_name(kind: PendingKind) -> &'static str {
     }
 }
 
+fn is_local_slash_command(text: &str, bridge_message_id: Option<&str>) -> bool {
+    bridge_message_id.is_none() && text.trim().starts_with('/')
+}
+
 fn ensure_control_cancel_supported(is_codex: bool) -> Result<(), String> {
     if is_codex {
         // Codex app-server has no stream-json control_cancel_request frame; emitting the Claude
@@ -255,6 +259,11 @@ pub enum ActorCommand {
         skills: Vec<CodexSkillRef>,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    BridgeMessage {
+        text: String,
+        message_id: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     /// Two-phase control: actor writes stdin + registers waiter → returns (request_id, response_rx).
     /// Caller awaits response_rx outside the actor to avoid deadlocking the select! loop.
     SendControl {
@@ -337,6 +346,7 @@ struct SessionActor {
     codex_startup: Vec<Value>,
     /// Codex thread/started seen — gates turn dispatch until the thread is open.
     codex_ready: bool,
+    codex_startup_error: Option<String>,
     /// Live per-turn Codex overrides (model/effort/approval/sandbox) set via control subtypes
     /// without respawning. Injected into each `turn/start`. Ignored for Claude.
     codex_overrides: CodexTurnOverrides,
@@ -453,6 +463,7 @@ pub fn spawn_actor(
         codex,
         codex_startup,
         codex_ready: false,
+        codex_startup_error: None,
         codex_overrides: CodexTurnOverrides::default(),
         state: String::new(),
         stdin: Some(stdin),
@@ -543,7 +554,10 @@ impl SessionActor {
                 cmd = cmd_rx.recv() => {
                     match cmd {
                         Some(ActorCommand::SendMessage { text, attachments, skills, reply }) => {
-                            self.handle_send_message(text, attachments, skills, reply).await;
+                            self.handle_send_message(text, attachments, skills, None, reply).await;
+                        }
+                        Some(ActorCommand::BridgeMessage { text, message_id, reply }) => {
+                            self.handle_send_message(text, Vec::new(), Vec::new(), Some(message_id), reply).await;
                         }
                         Some(ActorCommand::Stop { reply }) => {
                             let r = self.handle_stop().await;
@@ -735,8 +749,13 @@ impl SessionActor {
         text: String,
         attachments: Vec<AttachmentData>,
         skills: Vec<CodexSkillRef>,
+        bridge_message_id: Option<String>,
         reply: oneshot::Sender<Result<(), String>>,
     ) {
+        if let Some(error) = &self.codex_startup_error {
+            let _ = reply.send(Err(error.clone()));
+            return;
+        }
         if self.terminated {
             let _ = reply.send(Err("Session terminated".to_string()));
             return;
@@ -754,7 +773,9 @@ impl SessionActor {
         let turn_index = self.next_turn_index;
         self.next_turn_index += 1;
 
-        let kind = if trimmed.starts_with('/') {
+        // External bridge text is always ordinary user content. A sender must not be
+        // able to invoke local slash/control commands by choosing a leading '/'.
+        let kind = if is_local_slash_command(trimmed, bridge_message_id.as_deref()) {
             UserTurnKind::Slash {
                 command: trimmed.to_string(),
             }
@@ -779,6 +800,7 @@ impl SessionActor {
             text,
             attachments,
             skills,
+            bridge_message_id,
             kind,
             turn_index,
             reply,
@@ -905,7 +927,7 @@ impl SessionActor {
             run_id: self.run_id.clone(),
             text: ticket.text.clone(),
             uuid: Some(user_uuid),
-            client_uuid: None,
+            client_uuid: ticket.bridge_message_id.clone(),
             attachments: vec![],
         });
         // New turn: drop error tracking from the last error result. The
@@ -2136,6 +2158,17 @@ impl SessionActor {
         );
 
         let parsed = self.codex.as_mut().unwrap().parse_line(&self.run_id, text);
+        if let Some(error) = parsed.startup_error {
+            self.codex_startup_error = Some(error.clone());
+            self.fail_all_pending_replies(&error);
+            self.emit_state("failed", None, Some(error.clone()), false);
+            let _ = crate::storage::runs::with_meta(&self.run_id, |meta| {
+                meta.status = RunStatus::Failed;
+                meta.error_message = Some(error);
+                Ok(())
+            });
+            return;
+        }
 
         // Parser-generated requests (currently spawned-thread identity reads) must be written
         // before processing later notifications that can depend on their metadata.
@@ -3498,6 +3531,13 @@ mod tests {
     use std::task::{Context, Poll};
     use std::time::{Duration, Instant};
     use tokio::io::AsyncWrite;
+
+    #[test]
+    fn bridge_text_cannot_invoke_local_slash_commands() {
+        assert!(super::is_local_slash_command(" /clear", None));
+        assert!(!super::is_local_slash_command(" /clear", Some("receipt-1")));
+        assert!(!super::is_local_slash_command("/resume", Some("receipt-2")));
+    }
 
     struct FlushFailWriter(Vec<u8>);
 

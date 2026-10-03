@@ -313,7 +313,10 @@ fn codex_json_plugin(v: &serde_json::Value) -> Option<InstalledPlugin> {
 /// install/auth policy that the cache-dir walk misses). Returns None on any failure so the caller
 /// falls back to the filesystem scan. 12s timeout.
 async fn list_codex_plugins_via_cli() -> Option<Vec<InstalledPlugin>> {
-    let path = crate::agent::claude_stream::which_binary("codex")?;
+    let path = crate::agent::claude_stream::resolve_codex_path();
+    if path == "codex" {
+        return None;
+    }
     let aug_path = crate::agent::claude_stream::augmented_path();
     use crate::process_ext::HideConsole;
     use tokio::process::Command as TokioCommand;

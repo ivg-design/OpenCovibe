@@ -22,7 +22,7 @@
 </script>
 
 <div class="rounded-lg border border-border/40 bg-muted/20 px-3 py-2">
-  <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+  <div class="flex min-w-0 items-start gap-1.5 text-xs text-muted-foreground">
     {#if allDone}
       <svg
         class="h-3 w-3 text-emerald-500 shrink-0"
@@ -36,7 +36,7 @@
     {:else if stats.running > 0}
       <span class="inline-block h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse shrink-0"></span>
     {/if}
-    <span>
+    <span class="min-w-0 flex-1 break-words">
       {t("batch_status", {
         completed: String(stats.completed),
         total: String(stats.total),
@@ -44,9 +44,9 @@
       })}
     </span>
     {#if stats.failed > 0}
-      <span>·</span>
-      <span class="text-destructive">
-        {t("batch_failed", { failed: String(stats.failed) })}
+      <span class="flex shrink-0 items-center gap-1 whitespace-nowrap tabular-nums">
+        <span>·</span>
+        <span class="text-destructive">{t("batch_failed", { failed: String(stats.failed) })}</span>
       </span>
     {/if}
   </div>

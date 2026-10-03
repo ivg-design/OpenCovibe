@@ -161,7 +161,9 @@ set fileURLs to pb's readObjectsForClasses:{current application's NSURL} options
 if fileURLs is missing value then return ""
 set paths to {}
 repeat with u in fileURLs
-    set end of paths to (u's |path|() as text)
+    if (u's isFileURL() as boolean) then
+        set end of paths to (u's |path|() as text)
+    end if
 end repeat
 set AppleScript's text item delimiters to linefeed
 return paths as text

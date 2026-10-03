@@ -1,6 +1,11 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import type { ProjectFolder, ConversationGroup } from "$lib/utils/sidebar-groups";
+  import {
+    projectSidebarEntries,
+    type ProjectFolder,
+    type ConversationGroup,
+  } from "$lib/utils/sidebar-groups";
+  import RoomSidebarItem from "./RoomSidebarItem.svelte";
   import ConversationItem from "./ConversationItem.svelte";
   import { t } from "$lib/i18n/index.svelte";
   import { dbgWarn } from "$lib/utils/debug";
@@ -12,6 +17,8 @@
     label: string;
     expanded?: boolean;
     onToggle: () => void;
+    selectedRoomId?: string;
+    onSelectRoom?: (roomId: string) => void;
     showCount?: boolean;
     onRemove?: () => void;
   };
@@ -43,6 +50,8 @@
     onRemove,
     children,
     selectedRunId = "",
+    selectedRoomId = "",
+    onSelectRoom,
     onSelectConversation,
     onResume,
     onDelete,
@@ -58,9 +67,12 @@
 
   // Auto-expand visible count if selected run is beyond current page
   $effect(() => {
-    if (!expanded || !selectedRunId || children) return;
-    const idx = folder.conversations.findIndex((conv) =>
-      conv.runs.some((r) => r.id === selectedRunId),
+    if (!expanded || (!selectedRunId && !selectedRoomId) || children) return;
+    const idx = sidebarEntries.findIndex((entry) =>
+      entry.kind === "room"
+        ? entry.room.id === selectedRoomId ||
+          entry.room.participants.some((peer) => peer.run_id === selectedRunId)
+        : entry.conversation.runs.some((run) => run.id === selectedRunId),
     );
     if (idx >= 0 && idx >= visibleCount) {
       visibleCount = idx + 1;
@@ -68,14 +80,13 @@
   });
 
   // Skip conversation-related derivations when using children snippet
-  const visibleConversations = $derived(
-    children ? [] : folder.conversations.slice(0, visibleCount),
-  );
-  const hiddenCount = $derived(children ? 0 : folder.conversationCount - visibleCount);
+  const sidebarEntries = $derived(children ? [] : projectSidebarEntries(folder));
+  const visibleEntries = $derived(sidebarEntries.slice(0, visibleCount));
+  const hiddenCount = $derived(Math.max(0, sidebarEntries.length - visibleCount));
   const hasMore = $derived(hiddenCount > 0);
 
   function showMore() {
-    visibleCount = Math.min(visibleCount + PAGE_SIZE, folder.conversationCount);
+    visibleCount = Math.min(visibleCount + PAGE_SIZE, sidebarEntries.length);
   }
 
   function isConvSelected(conv: { runs: { id: string }[] }): boolean {
@@ -230,14 +241,24 @@
             <span>{t("sidebar_newChatInFolder")}</span>
           </button>
         {/if}
-        {#each visibleConversations as conv (conv.groupKey)}
-          <ConversationItem
-            conversation={conv}
-            selected={isConvSelected(conv)}
-            onclick={() => onSelectConversation?.(conv.latestRun.id)}
-            onresume={onResume}
-            ondelete={onDelete}
-          />
+        {#each visibleEntries as entry (entry.key)}
+          {#if entry.kind === "room"}
+            <RoomSidebarItem
+              room={entry.room}
+              {selectedRoomId}
+              {selectedRunId}
+              onSelectRoom={() => onSelectRoom?.(entry.room.id)}
+              onSelectParticipant={(runId) => onSelectConversation?.(runId)}
+            />
+          {:else}
+            <ConversationItem
+              conversation={entry.conversation}
+              selected={isConvSelected(entry.conversation)}
+              onclick={() => onSelectConversation?.(entry.conversation.latestRun.id)}
+              onresume={onResume}
+              ondelete={onDelete}
+            />
+          {/if}
         {/each}
         {#if hasMore}
           <button

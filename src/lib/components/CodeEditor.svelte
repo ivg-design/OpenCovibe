@@ -176,6 +176,7 @@
       // (observed on Intel Mac WKWebView), the static CSS in the style block below
       // provides baseline syntax highlighting via classHighlighter.
       syntaxHighlighting(classHighlighter),
+      EditorView.lineWrapping,
       EditorView.editable.of(!readonly),
       EditorState.readOnly.of(readonly),
       themeCompartment.of(dark ? oneDark : []),
@@ -287,7 +288,21 @@
   .code-editor-wrapper :global(.cm-editor) {
     height: 100%;
   }
-  /* scroller flex layout is enforced globally in app.css */
+  .code-editor-wrapper :global(.cm-scroller) {
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+  }
+  .code-editor-wrapper :global(.cm-gutters) {
+    flex: 0 0 auto;
+  }
+  .code-editor-wrapper :global(.cm-lineNumbers .cm-gutterElement) {
+    box-sizing: content-box;
+    min-width: 3ch;
+    padding-inline: 8px !important;
+    text-align: right;
+    white-space: nowrap;
+  }
 
   /*
    * Static tok-* fallback — provides syntax highlighting when style-mod

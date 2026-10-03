@@ -38,8 +38,9 @@ pub struct AdapterSettings {
     pub profile: Option<String>,
     pub ignore_user_config: bool,
     pub ignore_rules: bool,
-    /// Codex `--search` — enable the native web_search tool. New sessions only.
-    pub web_search: bool,
+    /// Per-agent override for Codex's native web_search mode. `Some(true)` enables live search,
+    /// `Some(false)` disables it, and `None` leaves the user's Codex config mode unchanged.
+    pub web_search: Option<bool>,
     /// Codex third-party provider (OpenAI Responses API). Injected as `-c model_providers.*`
     /// overrides + an env var at spawn. None = plain `codex login`. Codex-only.
     pub codex_provider: Option<crate::models::CodexProviderCredential>,
@@ -163,7 +164,9 @@ pub fn build_adapter_settings(
     let profile = agent.profile.clone().filter(|s| !s.is_empty());
     let ignore_user_config = agent.ignore_user_config.unwrap_or(false);
     let ignore_rules = agent.ignore_rules.unwrap_or(false);
-    let web_search = agent.web_search.unwrap_or(false);
+    // Preserve the tri-state so an explicit Off can override a user's Codex config, while an
+    // unset per-agent preference continues to honor config.toml (including cached mode).
+    let web_search = agent.web_search;
     // Codex third-party provider only applies to the codex agent.
     let codex_provider = if agent.agent == "codex" {
         user.codex_provider.clone()
@@ -177,7 +180,7 @@ pub fn build_adapter_settings(
     }
 
     log::debug!(
-        "[adapter] build_adapter_settings: model={:?}, perm={:?}, allowed={}, disallowed={}, budget={:?}, fallback={:?}, sys_prompt={}chars, append_sys={}chars, tool_set={:?}, add_dirs={}, json_schema={}, partial={}, debug={:?}, no_persist={}, max_turns={:?}, effort={:?}, betas={}, agents_json={}, codex_flags={{ephemeral={}, profile={:?}, ignore_user_config={}, ignore_rules={}, web_search={}}}",
+        "[adapter] build_adapter_settings: model={:?}, perm={:?}, allowed={}, disallowed={}, budget={:?}, fallback={:?}, sys_prompt={}chars, append_sys={}chars, tool_set={:?}, add_dirs={}, json_schema={}, partial={}, debug={:?}, no_persist={}, max_turns={:?}, effort={:?}, betas={}, agents_json={}, codex_flags={{ephemeral={}, profile={:?}, ignore_user_config={}, ignore_rules={}, web_search={:?}}}",
         model,
         permission_mode,
         allowed_tools.len(),
@@ -280,8 +283,12 @@ pub fn build_settings_args(settings: &AdapterSettings, print_mode: bool) -> Vec<
 
     // Permission mode
     if let Some(ref perm) = settings.permission_mode {
-        args.push("--permission-mode".into());
-        args.push(perm.clone());
+        if perm == "bypassPermissions" {
+            args.push("--dangerously-skip-permissions".into());
+        } else {
+            args.push("--permission-mode".into());
+            args.push(perm.clone());
+        }
     }
 
     // System prompt takes priority over append_system_prompt
@@ -412,7 +419,7 @@ mod tests {
             profile: None,
             ignore_user_config: false,
             ignore_rules: false,
-            web_search: false,
+            web_search: None,
             codex_provider: None,
         }
     }
@@ -521,6 +528,20 @@ mod tests {
         let args = build_settings_args(&s, false);
         assert!(args.contains(&"--debug".to_string()));
         assert!(args.contains(&"api".to_string()));
+    }
+
+    #[test]
+    fn bypass_mode_emits_claude_skip_permissions_flag_only_when_selected() {
+        let mut s = make_settings();
+        assert!(!build_settings_args(&s, false).contains(&"--dangerously-skip-permissions".into()));
+        s.permission_mode = Some("bypassPermissions".into());
+        let args = build_settings_args(&s, false);
+        assert!(args.contains(&"--dangerously-skip-permissions".into()));
+        assert!(!args.contains(&"--permission-mode".into()));
+        s.permission_mode = Some("default".into());
+        let args = build_settings_args(&s, false);
+        assert!(!args.contains(&"--dangerously-skip-permissions".into()));
+        assert!(args.contains(&"--permission-mode".into()));
     }
 
     #[test]
@@ -653,6 +674,7 @@ mod tests {
 
     fn make_user_settings() -> UserSettings {
         UserSettings {
+            identity_name: None,
             default_agent: "claude".to_string(),
             claude_path: None,
             default_model: None,
@@ -751,7 +773,7 @@ mod tests {
         assert_eq!(adapter.profile.as_deref(), Some("dev"));
         assert!(adapter.ignore_user_config);
         assert!(adapter.ignore_rules);
-        assert!(adapter.web_search);
+        assert_eq!(adapter.web_search, Some(true));
     }
 
     #[test]
@@ -763,7 +785,7 @@ mod tests {
         assert_eq!(adapter.profile, None);
         assert!(!adapter.ignore_user_config);
         assert!(!adapter.ignore_rules);
-        assert!(!adapter.web_search);
+        assert_eq!(adapter.web_search, None);
     }
 
     #[test]

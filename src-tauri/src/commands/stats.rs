@@ -17,7 +17,14 @@ fn parse_started_date_utc(started_at: &str) -> Option<chrono::NaiveDate> {
 }
 
 #[tauri::command]
-pub fn get_global_usage_overview(days: Option<u32>) -> Result<UsageOverview, String> {
+pub async fn get_global_usage_overview(days: Option<u32>) -> Result<UsageOverview, String> {
+    // History scans must never run on the macOS IPC/UI thread.
+    tokio::task::spawn_blocking(move || get_global_usage_overview_blocking(days))
+        .await
+        .map_err(|e| format!("Usage worker failed: {e}"))?
+}
+
+fn get_global_usage_overview_blocking(days: Option<u32>) -> Result<UsageOverview, String> {
     log::debug!("[stats] get_global_usage_overview: days={:?}", days);
     let claude = storage::claude_usage::read_global_usage(days)?;
     // Codex sessions live in ~/.codex/sessions (parallel to ~/.claude/projects). Merge so
@@ -153,7 +160,14 @@ struct DailyBuilder {
 }
 
 #[tauri::command]
-pub fn get_usage_overview(days: Option<u32>) -> Result<UsageOverview, String> {
+pub async fn get_usage_overview(days: Option<u32>) -> Result<UsageOverview, String> {
+    // History scans must never run on the macOS IPC/UI thread.
+    tokio::task::spawn_blocking(move || get_usage_overview_blocking(days))
+        .await
+        .map_err(|e| format!("Usage worker failed: {e}"))?
+}
+
+fn get_usage_overview_blocking(days: Option<u32>) -> Result<UsageOverview, String> {
     log::debug!("[stats] get_usage_overview: days={:?}", days);
 
     let metas = storage::runs::list_all_run_metas();
@@ -387,9 +401,17 @@ pub fn get_usage_overview(days: Option<u32>) -> Result<UsageOverview, String> {
 }
 
 #[tauri::command]
-pub fn clear_usage_cache() -> Result<(), String> {
+pub async fn clear_usage_cache() -> Result<(), String> {
+    // History scans must never run on the macOS IPC/UI thread.
+    tokio::task::spawn_blocking(clear_usage_cache_blocking)
+        .await
+        .map_err(|e| format!("Usage worker failed: {e}"))?
+}
+
+fn clear_usage_cache_blocking() -> Result<(), String> {
     log::debug!("[stats] clear_usage_cache");
     storage::claude_usage::clear_cache();
+    storage::codex_usage::clear_cache()?;
     Ok(())
 }
 
@@ -461,12 +483,19 @@ fn get_app_heatmap_daily() -> Result<Vec<DailyAggregate>, String> {
 }
 
 #[tauri::command]
-pub fn get_heatmap_daily(scope: String) -> Result<Vec<DailyAggregate>, String> {
+pub async fn get_heatmap_daily(scope: String) -> Result<Vec<DailyAggregate>, String> {
+    // History scans must never run on the macOS IPC/UI thread.
+    tokio::task::spawn_blocking(move || get_heatmap_daily_blocking(scope))
+        .await
+        .map_err(|e| format!("Usage worker failed: {e}"))?
+}
+
+fn get_heatmap_daily_blocking(scope: String) -> Result<Vec<DailyAggregate>, String> {
     log::debug!("[stats] get_heatmap_daily: scope={}", scope);
     let raw = match scope.as_str() {
         "global" => {
             // Merge Claude + Codex daily so the global heatmap reflects both agents.
-            let overview = get_global_usage_overview(Some(365))?;
+            let overview = get_global_usage_overview_blocking(Some(365))?;
             overview.daily
         }
         "app" => get_app_heatmap_daily()?,
@@ -616,9 +645,9 @@ mod tests {
         assert!(result[0].model_breakdown.is_none());
     }
 
-    #[test]
-    fn test_heatmap_daily_invalid_scope() {
-        let result = get_heatmap_daily("foo".to_string());
+    #[tokio::test]
+    async fn test_heatmap_daily_invalid_scope() {
+        let result = get_heatmap_daily("foo".to_string()).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("invalid scope"));
     }

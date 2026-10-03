@@ -4,6 +4,7 @@ pub mod hooks;
 pub mod models;
 pub mod pricing;
 pub mod process_ext;
+pub mod rooms;
 pub mod storage;
 pub mod web_server;
 
@@ -78,6 +79,16 @@ pub fn run() {
     .init();
 
     log::info!("OpenCovibe Desktop starting");
+    let context = tauri::generate_context!();
+    if context.config().identifier == "design.ivg.opencovibe.local"
+        && std::env::var_os("OPENCOVIBE_DATA_DIR").is_none()
+    {
+        // Finder launches the local fork into its own profile as well as a distinct bundle ID.
+        std::env::set_var(
+            "OPENCOVIBE_DATA_DIR",
+            storage::data_dir().with_file_name(".opencovibe-local"),
+        );
+    }
 
     // All storage modules use process-local writer locks. Hold the OS lock before any startup
     // reconciliation touches data so a second backend cannot allocate duplicate event sequences
@@ -95,7 +106,9 @@ pub fn run() {
     storage::runs::reconcile_orphaned_runs();
 
     // Clean up legacy hook-bridge (removed: was redundant with stream-json mode)
-    hooks::setup::cleanup_hook_bridge();
+    if std::env::var_os("OPENCOVIBE_DATA_DIR").is_none() {
+        hooks::setup::cleanup_hook_bridge();
+    }
 
     // Global cancellation token — shared with all session actors for graceful shutdown
     let cancel_token = CancellationToken::new();
@@ -140,6 +153,10 @@ pub fn run() {
         .manage(SpawnLocks::new())
         .manage(ShutdownGate::new())
         .manage(data_dir_lock)
+        .manage(Arc::new(
+            rooms::store::RoomStore::open(&storage::data_dir().join("rooms.sqlite3"))
+                .expect("could not open local room database"),
+        ))
         .manage(cancel_token)
         .manage(ws_shutdown_sender)
         .manage(shared_token_version)
@@ -154,6 +171,47 @@ pub fn run() {
         // NOTE: Currently ~60 IPC commands. If approaching 80+, consider grouping
         // into Tauri command modules or using a single dispatch command with typed payloads.
         .invoke_handler(tauri::generate_handler![
+            commands::rooms::list_rooms,
+            commands::rooms::list_room_agent_identities,
+            commands::rooms::list_room_sidebar_entries,
+            commands::rooms::get_room,
+            commands::rooms::get_room_run_settings,
+            commands::rooms::resolve_room_request,
+            commands::rooms::close_room_request,
+            commands::rooms::archive_room_requests,
+            commands::rooms::approve_room_agent,
+            commands::rooms::read_room_task,
+            commands::rooms::create_room,
+            commands::rooms::inspect_room_repository,
+            commands::rooms::get_room_session_seed,
+            commands::rooms::create_room_from_session,
+            commands::rooms::ensure_room_project,
+            commands::rooms::refresh_room_board,
+            commands::rooms::set_room_paused,
+            commands::rooms::post_room_message,
+            commands::rooms::attach_room_files,
+            commands::rooms::get_room_clipboard_paths,
+            commands::rooms::upload_room_attachment,
+            commands::rooms::read_room_attachment,
+            commands::rooms::open_room_attachment,
+            commands::rooms::create_room_sidechat,
+            commands::rooms::add_room_participant,
+            commands::rooms::list_attachable_room_chats,
+            commands::rooms::attach_room_chat,
+            commands::rooms::set_room_participant_paused,
+            commands::rooms::update_room_participant_settings,
+            commands::rooms::wake_room_participant,
+            commands::rooms::remove_room_participant,
+            commands::rooms::save_room_timer,
+            commands::rooms::remove_room_timer,
+            commands::rooms::set_room_auto_continue,
+            commands::rooms::set_room_concurrency,
+            commands::rooms::save_room_instructions,
+            commands::rooms::save_room_title,
+            commands::rooms::attach_room_project,
+            commands::rooms::archive_room,
+            commands::rooms::release_room_claim,
+            commands::rooms::merge_room_worktree,
             commands::runs::list_runs,
             commands::runs::get_run,
             commands::runs::start_run,
@@ -336,6 +394,7 @@ pub fn run() {
             ));
             app.manage(broadcaster);
             app.manage(emitter);
+            rooms::runtime::start(app.handle().clone());
 
             // Start web server (non-blocking, spawns async task)
             let app_handle = app.handle().clone();
@@ -421,7 +480,7 @@ pub fn run() {
                 _ => {}
             }
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
