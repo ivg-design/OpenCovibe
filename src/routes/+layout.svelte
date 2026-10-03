@@ -1065,13 +1065,20 @@
   const selectedRoomId = $derived(
     $page.url.pathname.startsWith("/rooms") ? ($page.url.searchParams.get("room") ?? "") : "",
   );
+  let previousRoomExpansionTarget = "";
   $effect(() => {
-    if (!selectedRoomId) return;
     const folder = projectFolders.find((folder) =>
       folder.rooms?.some((room) => room.id === selectedRoomId),
     );
-    if (folder && !expandedProjects.has(folder.folderKey))
-      expandedProjects = new Set([...expandedProjects, folder.folderKey]);
+    const target = folder ? `${selectedRoomId}:${folder.folderKey}` : "";
+    if (target === previousRoomExpansionTarget) return;
+    previousRoomExpansionTarget = target;
+    // Expand on navigation or the first arrival of the selected room's folder.
+    // Manual collapse and metadata polls must not reopen the active project.
+    untrack(() => {
+      if (folder && !expandedProjects.has(folder.folderKey))
+        expandedProjects = new Set([...expandedProjects, folder.folderKey]);
+    });
   });
 
   // Selectable folders: real project folders (exclude Uncategorized)

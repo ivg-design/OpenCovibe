@@ -17,9 +17,16 @@
     onSelectParticipant: (runId: string) => void;
   } = $props();
   let expanded = $state(true);
+  const activeSelection = $derived(
+    room.id === selectedRoomId
+      ? `room:${selectedRoomId}`
+      : room.participants.some((p) => p.run_id === selectedRunId)
+        ? `run:${selectedRunId}`
+        : "",
+  );
   $effect(() => {
-    if (room.id === selectedRoomId || room.participants.some((p) => p.run_id === selectedRunId))
-      expanded = true;
+    // Track selection, not the periodically refreshed room object.
+    if (activeSelection) expanded = true;
   });
 </script>
 
