@@ -115,31 +115,6 @@
     <h2 class="text-base font-semibold">{t("room_participants")}</h2>
     <span class="text-xs text-muted-foreground">{participants.length}</span>
   </div>
-  <form class="room-form grid gap-2 rounded-lg border bg-card p-3" onsubmit={submit}>
-    <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
-      ><span>{t("room_participantName")}</span><Input bind:value={name} /></label
-    >
-    <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
-      ><span>{t("room_provider")}</span><select
-        class="h-9 w-full min-w-0 rounded-md border bg-background px-2 text-sm text-foreground"
-        bind:value={provider}
-        onchange={() => {
-          model = effort = "";
-        }}><option value="codex">Codex</option><option value="claude">Claude</option></select
-      ></label
-    >
-    <RoomModelEffort {provider} bind:model bind:effort {disabled} />
-    <RoomTurnLimit bind:enabled={limitTurns} bind:count={maxTurns} {disabled} />
-    <label class="flex items-center gap-2 text-sm"
-      ><input type="checkbox" bind:checked={useWorktree} />{t("room_useWorktree")}</label
-    >
-    <div class="sm:col-span-2 lg:col-span-3">
-      <Button
-        disabled={disabled || !name.trim() || !validLimit(limitTurns, maxTurns)}
-        loading={busyAction === "add-participant"}>{t("room_addParticipant")}</Button
-      >
-    </div>
-  </form>
   {#if participants.length === 0}<Card variant="subtle" class="p-4 text-sm text-muted-foreground"
       >{t("room_noParticipants")}</Card
     >{/if}
@@ -151,7 +126,7 @@
           claim.participant_id === participant.id &&
           !["done", "released"].includes(claim.state.toLowerCase()),
       )}
-      <Card class="space-y-3 p-4">
+      <Card class="space-y-2 p-3">
         <div class="flex flex-wrap items-start justify-between gap-2">
           <div class="min-w-0">
             <h3 class="break-words font-medium text-foreground">
@@ -170,7 +145,7 @@
             >{roomAgentStateLabel(participant.state)}</span
           >
         </div>
-        <div class="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+        <div class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground">
           <div class="min-w-0 break-words">
             {participant.max_turns === 0
               ? t("room_budgetUnlimited", { used: String(participant.wake_count) })
@@ -198,7 +173,7 @@
           </p>{/if}
         {#if editingId === participant.id}
           <form
-            class="room-form grid gap-3 rounded-md border p-3"
+            class="room-form grid gap-2 rounded-md border p-2.5"
             onsubmit={(event) => saveAgent(event, participant)}
           >
             <label
@@ -276,4 +251,32 @@
       </Card>
     {/each}
   </div>
+  <details class="rounded-lg border bg-card px-3 py-2" open={participants.length === 0}>
+    <summary class="cursor-pointer text-sm font-medium">{t("room_addParticipant")}</summary>
+    <form class="room-form mt-2 grid gap-2 pb-1" onsubmit={submit}>
+      <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
+        ><span>{t("room_participantName")}</span><Input bind:value={name} /></label
+      >
+      <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
+        ><span>{t("room_provider")}</span><select
+          class="h-9 w-full min-w-0 rounded-md border bg-background px-2 text-sm text-foreground"
+          bind:value={provider}
+          onchange={() => {
+            model = effort = "";
+          }}><option value="codex">Codex</option><option value="claude">Claude</option></select
+        ></label
+      >
+      <RoomModelEffort {provider} bind:model bind:effort {disabled} />
+      <RoomTurnLimit bind:enabled={limitTurns} bind:count={maxTurns} {disabled} />
+      <label class="flex items-center gap-2 text-sm"
+        ><input type="checkbox" bind:checked={useWorktree} />{t("room_useWorktree")}</label
+      >
+      <div class="sm:col-span-2 lg:col-span-3">
+        <Button
+          disabled={disabled || !name.trim() || !validLimit(limitTurns, maxTurns)}
+          loading={busyAction === "add-participant"}>{t("room_addParticipant")}</Button
+        >
+      </div>
+    </form>
+  </details>
 </section>

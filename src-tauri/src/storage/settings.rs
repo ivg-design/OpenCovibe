@@ -691,8 +691,22 @@ fn validate_ui_zoom(v: &serde_json::Value) -> Result<Option<f64>, String> {
     Ok(Some(f))
 }
 
+fn normalize_identity_name(value: &serde_json::Value) -> Result<Option<String>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let name = value.as_str().ok_or("Identity name must be text")?.trim();
+    if name.chars().any(char::is_control) || name.chars().count() > 80 {
+        return Err("Identity name must be one line, up to 80 characters".into());
+    }
+    Ok((!name.is_empty()).then(|| name.to_string()))
+}
+
 pub fn update_user_settings(patch: serde_json::Value) -> Result<UserSettings, String> {
     let mut all = load();
+    if let Some(name) = patch.get("identity_name") {
+        all.user.identity_name = normalize_identity_name(name)?;
+    }
     if let Some(agent) = patch.get("default_agent").and_then(|v| v.as_str()) {
         all.user.default_agent = agent.to_string();
     }
@@ -950,6 +964,33 @@ pub fn update_agent_settings(
 mod tests {
     use super::*;
     use crate::models::{AllSettings, CodexProviderCredential, PlatformCredential};
+
+    #[test]
+    fn identity_name_validates_and_preserves_legacy_settings() {
+        assert_eq!(
+            normalize_identity_name(&serde_json::json!("  Ilya  ")).unwrap(),
+            Some("Ilya".into())
+        );
+        assert_eq!(
+            normalize_identity_name(&serde_json::json!(" ")).unwrap(),
+            None
+        );
+        assert_eq!(
+            normalize_identity_name(&serde_json::Value::Null).unwrap(),
+            None
+        );
+        assert!(normalize_identity_name(&serde_json::json!("a\nb")).is_err());
+        assert!(normalize_identity_name(&serde_json::json!("a".repeat(81))).is_err());
+        assert!(normalize_identity_name(&serde_json::json!(42)).is_err());
+        let mut saved = serde_json::to_value(UserSettings::default()).unwrap();
+        assert!(saved.get("identity_name").is_none());
+        let old: UserSettings = serde_json::from_value(saved.clone()).unwrap();
+        assert!(old.identity_name.is_none());
+        saved["identity_name"] = serde_json::json!("Илья");
+        let restored: UserSettings = serde_json::from_value(saved).unwrap();
+        assert_eq!(restored.identity_name.as_deref(), Some("Илья"));
+        assert_eq!(restored.permission_mode, old.permission_mode);
+    }
 
     fn make_settings_with_cred(cred: PlatformCredential) -> AllSettings {
         let mut s = AllSettings::default();

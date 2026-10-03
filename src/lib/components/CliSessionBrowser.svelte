@@ -3,12 +3,14 @@
   import { getTransport } from "$lib/transport";
   import { t } from "$lib/i18n/index.svelte";
   import { dbg, dbgWarn } from "$lib/utils/debug";
+  import { modalFocus } from "$lib/utils/modal-focus";
   import { fmtRelative } from "$lib/i18n/format";
   import { cwdDisplayLabel } from "$lib/utils/format";
   import {
     sessionTitle,
     sessionProject,
     sessionPreview,
+    isBackgroundSession,
     filterSessions,
   } from "$lib/utils/session-browser";
   import type { CliSessionSummary, DiscoverResult, ImportResult, SyncResult } from "$lib/types";
@@ -35,6 +37,7 @@
   let searchQuery = $state("");
   let scopeCwd = $state(untrack(() => cwd));
   let includeSubagents = $state(false);
+  let includeBackground = $state(false);
   let includeArchived = $state(false);
   let projectChoices = $state<{ path: string; label: string; count: number }[]>([]);
   let choosingFolder = $state(false);
@@ -67,6 +70,7 @@
       agent === "codex" ? "" : searchQuery,
       includeSubagents,
       includeArchived,
+      includeBackground,
     ),
   );
 
@@ -280,7 +284,9 @@
   class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-fade-in"
   role="dialog"
   aria-modal="true"
+  aria-label={agent === "codex" ? t("cliSync_title_codex") : t("cliSync_title_claude")}
   tabindex="-1"
+  use:modalFocus
   onclick={handleBackdropClick}
   onkeydown={handleKeydown}
 >
@@ -408,6 +414,16 @@
             />{t("cliSync_showArchived")}</label
           >
         </div>{/if}
+      {#if agent === "claude"}
+        <label class="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            bind:checked={includeBackground}
+            disabled={!!importingId || importingAll}
+          />
+          {t("cliSync_includeBackground")}
+        </label>
+      {/if}
       <p class="mt-2 text-xs text-muted-foreground">{t("cliSync_mainChatsHelp")}</p>
     </div>
 
@@ -511,9 +527,11 @@
                     {/if}
                   </div>
                   <p class="mt-1 break-words text-sm font-medium text-foreground">
-                    {sessionTitle(session)}
+                    {sessionTitle(session, (project) =>
+                      t("cliSync_sessionFromProject", { project }),
+                    )}
                   </p>
-                  {#if session.title && session.firstPrompt && !/^\s*[[{<]/.test(session.firstPrompt)}<p
+                  {#if sessionPreview(session)}<p
                       class="mt-1 line-clamp-2 break-words text-xs text-muted-foreground"
                     >
                       {sessionPreview(session)}
@@ -526,6 +544,9 @@
                   <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     {#if session.isAutomated}<span>{t("cliSync_automatedChat")}</span>{/if}
                     {#if session.isSubagent}<span>{t("cliSync_subagentChat")}</span>{/if}
+                    {#if isBackgroundSession(session) && !session.isAutomated && !session.isSubagent}<span
+                        >{t("cliSync_backgroundChat")}</span
+                      >{/if}
                     {#if session.archived}<span>{t("cliSync_archived")}</span>{/if}
                     {#if session.countsExact !== false}
                       {#if session.agent === "codex"}

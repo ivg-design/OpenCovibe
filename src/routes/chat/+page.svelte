@@ -68,7 +68,6 @@
   import PermissionPanel from "$lib/components/PermissionPanel.svelte";
   import ElicitationDialog from "$lib/components/ElicitationDialog.svelte";
   import AgentAuthBadge from "$lib/components/AgentAuthBadge.svelte";
-  import AgentSelector from "$lib/components/AgentSelector.svelte";
 
   import ToolActivity from "$lib/components/ToolActivity.svelte";
   import ShortcutHelpPanel from "$lib/components/ShortcutHelpPanel.svelte";
@@ -4613,7 +4612,9 @@
 {/snippet}
 
 {#snippet heroMetaFooter()}
-  <div class="mt-4 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+  <div
+    class="mt-3 flex flex-wrap items-center justify-center gap-1.5 text-xs text-muted-foreground"
+  >
     {@render heroMetaItems()}
   </div>
 {/snippet}
@@ -4951,7 +4952,7 @@
           {#if welcomeVisible}
             <!-- Welcome state -->
             <div class="flex h-full items-center justify-center">
-              <div class="flex flex-col items-center max-w-sm">
+              <div class="flex min-w-0 flex-col items-center w-full max-w-sm px-4">
                 <div class="text-center animate-slide-up">
                   <img src="/logo.png?v=2" alt="OC" class="mx-auto mb-4 h-12 w-12 rounded-2xl" />
                   <h2 class="text-lg font-semibold text-primary mb-1">{t("layout_appName")}</h2>
@@ -5003,13 +5004,8 @@
                 </div>
                 <!-- Footer outside animate-slide-up: AuthSourceBadge needs transform-free ancestor for fixed dropdown -->
                 <div
-                  class="mt-4 flex items-center justify-center gap-1.5 text-xs text-muted-foreground"
+                  class="mt-3 flex flex-wrap items-center justify-center gap-1.5 text-xs text-muted-foreground"
                 >
-                  <!-- Agent switcher in the hero, synced with the composer's AgentSelector
-                       (both call handleAgentChange → store.agent). Switching here also swaps the
-                       auth badge below (OAuth / API Key, per agent). -->
-                  <AgentSelector value={effectiveAgent} onchange={(a) => handleAgentChange(a)} />
-                  <span class="text-muted-foreground">·</span>
                   <AgentAuthBadge
                     agent={effectiveAgent}
                     {authOverview}

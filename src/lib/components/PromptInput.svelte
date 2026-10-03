@@ -448,7 +448,9 @@
   let isComposing = $state(false);
 
   let allCommands = $derived(mergeWithVirtual(cliCommands ?? [], agent));
-  let quickActions = $derived(getQuickActions(allCommands, agent));
+  let quickActions = $derived(
+    getQuickActions(allCommands, agent).filter((command) => command.name !== "model"),
+  );
   let skillNameSet = $derived(new Set(availableSkills));
 
   // Skill picker source: Codex draws from the live runtime list (carries the path needed to send

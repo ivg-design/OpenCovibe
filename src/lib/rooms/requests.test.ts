@@ -51,7 +51,7 @@ describe("room request inbox", () => {
     expect(hasNewRequest(known, requestInboxKeys([{ ...pending }]))).toBe(false);
     expect(
       hasNewRequest(known, requestInboxKeys([pending, request("b", "review", "pending")])),
-    ).toBe(true);
+    ).toBe(false);
     expect(hasNewRequest(known, requestInboxKeys([{ ...pending, status: "approved" }]))).toBe(
       false,
     );
@@ -61,6 +61,29 @@ describe("room request inbox", () => {
     expect(requestPanelWidth(NaN)).toBe(32);
     expect(requestPanelWidth(90)).toBe(70);
     expect(requestPanelWidth(2)).toBe(20);
+  });
+  it("ignores peer arrivals and review updates until they require a human answer", () => {
+    const known = requestInboxKeys([request("question", "decision", "pending")]);
+    for (const peer of [
+      request("peer", "review", "pending"),
+      request("peer", "review", "changes_requested"),
+      request("proposal", "completion", "pending"),
+    ]) {
+      expect(
+        hasNewRequest(known, requestInboxKeys([request("question", "decision", "pending"), peer])),
+      ).toBe(false);
+      expect(filterRoomRequests([peer], "attention", "", [])).toEqual([]);
+      expect(filterRoomRequests([peer], "waiting", "", [])).toEqual([peer]);
+    }
+    expect(
+      hasNewRequest(known, requestInboxKeys([request("proposal", "completion", "verified")])),
+    ).toBe(true);
+    expect(
+      hasNewRequest(known, requestInboxKeys([request("new-question", "decision", "pending")])),
+    ).toBe(true);
+    expect(
+      requestInboxKeys([{ ...request("archived", "decision", "pending"), archived: true }]),
+    ).toEqual([]);
   });
   it("distinguishes human decisions from pending peer reviews and closed requests", () => {
     expect(needsHumanAnswer(request("a", "decision", "pending"))).toBe(true);

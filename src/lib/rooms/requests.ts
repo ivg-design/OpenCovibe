@@ -1,7 +1,8 @@
 import type { RoomParticipant, RoomRequest } from "./types";
 
 export function requestInboxKeys(requests: RoomRequest[]): string[] {
-  return requests.filter(isOpenRoomRequest).map((r) => `${r.id}:${r.status}`);
+  // Peer reviews remain browsable, but only human attention may interrupt the UI.
+  return requests.filter(needsHumanAnswer).map((r) => `${r.id}:${r.status}`);
 }
 export function hasNewRequest(previous: string[], next: string[]): boolean {
   const known = new Set(previous);

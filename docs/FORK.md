@@ -14,3 +14,10 @@ builds are installed manually; a fork update channel must be validated before it
 
 Based on [AnyiWang/OpenCovibe](https://github.com/AnyiWang/OpenCovibe), under Apache 2.0.
 Original copyright and license notices are retained.
+
+## Version 0.3.1
+
+App-wide UI/UX remediation improves Matrix readability, responsive layouts, room controls,
+request focus and keyboard replies, import clarity and identity settings. See the
+[UI/UX audit](UI_UX_AUDIT_2026-10-03.md) and
+[acceptance evidence](UI_UX_ACCEPTANCE_2026-10-03.md) for changes, validation and deployment status.

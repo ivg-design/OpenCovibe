@@ -306,8 +306,10 @@
 
 <div class="flex h-full flex-col">
   <!-- Header bar: filename + dirty dot + path + edit/preview toggle -->
-  <div class="flex items-center justify-between border-b px-4 py-2 shrink-0">
-    <div class="flex items-center gap-3 min-w-0">
+  <div
+    class="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b px-4 py-2 shrink-0"
+  >
+    <div class="flex flex-1 items-center gap-3 min-w-0">
       <span class="text-sm font-medium truncate">{pageTitle}</span>
       {#if isDirty}
         <span class="h-2 w-2 rounded-full bg-primary shrink-0" title={t("memory_unsavedChanges")}
@@ -416,7 +418,7 @@
 
   <!-- Bottom action bar -->
   {#if currentPath && !loading}
-    <div class="flex items-center gap-3 border-t px-4 py-2 shrink-0">
+    <div class="flex flex-wrap items-center gap-3 border-t px-4 py-2 shrink-0">
       <Button onclick={save} loading={saving}>
         {#snippet children()}
           {t("common_save")}

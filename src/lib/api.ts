@@ -1,6 +1,7 @@
 import { getTransport } from "./transport";
 import { dbg, dbgWarn, redactSensitive } from "./utils/debug";
 import { perfMarkAsync } from "./utils/perf";
+import { setIdentityName } from "./stores/identity.svelte";
 
 function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   return getTransport().invoke<T>(cmd, args);
@@ -232,12 +233,16 @@ export async function getRunArtifacts(id: string): Promise<RunArtifact> {
 // Settings
 export async function getUserSettings(): Promise<UserSettings> {
   dbg("api", "getUserSettings");
-  return invoke<UserSettings>("get_user_settings");
+  const settings = await invoke<UserSettings>("get_user_settings");
+  setIdentityName(settings.identity_name);
+  return settings;
 }
 
 export async function updateUserSettings(patch: Partial<UserSettings>): Promise<UserSettings> {
   dbg("api", "updateUserSettings");
-  return invoke<UserSettings>("update_user_settings", { patch });
+  const settings = await invoke<UserSettings>("update_user_settings", { patch });
+  setIdentityName(settings.identity_name);
+  return settings;
 }
 
 export async function getAgentSettings(agent: string): Promise<AgentSettings> {

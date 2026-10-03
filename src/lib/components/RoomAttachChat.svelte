@@ -64,7 +64,7 @@
   }
 </script>
 
-<section class="min-w-0 space-y-2 rounded-lg border bg-card p-3">
+<section class="min-w-0 space-y-2 rounded-lg border bg-card p-2.5">
   <div class="flex flex-wrap items-center justify-between gap-2">
     <div class="min-w-0">
       <h2 class="text-sm font-semibold">{t("room_attachExisting")}</h2>
@@ -99,7 +99,7 @@
           {#each matches as chat (chat.run_id)}
             <button
               type="button"
-              class="chat-choice w-full min-w-0 rounded-md border p-2 text-left"
+              class="chat-choice w-full min-w-0 rounded-md border px-2 py-1.5 text-left"
               class:chosen={selectedId === chat.run_id}
               aria-pressed={selectedId === chat.run_id}
               {disabled}
@@ -120,7 +120,9 @@
               {#if chat.title !== chat.name}<span
                   class="mt-1 block text-xs text-muted-foreground break-words">{chat.title}</span
                 >{/if}
-              <span class="mt-1 block text-xs text-muted-foreground break-all">{chat.cwd}</span>
+              <span class="mt-1 block truncate text-xs text-muted-foreground" title={chat.cwd}
+                >{chat.cwd}</span
+              >
             </button>
           {/each}
         </div>

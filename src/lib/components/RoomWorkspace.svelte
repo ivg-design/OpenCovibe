@@ -691,11 +691,11 @@
   ></svelte:head
 >
 <main class="room-workspace flex h-full min-h-0 min-w-0 w-full flex-col overflow-hidden p-4">
-  <header class="flex shrink-0 flex-wrap items-center justify-between gap-2">
-    {#if selected}<label class="min-w-0 w-full basis-full">
+  <header class="flex shrink-0 flex-wrap items-center gap-2">
+    {#if selected}<label class="min-w-0 flex-[1_1_16rem]">
         <span class="sr-only">{tr("room_savedRooms")}</span>
         <select
-          class="min-h-9 w-full rounded-md border bg-background px-2 text-sm"
+          class="h-9 w-full rounded-md border bg-background px-2 text-sm"
           value={selected.id}
           disabled={!!busyAction || loadingRoom || showCreate}
           onchange={(event) =>
@@ -706,7 +706,7 @@
           {#each activeRooms as room (room.id)}<option value={room.id}>{room.title}</option>{/each}
         </select>
       </label>{/if}
-    <div class={selected && !settingsOnly ? "sr-only" : ""}>
+    <div class={selected ? "sr-only" : "min-w-0 flex-1"}>
       <h1 class="text-2xl font-semibold text-foreground">
         {tr(boardOnly ? "room_projectBoard" : settingsOnly ? "room_settings" : "room_pageTitle")}
       </h1>
@@ -720,21 +720,24 @@
         )}
       </p>
     </div>
-    {#if desktop}<div class="flex flex-wrap gap-2">
+    {#if desktop}<div class="flex max-w-full shrink-0 flex-wrap gap-2">
         {#if hiddenRooms.length}<Button
             size="sm"
+            class="h-9"
             variant="outline"
             onclick={() => (showHiddenRooms = !showHiddenRooms)}
             >{tr("room_hiddenRooms", { count: String(hiddenRooms.length) })}</Button
           >{/if}
         <Button
           size="sm"
+          class="h-9"
           variant="outline"
           onclick={() => void loadRooms()}
           loading={loadingList}
           disabled={!!sourceRunId || creating}>{tr("room_reloadRooms")}</Button
         >{#if !boardOnly}<Button
             size="sm"
+            class="h-9"
             disabled={creating}
             onclick={() => {
               if (showCreate) cancelSetup();
@@ -765,7 +768,7 @@
       <div
         class="room-content min-h-0 min-w-0 {!boardOnly && !settingsOnly && !showCreate
           ? 'flex flex-col gap-2 overflow-hidden'
-          : 'space-y-5 overflow-y-auto'}"
+          : 'space-y-3 overflow-y-auto'}"
       >
         {#if error}<div
             class="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
@@ -1030,7 +1033,7 @@
           {#if !boardOnly && !settingsOnly}
             <div class="flex shrink-0 flex-wrap items-center justify-between gap-2">
               <div class="min-w-0">
-                <h2 class="text-base font-semibold break-words">{selected.title}</h2>
+                <h2 class="sr-only">{selected.title}</h2>
                 <p
                   class="min-w-0 break-words text-xs text-muted-foreground [overflow-wrap:anywhere]"
                 >
@@ -1042,11 +1045,6 @@
                   >{tr("room_requestsTitle")} · {openRequestCount}
                   {requestsOpen ? "▾" : "▸"}</Button
                 >
-                {#if selected.origin}<a
-                    class="text-primary underline underline-offset-4"
-                    href={`/chat?run=${encodeURIComponent(selected.origin.run_id)}`}
-                    title={tr("room_sourceSessionHelp")}>{tr("room_originalConversation")}</a
-                  >{/if}
                 <Button
                   size="sm"
                   variant="outline"
@@ -1066,30 +1064,31 @@
               </div>
             </div>
           {:else}
-            <Card class={boardOnly ? "shrink-0 p-3" : "shrink-0 p-4 md:p-5"}
+            <Card class="room-overview shrink-0 p-3"
               ><div class="flex flex-wrap items-start justify-between gap-3">
                 <div class="min-w-0">
-                  <h2
-                    class={`min-w-0 break-words font-semibold [overflow-wrap:anywhere] ${boardOnly ? "text-base" : "text-xl"}`}
-                  >
+                  <h2 class="min-w-0 break-words font-semibold [overflow-wrap:anywhere] text-base">
                     {selected.title}
                   </h2>
                   {#if boardOnly}<details class="mt-1 text-xs text-muted-foreground">
                       <summary class="cursor-pointer">{tr("room_objectiveLabel")}</summary>
                       <p class="mt-1 whitespace-pre-wrap">{selected.objective}</p>
                       <p class="mt-1">Local folder: {selected.repo_path}</p>
-                    </details>{:else if settingsOnly}<p
-                      class="mt-2 whitespace-pre-wrap text-sm text-muted-foreground"
+                    </details>{:else if settingsOnly}<details
+                      class="mt-1 text-xs text-muted-foreground"
                     >
-                      {selected.objective}
-                    </p>{/if}
+                      <summary class="cursor-pointer">{tr("room_objectiveLabel")}</summary>
+                      <p class="mt-1 whitespace-pre-wrap">{selected.objective}</p>
+                    </details>{/if}
                   <p
                     class="mt-2 break-words text-xs text-muted-foreground [overflow-wrap:anywhere]"
                   >
                     {selected.repository}{#if !boardOnly}
                       · {selected.repo_path}{/if}
                   </p>
-                  {#if selected.origin && boardOnly}<p class="mt-2 text-xs text-muted-foreground">
+                  {#if selected.origin && (boardOnly || settingsOnly)}<p
+                      class="mt-2 text-xs text-muted-foreground"
+                    >
                       {#if boardOnly || settingsOnly}{tr("room_startingConversation", {
                           count: String(selected.origin.message_count),
                         })}{/if}
@@ -1108,21 +1107,11 @@
                       loading={busyAction === "pause-room"}
                       disabled={actionsDisabled}
                       >{selected.paused ? tr("room_resume") : tr("room_pause")}</Button
-                    >{#if settingsOnly}<Button
-                        variant="outline"
-                        onclick={() =>
-                          void perform("auto-continue", (id) =>
-                            setRoomAutoContinue(id, !selected?.auto_continue),
-                          )}
-                        disabled={actionsDisabled}
-                        >{selected.auto_continue
-                          ? tr("room_autoContinueOn")
-                          : tr("room_autoContinueOff")}</Button
-                      >{/if}
+                    >
                   </div>{/if}
               </div>
               {#if settingsOnly}
-                <div class="mt-3">
+                <div class={editingTitle ? "mt-2" : "mt-2 inline-block mr-2"}>
                   {#if editingTitle}<form
                       class="space-y-2"
                       onsubmit={async (event) => {
@@ -1157,7 +1146,7 @@
                       }}>{tr("room_rename")}</Button
                     >{/if}
                 </div>
-                <div class="mt-4 border-t pt-4">
+                <div class={editingInstructions ? "mt-2" : "mt-2 inline-block"}>
                   {#if editingInstructions}
                     <form
                       class="space-y-3"
@@ -1208,7 +1197,7 @@
                 >
                   {tr("room_runtimeError", { error: selected.runtime_error })}
                 </p>{/if}
-              {#if settingsOnly}<div class="mt-4 flex flex-wrap items-center gap-3 border-t pt-4">
+              {#if settingsOnly}<div class="mt-2 flex flex-wrap items-center gap-2 border-t pt-2">
                   {#if selected.project}<a
                       href={selected.project.url}
                       target="_blank"
@@ -1253,7 +1242,7 @@
                       >{tr("room_roomArchived")}</span
                     >{/if}
                 </div>
-                <div class="mt-4 space-y-2 border-t pt-4">
+                <div class="mt-2 space-y-1 border-t pt-2">
                   <label class="flex flex-wrap items-center gap-3 text-sm">
                     <span>{tr("room_concurrency")}</span>
                     <select
@@ -1277,10 +1266,11 @@
                   rel="noreferrer"
                   >{tr("room_openProject", { number: String(selected.project.number) })}</a
                 >{/if}
-              {#if !boardOnly}<div class="mt-3 flex flex-wrap gap-3 text-sm">
+              {#if !boardOnly}<div class="mt-2 flex flex-wrap gap-2 text-sm">
                   {#if settingsOnly}<a
                       class="text-primary underline underline-offset-4"
-                      href="/rooms">{tr("room_groupChat")}</a
+                      href={`/rooms?room=${encodeURIComponent(selected.id)}`}
+                      >{tr("room_groupChat")}</a
                     >
                   {:else}<a
                       class="text-muted-foreground underline underline-offset-4"
@@ -1370,7 +1360,7 @@
                   saveRequestPanel();
                 }}>⋮</button
               >
-              <div class="min-h-0 min-w-0" class:hidden={!requestsOpen}>
+              <div class="requests-pane min-h-0 min-w-0" class:hidden={!requestsOpen}>
                 {#key selected.id}<RoomRequests
                     room={selected}
                     disabled={loadingRoom || !!busyAction || creating}
@@ -1453,13 +1443,20 @@
 </main>
 
 <style>
+  .room-content :global(.room-overview button) {
+    min-height: 2.25rem;
+    padding: 0.375rem 0.75rem;
+    font-size: 0.75rem;
+  }
+
   .room-content {
     container-type: inline-size;
   }
   .room-chat-layout {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    position: relative;
     gap: 0.5rem;
   }
   .request-resizer {
@@ -1469,7 +1466,21 @@
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
   }
-  @container (min-width: 30rem) {
+  .room-chat-layout:not(.requests-hidden) > div:first-child {
+    visibility: hidden;
+  }
+  .requests-pane {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+  }
+  @container (min-width: 48rem) {
+    .room-chat-layout:not(.requests-hidden) > div:first-child {
+      visibility: visible;
+    }
+    .requests-pane {
+      position: static;
+    }
     .room-chat-layout {
       grid-template-columns: minmax(0, 1fr) 0.375rem clamp(
           14rem,

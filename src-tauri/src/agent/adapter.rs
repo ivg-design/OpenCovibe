@@ -674,6 +674,7 @@ mod tests {
 
     fn make_user_settings() -> UserSettings {
         UserSettings {
+            identity_name: None,
             default_agent: "claude".to_string(),
             claude_path: None,
             default_model: None,

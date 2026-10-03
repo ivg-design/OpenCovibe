@@ -107,11 +107,16 @@
   ];
 
   let settings = $state<UserSettings | null>(null);
+  let identityDraft = $state("");
+  let identitySaving = $state(false);
+  let identityError = $state("");
+  let identitySaved = $state(false);
   let authMode = $state("cli");
   let anthropicApiKey = $state("");
   let anthropicBaseUrl = $state("");
   let showApiKey = $state(false);
   let generalSaved = $state(false);
+  let settingsSaveError = $state("");
   let modelOpus = $state("");
   let modelSonnet = $state("");
   let modelHaiku = $state("");
@@ -1183,6 +1188,7 @@
       codexConfig = await api.updateCodexConfig({ [key]: value ?? null });
     } catch (e) {
       dbgWarn("settings", "saveCodexConfigPatch error", e);
+      settingsSaveError = String(e);
     }
   }
 
@@ -1201,6 +1207,7 @@
       cliConfig = await api.updateCliConfig({ [key]: value ?? null });
     } catch (e) {
       dbgWarn("settings", "saveCliConfigPatch error", e);
+      settingsSaveError = String(e);
     }
   }
 
@@ -1569,6 +1576,7 @@
   onMount(async () => {
     try {
       settings = await api.getUserSettings();
+      identityDraft = settings.identity_name ?? "";
       authMode = settings.auth_mode ?? "cli";
       remoteHosts = settings.remote_hosts ?? [];
       platformCredentials = settings.platform_credentials ?? [];
@@ -1659,12 +1667,31 @@
 
   async function saveGeneralPatch(patch: Record<string, unknown>) {
     dbg("settings", "saveGeneralPatch", redactSensitive(patch));
+    settingsSaveError = "";
     try {
       settings = await api.updateUserSettings(patch as Partial<UserSettings>);
       generalSaved = true;
       setTimeout(() => (generalSaved = false), 1500);
     } catch (e) {
       dbgWarn("settings", "saveGeneralPatch error", e);
+      settingsSaveError = String(e);
+    }
+  }
+
+  async function saveIdentity(event: SubmitEvent) {
+    event.preventDefault();
+    if (identitySaving) return;
+    identitySaving = true;
+    identityError = "";
+    identitySaved = false;
+    try {
+      settings = await api.updateUserSettings({ identity_name: identityDraft.trim() || null });
+      identityDraft = settings.identity_name ?? "";
+      identitySaved = true;
+    } catch (error) {
+      identityError = String(error);
+    } finally {
+      identitySaving = false;
     }
   }
 
@@ -1796,14 +1823,14 @@
 </script>
 
 {#key currentLocale()}
-  <div class="max-w-4xl mx-auto p-6 animate-slide-up">
-    <h1 class="text-2xl font-bold mb-5">{t("settings_title")}</h1>
+  <div class="mx-auto max-w-4xl min-w-0 p-4 sm:p-5 animate-slide-up">
+    <h1 class="text-xl font-bold mb-4">{t("settings_title")}</h1>
 
     <!-- Tab bar -->
-    <div class="flex gap-1 border-b border-border mb-6">
+    <div class="mb-4 flex flex-wrap gap-x-1 gap-y-0.5 border-b border-border">
       {#each tabs as tab (tab.id)}
         <button
-          class="flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors relative
+          class="relative flex min-w-0 items-center gap-1.5 px-2.5 py-2 text-xs font-medium transition-colors sm:px-3 sm:text-sm
           {activeTab === tab.id
             ? 'text-foreground'
             : 'text-muted-foreground hover:text-foreground/80'}"
@@ -1828,11 +1855,61 @@
       {/each}
     </div>
 
+    {#if settingsSaveError}
+      <p
+        role="alert"
+        class="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+      >
+        {t("settings_saveFailed", { error: settingsSaveError })}
+      </p>
+    {/if}
+
     <!-- ═══ General tab ═══ -->
     {#if activeTab === "general"}
-      <div class="space-y-6">
+      <div class="space-y-4">
+        <Card class="p-4 space-y-3">
+          <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
+            {t("settings_identityTitle")}
+          </h2>
+          <form class="space-y-2" onsubmit={saveIdentity}>
+            <label for="identity-name" class="block text-sm font-medium"
+              >{t("settings_identityName")}</label
+            >
+            <p id="identity-name-help" class="text-xs text-muted-foreground">
+              {t("settings_identityHelp")}
+            </p>
+            <div class="flex min-w-0 flex-wrap items-center gap-2">
+              <input
+                id="identity-name"
+                aria-describedby="identity-name-help"
+                autocomplete="nickname"
+                maxlength="80"
+                placeholder="Human"
+                bind:value={identityDraft}
+                oninput={() => {
+                  identitySaved = false;
+                  identityError = "";
+                }}
+                class="h-9 min-w-0 flex-[1_1_16rem] rounded-md border border-input bg-transparent px-3 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+              <Button
+                type="submit"
+                size="sm"
+                class="h-9"
+                disabled={!settings}
+                loading={identitySaving}>{t("common_save")}</Button
+              >
+            </div>
+            {#if identityError}<p class="text-xs text-destructive" role="alert">
+                {identityError}
+              </p>{/if}
+            {#if identitySaved}<p class="text-xs text-muted-foreground" role="status">
+                {t("settings_general_saved")}
+              </p>{/if}
+          </form>
+        </Card>
         <!-- Default Agent Card -->
-        <Card class="p-6 space-y-4">
+        <Card class="p-4 space-y-4">
           <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
             {t("settings_general_defaultAgent")}
           </h2>
@@ -1859,7 +1936,7 @@
           </div>
         </Card>
 
-        <Card class="p-6 space-y-3">
+        <Card class="p-4 space-y-3">
           <label class="block space-y-2">
             <span class="block text-sm font-medium">{t("settings_permissionDefault")}</span>
             <span class="block text-xs text-muted-foreground"
@@ -1885,7 +1962,7 @@
         </Card>
 
         <!-- Language Card -->
-        <Card class="p-6 space-y-4">
+        <Card class="p-4 space-y-4">
           <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
             {t("settings_general_language")}
           </h2>
@@ -1917,7 +1994,7 @@
         </Card>
 
         <!-- Display Card -->
-        <Card class="p-6 space-y-4">
+        <Card class="p-4 space-y-4">
           <div class="flex items-center justify-between">
             <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
               {t("settings_general_display")}
@@ -1996,7 +2073,7 @@
 
         <!-- Web Server Card (desktop only) -->
         {#if getTransport().isDesktop()}
-          <Card class="p-6 space-y-4">
+          <Card class="p-4 space-y-4">
             <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
               {t("settings_general_webServer")}
             </h2>
@@ -2436,9 +2513,9 @@
 
       <!-- ═══ Connection tab ═══ -->
     {:else if activeTab === "connection"}
-      <div class="space-y-6">
+      <div class="space-y-4">
         <!-- Claude authentication -->
-        <Card class="p-6 space-y-5">
+        <Card class="p-4 space-y-5">
           <div class="flex items-center justify-between">
             <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
               {t("settings_connection_claudeTitle")}
@@ -2668,10 +2745,10 @@
                   >{t("settings_general_platform")}</span
                 >
                 <!-- Platform grid (always visible) -->
-                <div class="grid grid-cols-4 gap-1.5">
+                <div class="grid grid-cols-[repeat(auto-fit,minmax(min(100%,10rem),1fr))] gap-1.5">
                   {#each groupedPlatforms as group}
                     <div
-                      class="col-span-4 px-1 pt-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60"
+                      class="col-span-full px-1 pt-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60"
                     >
                       {group.label}
                     </div>
@@ -3238,7 +3315,7 @@
         </Card>
 
         <!-- Codex Status -->
-        <Card class="p-6 space-y-4">
+        <Card class="p-4 space-y-4">
           <div class="flex items-center justify-between">
             <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
               {t("settings_codex_title")}
@@ -3738,7 +3815,7 @@
           <span class="ml-3 text-sm text-muted-foreground">{t("settings_cliConfig_loading")}</span>
         </div>
       {:else if cliConfigError}
-        <Card class="p-6">
+        <Card class="p-4">
           <p class="text-sm text-red-400">
             {t("settings_cliConfig_loadFailed", { error: cliConfigError })}
           </p>
@@ -3753,7 +3830,7 @@
           </button>
         </Card>
       {:else}
-        <div class="space-y-6">
+        <div class="space-y-4">
           <!-- Claude group -->
           <h2
             class="text-xs font-semibold text-muted-foreground/60 uppercase tracking-widest pt-1 border-b border-border/40 pb-2"
@@ -3761,7 +3838,7 @@
             {t("settings_cliConfig_claudeGroup")}
           </h2>
           <!-- Claude CLI launch command/path (#155) -->
-          <Card class="p-6 space-y-3">
+          <Card class="p-4 space-y-3">
             <div class="flex items-center justify-between">
               <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
                 {t("settings_cliConfig_launch")}
@@ -3802,7 +3879,7 @@
             />
           </Card>
           <!-- Turn hard-timeout (minutes) -->
-          <Card class="p-6 space-y-3">
+          <Card class="p-4 space-y-3">
             <div class="flex items-center justify-between">
               <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
                 {t("settings_cliConfig_turnTimeout")}
@@ -3844,7 +3921,7 @@
             />
           </Card>
           <!-- Behavior -->
-          <Card class="p-6 space-y-4">
+          <Card class="p-4 space-y-4">
             <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
               {t("settings_cliConfig_behavior")}
             </h2>
@@ -3911,7 +3988,7 @@
           </Card>
 
           <!-- Appearance -->
-          <Card class="p-6 space-y-4">
+          <Card class="p-4 space-y-4">
             <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
               {t("settings_cliConfig_appearance")}
             </h2>
@@ -3997,7 +4074,7 @@
           </Card>
 
           <!-- Advanced -->
-          <Card class="p-6 space-y-4">
+          <Card class="p-4 space-y-4">
             <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
               {t("settings_cliConfig_advanced")}
             </h2>
@@ -4076,7 +4153,7 @@
           </h2>
 
           <!-- ── Codex Config ── -->
-          <Card class="p-6 space-y-4">
+          <Card class="p-4 space-y-4">
             <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
               {t("settings_codexConfig_title")}
             </h2>
@@ -4333,9 +4410,9 @@
 
       <!-- ═══ Shortcuts tab ═══ -->
     {:else if activeTab === "shortcuts"}
-      <div class="space-y-6">
+      <div class="space-y-4">
         <!-- App shortcuts (editable) -->
-        <Card class="p-6 space-y-5">
+        <Card class="p-4 space-y-5">
           <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
             {t("settings_shortcuts_appShortcuts")}
           </h2>
@@ -4362,7 +4439,7 @@
         </Card>
 
         <!-- Fixed shortcuts -->
-        <Card class="p-6 space-y-5">
+        <Card class="p-4 space-y-5">
           <h2 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
             {t("settings_shortcuts_inputFixed")}
           </h2>
@@ -4381,7 +4458,7 @@
         </Card>
 
         <!-- CLI shortcuts (collapsible) -->
-        <Card class="p-6 space-y-4">
+        <Card class="p-4 space-y-4">
           <button
             class="flex items-center gap-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider hover:text-foreground transition-colors w-full"
             onclick={() => (cliSectionOpen = !cliSectionOpen)}
@@ -4427,7 +4504,7 @@
         </Card>
 
         <!-- Codex CLI shortcuts (collapsible, read-only) -->
-        <Card class="p-6 space-y-4">
+        <Card class="p-4 space-y-4">
           <button
             class="flex items-center gap-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider hover:text-foreground transition-colors w-full"
             onclick={() => (codexCliSectionOpen = !codexCliSectionOpen)}
@@ -4477,7 +4554,7 @@
 
       <!-- ═══ Remote tab ═══ -->
     {:else if activeTab === "remote"}
-      <Card class="p-6 space-y-5">
+      <Card class="p-4 space-y-5">
         <div class="flex items-start justify-between">
           <div>
             <p class="text-sm font-medium">{t("settings_remote_title")}</p>
@@ -4920,7 +4997,7 @@
 
       <!-- ═══ Debug tab ═══ -->
     {:else if activeTab === "debug"}
-      <Card class="p-6 space-y-5">
+      <Card class="p-4 space-y-5">
         <div class="flex items-center justify-between">
           <div>
             <p class="text-sm font-medium">{t("settings_debug_title")}</p>

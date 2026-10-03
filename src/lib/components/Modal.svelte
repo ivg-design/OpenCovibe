@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { modalFocus } from "$lib/utils/modal-focus";
   let {
     open = $bindable(false),
     title = "",
@@ -10,15 +11,6 @@
     closeable?: boolean;
     children?: import("svelte").Snippet;
   } = $props();
-
-  let dialogEl: HTMLDivElement | undefined = $state();
-
-  // Auto-focus dialog container when opened so Escape hits onkeydown here
-  $effect(() => {
-    if (open) {
-      dialogEl?.focus();
-    }
-  });
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") {
@@ -42,8 +34,9 @@
     class="fixed inset-0 z-50 flex items-center justify-center"
     role="dialog"
     aria-modal="true"
+    aria-label={title || "Dialog"}
     tabindex="-1"
-    bind:this={dialogEl}
+    use:modalFocus
     onkeydown={handleKeydown}
   >
     <!-- Backdrop -->

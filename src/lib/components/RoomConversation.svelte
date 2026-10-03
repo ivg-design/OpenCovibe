@@ -22,6 +22,7 @@
   import { textareaAutosize } from "$lib/utils/textarea-autosize";
   import type { RoomParticipant } from "$lib/rooms/types";
   import { roomParticipantColor } from "$lib/utils/room-participant-colors";
+  import { roomSenderName } from "$lib/stores/identity.svelte";
   let {
     selected,
     actionsDisabled,
@@ -446,14 +447,14 @@
       </label>
       <span class="text-xs text-muted-foreground">{visibleMessages.length}</span>
     </div>
-    <div class="mb-2 flex shrink-0 flex-wrap gap-2" aria-label={tr("room_participants")}>
+    <div class="mb-1.5 flex shrink-0 flex-wrap gap-1.5" aria-label={tr("room_participants")}>
       {#each visibleParticipants as participant (participant.id)}
         <div
-          class="flex max-w-full min-w-0 items-center gap-1 rounded-md border px-2 py-1 text-xs"
+          class="flex h-7 max-w-[calc(50%_-_0.25rem)] min-w-0 shrink-0 items-center gap-1 rounded-md border px-1.5 text-xs"
           style={`border-color: ${roomParticipantColor(selected.participants, participant.id)}`}
         >
           <a
-            class="min-w-0 break-words hover:underline"
+            class="min-w-0 flex-1 truncate whitespace-nowrap hover:underline"
             href={`/chat?run=${encodeURIComponent(participant.run_id)}`}
             title={tr("room_openSession")}
             ><span
@@ -461,12 +462,12 @@
               style={`background: ${roomParticipantColor(selected.participants, participant.id)}`}
             ></span>{participant.name}</a
           >
-          <span class="whitespace-nowrap text-muted-foreground"
-            >· {roomAgentStateLabel(participant.state)}</span
+          <span class="shrink-0 whitespace-nowrap text-muted-foreground"
+            >{roomAgentStateLabel(participant.state)}</span
           >
           <button
             type="button"
-            class="shrink-0 rounded px-1 hover:bg-accent"
+            class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
             disabled={actionsDisabled}
             aria-label={`${participant.paused ? tr("room_resumeParticipant") : tr("room_pauseParticipant")}: ${participant.name}`}
             title={participant.paused ? tr("room_resumeParticipant") : tr("room_pauseParticipant")}
@@ -489,7 +490,9 @@
       </p>
     {/each}
     {#if sourceMessage}<aside class="mb-2 shrink-0 rounded-md border bg-muted/30 p-3 text-xs">
-        <p class="font-medium">{tr("room_branchedFrom", { name: sourceMessage.sender })}</p>
+        <p class="font-medium">
+          {tr("room_branchedFrom", { name: roomSenderName(sourceMessage) })}
+        </p>
         <p class="mt-1 line-clamp-3 whitespace-pre-wrap text-muted-foreground">
           {(
             roomBriefing(sourceMessage.body)?.objective ??
@@ -574,7 +577,8 @@
                   class="h-2.5 w-2.5 shrink-0 rounded-full border-2 border-background"
                   style="background:var(--room-sender-color)"
                 ></span>
-                <span class="min-w-0 break-words font-medium text-foreground">{message.sender}</span
+                <span class="min-w-0 break-words font-medium text-foreground"
+                  >{roomSenderName(message)}</span
                 >
                 {#if targetIds && targetIds.length > 1}
                   <span
@@ -603,7 +607,12 @@
                 {/if}
               </span>
               <div class="flex shrink-0 items-center gap-1.5">
-                <time>{new Date(message.created_at).toLocaleString()}</time>
+                <time title={new Date(message.created_at).toLocaleString()}>
+                  {new Date(message.created_at).toLocaleTimeString([], {
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })}
+                </time>
                 <button
                   type="button"
                   class="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"

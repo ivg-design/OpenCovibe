@@ -230,12 +230,12 @@
   });
 </script>
 
-<div class="mx-auto min-w-0 max-w-4xl space-y-6 p-3 animate-slide-up sm:p-6">
+<div class="min-w-0 space-y-4 p-4 animate-slide-up sm:space-y-5 sm:p-5">
   <!-- Header -->
-  <div class="flex flex-wrap items-center gap-2 sm:gap-4">
-    <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/10">
+  <div class="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
+    <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10">
       <svg
-        class="h-7 w-7 text-emerald-600 dark:text-emerald-400"
+        class="h-5 w-5 text-emerald-600 dark:text-emerald-400"
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
@@ -245,13 +245,13 @@
       >
     </div>
     <div>
-      <h1 class="text-2xl font-bold">{t("usage_title")}</h1>
-      <p class="text-sm text-muted-foreground">{t("usage_subtitle")}</p>
+      <h1 class="text-xl font-semibold">{t("usage_title")}</h1>
+      <p class="text-xs text-muted-foreground">{t("usage_subtitle")}</p>
     </div>
   </div>
 
   <!-- Scope tabs: App / Global -->
-  <div class="flex flex-wrap items-center gap-2 sm:gap-4">
+  <div class="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
     <div class="flex gap-1 bg-muted/40 rounded-lg p-0.5">
       <button
         class="whitespace-nowrap px-3 py-1.5 text-xs font-medium rounded-md transition-colors

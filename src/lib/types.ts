@@ -155,6 +155,7 @@ export interface RunArtifact {
 }
 
 export interface UserSettings {
+  identity_name?: string | null;
   default_agent: string;
   default_model?: string;
   allowed_tools: string[];

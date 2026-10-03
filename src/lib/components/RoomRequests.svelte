@@ -7,6 +7,8 @@
   import { t } from "$lib/i18n/index.svelte";
   import { filterRoomRequests, isOpenRoomRequest, needsHumanAnswer } from "$lib/rooms/requests";
   import type { Room, RoomRequest } from "$lib/rooms/types";
+  import { identityName } from "$lib/stores/identity.svelte";
+  import { isRequestReplyShortcut, requestReplyApproval } from "$lib/rooms/request-reply";
 
   let {
     room,
@@ -32,28 +34,24 @@
   let replies = $state<Record<string, string>>({});
   let selectedId = $state("");
   let query = $state("");
-  let scope = $state<"open" | "attention" | "waiting" | "history" | "archived" | "all">("open");
+  let scope = $state<"open" | "attention" | "waiting" | "history" | "archived" | "all">(
+    "attention",
+  );
   let kind = $state("all");
-  let page = $state(0);
-  const pageSize = 8;
   const requestKinds = ["decision", "review", "agent", "completion"] as const;
   $effect(() => {
     const token = revealToken;
     if (!token) return;
     untrack(() => {
-      scope = "open";
+      scope = "attention";
       kind = "all";
       query = "";
       selectedId = token.split(":")[0];
-      const index = filterRoomRequests(room.requests, "open", "", room.participants).findIndex(
-        (r) => r.id === selectedId,
-      );
-      page = Math.max(0, Math.floor(index / pageSize));
     });
   });
   const nameFor = (id: string | null) =>
     id === "Human"
-      ? t("room_requestsHuman")
+      ? identityName()
       : id
         ? (room.participants.find((p) => p.id === id)?.name ?? t("room_requestsUnknownPerson"))
         : t("room_requestsUnassigned");
@@ -65,16 +63,13 @@
   const filtered = $derived(
     filterRoomRequests(room.requests, scope, query, room.participants, kind),
   );
-  const pageCount = $derived(Math.max(1, Math.ceil(filtered.length / pageSize)));
-  const currentPage = $derived(Math.min(page, pageCount - 1));
-  const pageRequests = $derived(
-    filtered.slice(currentPage * pageSize, (currentPage + 1) * pageSize),
-  );
   const selectedRequest = $derived(
-    filtered.find((r) => r.id === selectedId) ?? pageRequests[0] ?? null,
+    filtered.find((r) => r.id === selectedId) ?? filtered[0] ?? null,
   );
+  $effect(() => {
+    if (selectedRequest && selectedId !== selectedRequest.id) selectedId = selectedRequest.id;
+  });
   function resetFilter() {
-    page = 0;
     selectedId = "";
   }
   const busy = (request: RoomRequest) =>
@@ -86,22 +81,22 @@
     if (!response && (!approve || needsReason(request))) return;
     onResolve(request, approve, response);
   }
+  function replyKeydown(event: KeyboardEvent, request: RoomRequest) {
+    if (!isRequestReplyShortcut(event)) return;
+    event.preventDefault();
+    const approval = requestReplyApproval(room, request, replies[request.id] ?? "", busy(request));
+    if (approval !== null) resolve(request, approval);
+  }
 </script>
 
 <section
-  class="request-panel flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border bg-card"
+  class="request-panel flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border bg-background"
   aria-label={t("room_requestsTitle")}
 >
-  <div class="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
-    <header class="shrink-0 space-y-2 border-b p-3">
-      <div class="flex flex-wrap items-center justify-between gap-2">
+  <header class="shrink-0 space-y-2 border-b p-3">
+    <div class="flex min-w-0 items-start gap-2">
+      <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
         <h2 class="text-sm font-semibold">{t("room_requestsTitle")} · {openCount}</h2>
-        <button
-          type="button"
-          class="shrink-0 rounded px-2 py-1 text-xs hover:bg-accent"
-          aria-label={t("room_requestsHide")}
-          onclick={onClosePanel}>✕</button
-        >
         <span
           class="rounded-md px-2 py-1 text-xs {humanCount
             ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
@@ -113,7 +108,45 @@
             : t("room_requestsNoAnswerNeeded")}
         </span>
       </div>
-      <div class="flex min-w-0 flex-wrap gap-2">
+      <button
+        type="button"
+        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-input bg-background text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label={t("room_requestsHide")}
+        title={t("room_requestsHide")}
+        onclick={onClosePanel}
+        ><svg
+          aria-hidden="true"
+          class="h-4 w-4"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"><path d="m6 6 12 12M18 6 6 18" /></svg
+        ></button
+      >
+    </div>
+    <div class="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,10rem),1fr))] gap-2">
+      <label
+        ><span class="sr-only">{t("room_requestsShow")}</span><select
+          class="min-h-9 w-full max-w-full rounded-md border bg-background px-2 text-xs"
+          bind:value={scope}
+          onchange={resetFilter}
+        >
+          <option value="open">{t("room_requestsOpen")}</option><option value="history"
+            >{t("room_requestsResolved")}</option
+          ><option value="attention">{t("room_requestsYourAnswer")}</option><option value="waiting"
+            >{t("room_requestsWaiting")}</option
+          ><option value="archived">{t("room_requestsArchived")}</option><option value="all"
+            >{t("room_requestsAll")}</option
+          >
+        </select></label
+      >
+    </div>
+    <details class="text-xs">
+      <summary class="cursor-pointer text-muted-foreground"
+        >{t("room_requestsFiltersCleanup")}{#if query || kind !== "all"}
+          · {t("room_requestsFiltered")}{/if}</summary
+      >
+      <div class="mt-2 space-y-2">
         <label class="min-w-0 flex-1"
           ><span class="sr-only">{t("room_requestsSearch")}</span><Input
             bind:value={query}
@@ -121,46 +154,35 @@
             placeholder={t("room_requestsSearch")}
           /></label
         >
-        <label
-          ><span class="sr-only">{t("room_requestsShow")}</span><select
-            class="min-h-9 max-w-full rounded-md border bg-background px-2 text-xs"
-            bind:value={scope}
-            onchange={resetFilter}
+        <div
+          class="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,10rem),1fr))] items-center gap-2"
+        >
+          <label class="min-w-0 flex-1"
+            ><span class="sr-only">{t("room_requestsKind")}</span><select
+              class="min-h-8 w-full rounded border bg-background px-2 text-xs"
+              bind:value={kind}
+              onchange={resetFilter}
+              ><option value="all">{t("room_requestsAllKinds")}</option
+              >{#each requestKinds as value}<option {value}>{t(`room_requestKind_${value}`)}</option
+                >{/each}</select
+            ></label
           >
-            <option value="open">{t("room_requestsOpen")}</option><option value="history"
-              >{t("room_requestsResolved")}</option
-            ><option value="attention">{t("room_requestsYourAnswer")}</option><option
-              value="waiting">{t("room_requestsWaiting")}</option
-            ><option value="archived">{t("room_requestsArchived")}</option><option value="all"
-              >{t("room_requestsAll")}</option
-            >
-          </select></label
-        >
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={disabled || !!busyAction || !resolvedCount}
+            onclick={() => onArchive([], true)}>{t("room_requestsArchiveResolved")}</Button
+          >
+        </div>
       </div>
-      <div class="flex min-w-0 flex-wrap items-center gap-2">
-        <label class="min-w-0 flex-1"
-          ><span class="sr-only">{t("room_requestsKind")}</span><select
-            class="min-h-8 w-full rounded border bg-background px-2 text-xs"
-            bind:value={kind}
-            onchange={resetFilter}
-            ><option value="all">{t("room_requestsAllKinds")}</option
-            >{#each requestKinds as value}<option {value}>{t(`room_requestKind_${value}`)}</option
-              >{/each}</select
-          ></label
-        >
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={disabled || !!busyAction || !resolvedCount}
-          onclick={() => onArchive([], true)}>{t("room_requestsArchiveResolved")}</Button
-        >
-      </div>
-    </header>
+    </details>
+  </header>
+  <div class="request-context min-h-0 min-w-0 flex-1 overflow-hidden">
     <div
-      class="max-h-24 min-h-0 shrink-0 overflow-y-auto overflow-x-hidden border-b"
+      class="request-list min-h-0 overflow-y-auto overflow-x-hidden border-b"
       aria-label={t("room_requestsList")}
     >
-      {#each pageRequests as request (request.id)}
+      {#each filtered as request (request.id)}
         <button
           type="button"
           class="block w-full min-w-0 border-b px-3 py-2 text-left text-xs hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring {selectedRequest?.id ===
@@ -194,33 +216,12 @@
           {query ? t("room_requestsNoMatches") : t("room_requestsEmpty")}
         </p>{/if}
     </div>
-    {#if pageCount > 1}<nav
-        class="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b px-3 py-1.5"
-        aria-label={t("room_requestsPages")}
-      >
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={currentPage === 0}
-          onclick={() => {
-            page = currentPage - 1;
-            selectedId = "";
-          }}>{t("room_requestsPrevious")}</Button
-        >
-        <span class="text-xs text-muted-foreground">{currentPage + 1} / {pageCount}</span>
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={currentPage + 1 === pageCount}
-          onclick={() => {
-            page = currentPage + 1;
-            selectedId = "";
-          }}>{t("room_requestsNext")}</Button
-        >
-      </nav>{/if}
     {#if selectedRequest}
       {@const request = selectedRequest}
-      <div class="request-details space-y-3 p-3" aria-label={t("room_requestsDetails")}>
+      <div
+        class="request-details min-h-0 overflow-y-auto overflow-x-hidden space-y-2 p-3"
+        aria-label={t("room_requestsDetails")}
+      >
         <div class="flex flex-wrap items-start justify-between gap-2">
           <div class="min-w-0">
             <h3 class="break-words font-medium">{request.title}</h3>
@@ -287,6 +288,11 @@
             >
             <p class="mt-1 whitespace-pre-wrap break-words">{request.response}</p>
           </div>{/if}
+        {#if request.kind === "completion" && request.status === "verified"}<p
+            class="text-xs text-muted-foreground"
+          >
+            {room.paused ? t("room_requestsAcceptPausedHelp") : t("room_requestsPauseFirst")}
+          </p>{/if}
         {#if request.review_response}<div
             class="rounded-md border border-primary/20 bg-primary/5 p-3 text-sm"
           >
@@ -302,7 +308,9 @@
             <div class="mt-1"><MarkdownContent text={request.review_response} /></div>
           </div>{/if}
       </div>
-    {:else}<p class="p-3 text-xs text-muted-foreground">{t("room_requestsChoose")}</p>{/if}
+    {:else}<p class="min-h-0 overflow-y-auto p-3 text-xs text-muted-foreground">
+        {t("room_requestsChoose")}
+      </p>{/if}
   </div>
   {#if selectedRequest}
     {#key selectedRequest.id}
@@ -337,6 +345,7 @@
               aria-label={answerLabel}
               placeholder={answerLabel}
               rows="2"
+              onkeydown={(event) => replyKeydown(event, request)}
               bind:value={() => replies[request.id] ?? "", (value) => (replies[request.id] = value)}
               use:textareaAutosize={{ value: replies[request.id] ?? "", uncapped: true }}
             ></textarea>
@@ -412,11 +421,6 @@
             >
               {t("room_requestsAgentRetryOnly")}
             </p>{/if}
-          {#if request.kind === "completion" && request.status === "verified"}<p
-              class="text-xs text-muted-foreground"
-            >
-              {room.paused ? t("room_requestsAcceptPausedHelp") : t("room_requestsPauseFirst")}
-            </p>{/if}
         </div>
       {:else if !isOpenRoomRequest(request)}
         <div class="shrink-0 border-t p-2">
@@ -434,6 +438,14 @@
 </section>
 
 <style>
+  .request-context {
+    display: grid;
+    grid-template-rows: minmax(2.5rem, 25%) minmax(0, 1fr);
+  }
+  .request-list {
+    scrollbar-gutter: stable;
+  }
+
   .request-details {
     overflow-wrap: break-word;
   }

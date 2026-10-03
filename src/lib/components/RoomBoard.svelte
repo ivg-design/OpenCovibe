@@ -441,7 +441,7 @@
     container-type: inline-size;
     min-width: 0;
     display: grid;
-    gap: 0.65rem;
+    gap: 0.45rem;
   }
   .board-heading,
   .view-actions,
@@ -463,7 +463,8 @@
   .view-switch button,
   .status-filters button,
   .close-detail {
-    padding: 0.35rem 0.6rem;
+    min-height: 1.75rem;
+    padding: 0.25rem 0.45rem;
     font-size: 0.75rem;
     color: hsl(var(--muted-foreground));
   }
@@ -480,7 +481,7 @@
   }
   .project-progress {
     display: flex;
-    gap: 0.65rem;
+    gap: 0.45rem;
     align-items: center;
     flex-wrap: wrap;
   }
@@ -516,7 +517,7 @@
   .status-filters {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.25rem;
+    gap: 0.15rem;
   }
   .status-filters button {
     display: inline-flex;
@@ -539,7 +540,7 @@
   .board-filters {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.4rem;
+    gap: 0.3rem;
   }
   .board-filters label {
     min-width: 0;
@@ -552,7 +553,7 @@
   .board-filters select {
     width: 100%;
     min-width: 0;
-    height: 2rem;
+    height: 1.85rem;
     padding: 0.3rem 0.5rem;
     background: hsl(var(--background));
     border: 1px solid hsl(var(--input));
@@ -562,7 +563,7 @@
   .board-content {
     min-width: 0;
     display: grid;
-    gap: 0.8rem;
+    gap: 0.55rem;
     align-items: start;
   }
   .task-browser {
@@ -576,7 +577,7 @@
     grid-template-columns: minmax(0, 1fr) minmax(5rem, 0.25fr) minmax(5rem, 0.22fr) 3rem;
     align-items: center;
     gap: 0.65rem;
-    padding: 0.55rem 0.5rem;
+    padding: 0.4rem 0.45rem;
     text-align: left;
     width: 100%;
     min-width: 0;
@@ -590,7 +591,7 @@
   .task-main {
     min-width: 0;
     display: grid;
-    gap: 0.2rem;
+    gap: 0.12rem;
   }
   .task-title {
     font-size: 0.85rem;
@@ -656,8 +657,8 @@
   }
   .task-tile {
     display: grid;
-    gap: 0.4rem;
-    padding: 0.65rem;
+    gap: 0.3rem;
+    padding: 0.5rem;
     text-align: left;
     border: 1px solid hsl(var(--border));
     border-radius: 0.35rem;

@@ -98,83 +98,91 @@
   }
 </script>
 
-<section class="space-y-3">
+<section class="space-y-2">
   <div class="flex items-center justify-between">
     <h2 class="text-base font-semibold">{t("room_timers")}</h2>
   </div>
   {#if participants.length === 0}<Card variant="subtle" class="p-4 text-sm text-muted-foreground"
       >{t("room_timersNeedParticipant")}</Card
     >{:else}
-    <form class="room-form grid gap-2 rounded-lg border bg-card p-3" onsubmit={submit}>
-      <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
-        ><span>{t("room_timerParticipant")}</span><select
-          class="h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground"
-          bind:value={participantId}
-          ><option value="">{t("room_chooseParticipant")}</option
-          >{#each participants as p (p.id)}<option value={p.id}>{p.name}</option>{/each}</select
-        ></label
+    <details
+      class="rounded-lg border bg-card px-3 py-2"
+      open={timers.length === 0 || editing !== null}
+    >
+      <summary class="cursor-pointer text-sm font-medium"
+        >{editing ? t("common_edit") : t("room_addTimer")}</summary
       >
-      <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
-        ><span>{t("room_timerMessage")}</span><Input bind:value={message} /></label
-      >
-      <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
-        ><span>{t("room_intervalSeconds")}</span><Input
-          type="number"
-          bind:value={interval}
-        /></label
-      >
-      <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
-        ><span>{t("room_timerStopAfter")}</span><select
-          class="h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground"
-          bind:value={stopMode}
-          ><option value="count">{t("room_timerStopAfterCount")}</option><option value="date"
-            >{t("room_timerStopAfterDate")}</option
-          ></select
-        ></label
-      >
-      {#if stopMode === "count"}
+      <form class="room-form mt-2 grid gap-2 pb-1" onsubmit={submit}>
         <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
-          ><span>{t("room_maxDeliveries")}</span><input
+          ><span>{t("room_timerParticipant")}</span><select
+            class="h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground"
+            bind:value={participantId}
+            ><option value="">{t("room_chooseParticipant")}</option
+            >{#each participants as p (p.id)}<option value={p.id}>{p.name}</option>{/each}</select
+          ></label
+        >
+        <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
+          ><span>{t("room_timerMessage")}</span><Input bind:value={message} /></label
+        >
+        <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
+          ><span>{t("room_intervalSeconds")}</span><Input
             type="number"
-            min="1"
-            max="200"
-            step="1"
-            bind:value={maxDeliveries}
-            class="h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm"
+            bind:value={interval}
           /></label
         >
-      {:else}
         <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
-          ><span>{t("room_timerEndDateTime")}</span><input
-            type="datetime-local"
-            bind:value={endsAt}
-            class="h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm"
-          /></label
+          ><span>{t("room_timerStopAfter")}</span><select
+            class="h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground"
+            bind:value={stopMode}
+            ><option value="count">{t("room_timerStopAfterCount")}</option><option value="date"
+              >{t("room_timerStopAfterDate")}</option
+            ></select
+          ></label
         >
-        {#if endsAt && !stopValue}
-          <p class="text-xs text-destructive md:col-span-2" role="alert">
-            {t("room_timerFutureDateRequired")}
-          </p>
+        {#if stopMode === "count"}
+          <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
+            ><span>{t("room_maxDeliveries")}</span><input
+              type="number"
+              min="1"
+              max="200"
+              step="1"
+              bind:value={maxDeliveries}
+              class="h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm"
+            /></label
+          >
+        {:else}
+          <label class="min-w-0 space-y-1 text-xs text-muted-foreground"
+            ><span>{t("room_timerEndDateTime")}</span><input
+              type="datetime-local"
+              bind:value={endsAt}
+              class="h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm"
+            /></label
+          >
+          {#if endsAt && !stopValue}
+            <p class="text-xs text-destructive md:col-span-2" role="alert">
+              {t("room_timerFutureDateRequired")}
+            </p>
+          {/if}
         {/if}
-      {/if}
-      <div class="flex flex-wrap gap-4 md:col-span-2">
-        <label class="flex items-center gap-2 text-sm"
-          ><input type="checkbox" bind:checked={idleOnly} />{t("room_idleOnly")}</label
-        ><label class="flex items-center gap-2 text-sm"
-          ><input type="checkbox" bind:checked={enabled} />{t("room_timerEnabled")}</label
-        >
-      </div>
-      <p class="text-xs text-muted-foreground md:col-span-2">{t("room_timerModeHelp")}</p>
-      <div class="flex flex-wrap gap-2 md:col-span-2">
-        <Button disabled={disabled || !formValid} loading={busyAction === "save-timer"}
-          >{editing ? t("common_save") : t("room_addTimer")}</Button
-        >{#if editing}<button
-            type="button"
-            class="h-9 rounded-md border px-4 text-sm hover:bg-accent"
-            onclick={reset}>{t("common_cancel")}</button
-          >{/if}
-      </div>
-    </form>
+        <div class="flex flex-wrap gap-4 md:col-span-2">
+          <label class="flex items-center gap-2 text-sm"
+            ><input type="checkbox" bind:checked={idleOnly} />{t("room_idleOnly")}</label
+          ><label class="flex items-center gap-2 text-sm"
+            ><input type="checkbox" bind:checked={enabled} />{t("room_timerEnabled")}</label
+          >
+        </div>
+        <p class="text-xs text-muted-foreground md:col-span-2">{t("room_timerModeHelp")}</p>
+        <div class="flex flex-wrap gap-2 md:col-span-2">
+          <Button disabled={disabled || !formValid} loading={busyAction === "save-timer"}
+            >{editing ? t("common_save") : t("room_addTimer")}</Button
+          >{#if editing}<button
+              type="button"
+              class="h-9 rounded-md border px-4 text-sm hover:bg-accent"
+              onclick={reset}>{t("common_cancel")}</button
+            >{/if}
+        </div>
+      </form>
+    </details>
     {#if timers.length === 0}<Card variant="subtle" class="p-4 text-sm text-muted-foreground"
         >{t("room_noTimers")}</Card
       >{/if}
