@@ -1,10 +1,12 @@
 pub mod attachments;
+pub mod bridge;
 pub mod chat_attachment;
 pub mod github;
 pub mod github_tasks;
 pub mod governance;
 pub mod mcp;
 pub mod mentions;
+pub mod message_projection;
 pub mod models;
 pub mod operations;
 pub mod repository;

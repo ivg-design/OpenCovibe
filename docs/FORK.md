@@ -28,3 +28,15 @@ GitHub task-sync failures keep uncertain claims protected while leaving room mes
 and coordination available. Legacy task-sync waits recover without overriding manual
 pauses or replaying interrupted deliveries. See
 [BidBot recovery evidence](BIDBOT_WAIT_RECOVERY_2026-10-03.md).
+
+## Versions 0.3.3–0.3.4
+
+Completion approval explains its disabled state and uses the shorter **Approve** label.
+Room delivery identities suppress duplicate tool/transcript replies while preserving
+recipient routing, later turns and dormant-agent wakeups. An owner-configured private
+MCP bridge adds durable queued messages, scoped receipts and visible reply replay;
+optional cloud event connection remains separate and disabled until configured.
+See [implementation](PRIVATE_ROOM_BRIDGE_2026-10-03.md) and
+[acceptance evidence](ROOM_APPROVAL_MESSAGING_ACCEPTANCE_2026-10-03.md).
+
+Version 0.3.4 extends duplicate suppression to paraphrased automatic summaries after an explicit main-room post. It is installed and notarized. Dotcliffe independently verified BidBot replies through the existing Mac helper; direct cloud OAuth/event wake acceptance remains open.

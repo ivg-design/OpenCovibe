@@ -146,6 +146,8 @@ pub struct Delivery {
     // behavior when upgrading an in-flight turn that has no startup marker.
     #[serde(default = "yes")]
     pub turn_started: bool,
+    #[serde(default)]
+    pub provider_turn_id: Option<String>,
     pub task_id: Option<String>,
     pub timer_id: Option<String>,
     #[serde(default)]

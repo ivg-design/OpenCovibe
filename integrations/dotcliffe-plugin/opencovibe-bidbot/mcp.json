@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "opencovibe-bidbot": {
+      "type": "streamable-http",
+      "url": "https://opencovibe-private-room-relay.ivg-design.workers.dev/mcp"
+    }
+  }
+}

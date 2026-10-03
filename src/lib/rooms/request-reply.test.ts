@@ -1,8 +1,36 @@
 import { describe, expect, it } from "vitest";
-import { isRequestReplyShortcut, requestReplyApproval } from "./request-reply";
-import type { RoomRequest } from "./types";
+import {
+  completionApprovalBlocker,
+  isRequestReplyShortcut,
+  requestReplyApproval,
+} from "./request-reply";
+import type { RoomParticipant, RoomRequest } from "./types";
 
 const room = { archived: false, paused: true, participants: [] };
+const participant = (
+  state: string,
+  pending_delivery: RoomParticipant["pending_delivery"] = null,
+): RoomParticipant => ({
+  id: "peer",
+  name: "Peer",
+  provider: "codex",
+  run_id: "run",
+  paused: false,
+  model: null,
+  effort: null,
+  worktree_path: null,
+  branch: null,
+  state,
+  last_error: null,
+  last_wake_at: null,
+  wake_count: 0,
+  max_turns: 0,
+  event_cursor: 0,
+  message_cursor: 0,
+  pending_delivery,
+  no_progress_turns: 0,
+  work_signature: null,
+});
 const request = (kind: RoomRequest["kind"], status: RoomRequest["status"]): RoomRequest => ({
   id: "request",
   kind,
@@ -90,5 +118,80 @@ describe("request response keyboard submission", () => {
       { key: "Escape" },
     ])
       expect(isRequestReplyShortcut({ ...event, ...patch })).toBe(false);
+  });
+});
+
+describe("completion approval gates", () => {
+  const verifiedCompletion = request("completion", "verified");
+
+  it("explains each disabled state and enables only when all approval gates pass", () => {
+    expect(completionApprovalBlocker(room, verifiedCompletion, "Accepted", true)).toBe("busy");
+    expect(
+      completionApprovalBlocker({ ...room, paused: false }, verifiedCompletion, "Accepted", false),
+    ).toBe("pause");
+    expect(completionApprovalBlocker(room, verifiedCompletion, "  ", false)).toBe("note");
+    expect(completionApprovalBlocker(room, verifiedCompletion, "Accepted", false)).toBeNull();
+    expect(
+      completionApprovalBlocker({ ...room, archived: true }, verifiedCompletion, "Accepted", false),
+    ).toBe("unavailable");
+    expect(
+      completionApprovalBlocker(room, { ...verifiedCompletion, archived: true }, "Accepted", false),
+    ).toBe("unavailable");
+  });
+
+  it("keeps active, busy, pending, running, waiting, and pending-delivery peers from being approved", () => {
+    for (const state of ["active", "busy", "pending", "running", "waiting"])
+      expect(
+        completionApprovalBlocker(
+          { ...room, participants: [participant(state)] },
+          verifiedCompletion,
+          "Accepted",
+          false,
+        ),
+      ).toBe("participants");
+    expect(
+      completionApprovalBlocker(
+        {
+          ...room,
+          participants: [
+            participant("idle", {
+              id: "delivery",
+              reason: "turn",
+              text: "message",
+              created_at: 0,
+              state: "pending",
+              task_id: null,
+              timer_id: null,
+            }),
+          ],
+        },
+        verifiedCompletion,
+        "Accepted",
+        false,
+      ),
+    ).toBe("participants");
+  });
+
+  it("uses the same completion gates for Cmd/Ctrl+Enter", () => {
+    expect(requestReplyApproval(room, verifiedCompletion, "Accepted", false)).toBe(true);
+    for (const blockedRoom of [
+      { ...room, paused: false },
+      { ...room, participants: [participant("busy")] },
+      {
+        ...room,
+        participants: [
+          participant("idle", {
+            id: "delivery",
+            reason: "turn",
+            text: "message",
+            created_at: 0,
+            state: "pending",
+            task_id: null,
+            timer_id: null,
+          }),
+        ],
+      },
+    ])
+      expect(requestReplyApproval(blockedRoom, verifiedCompletion, "Accepted", false)).toBeNull();
   });
 });

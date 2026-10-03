@@ -8,7 +8,11 @@
   import { filterRoomRequests, isOpenRoomRequest, needsHumanAnswer } from "$lib/rooms/requests";
   import type { Room, RoomRequest } from "$lib/rooms/types";
   import { identityName } from "$lib/stores/identity.svelte";
-  import { isRequestReplyShortcut, requestReplyApproval } from "$lib/rooms/request-reply";
+  import {
+    completionApprovalBlocker,
+    isRequestReplyShortcut,
+    requestReplyApproval,
+  } from "$lib/rooms/request-reply";
 
   let {
     room,
@@ -390,10 +394,16 @@
                 onclick={() => resolve(request, false)}>{t("room_requestsCancelReview")}</Button
               >
             {:else if request.kind === "completion"}
+              {@const approvalBlocker = completionApprovalBlocker(
+                room,
+                request,
+                replies[request.id] ?? "",
+                isBusy,
+              )}
               {#if request.status === "verified"}
                 <Button
                   size="sm"
-                  disabled={isBusy || !room.paused || !replies[request.id]?.trim()}
+                  disabled={approvalBlocker !== null}
                   onclick={() => resolve(request, true)}
                   >{t("room_requestsAcceptCompletion")}</Button
                 >
@@ -407,6 +417,12 @@
                   ? t("room_requestsCancelCompletion")
                   : t("room_requestsReject")}</Button
               >
+              {#if request.status === "verified" && approvalBlocker}<p
+                  class="basis-full text-xs text-muted-foreground"
+                  role="status"
+                >
+                  {t(`room_requestsApprovalBlocked_${approvalBlocker}`)}
+                </p>{/if}
             {/if}
             {#if request.status !== "creating"}<Button
                 size="sm"

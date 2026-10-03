@@ -1121,6 +1121,10 @@ pub enum RalphCompleteReason {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BusEvent {
+    ProviderTurnStarted {
+        run_id: String,
+        turn_id: String,
+    },
     SessionInit {
         run_id: String,
         session_id: Option<String>,
@@ -1389,7 +1393,10 @@ pub enum BusEvent {
     /// object verbatim (`{threadId, objective, status, tokenBudget?, tokensUsed,
     /// timeUsedSeconds, createdAt, updatedAt}`) from the `thread/goal/updated` notification, or
     /// `Value::Null` when the goal was cleared (`thread/goal/cleared`). The GoalPanel renders it.
-    GoalUpdate { run_id: String, goal: Value },
+    GoalUpdate {
+        run_id: String,
+        goal: Value,
+    },
     /// Codex hook lifecycle (`hook/started` → status "running", `hook/completed` → terminal
     /// HookRunStatus). `hook_id` (= run.id) is stable across the pair so the frontend upserts a
     /// single timeline card. `event_name` is the camelCase HookEventName (e.g. "preToolUse").
@@ -1462,7 +1469,10 @@ pub enum BusEvent {
         data: Value,
     },
     /// CLI cancelled a pending control_request (e.g. cancelled permission prompt).
-    ControlCancelled { run_id: String, request_id: String },
+    ControlCancelled {
+        run_id: String,
+        request_id: String,
+    },
     /// Durable intent written before an interactive response is sent to the CLI.
     /// Recovery treats this as non-retryable because a process can die after the wire write.
     InteractionResponseStarted {
@@ -1491,7 +1501,10 @@ pub enum BusEvent {
     },
     /// Output from a CLI slash command (e.g. /context, /cost).
     /// Extracted from `<local-command-stdout>` tags in user messages.
-    CommandOutput { run_id: String, content: String },
+    CommandOutput {
+        run_id: String,
+        content: String,
+    },
     /// MCP elicitation: CLI requests user input for MCP server authentication/configuration.
     ElicitationPrompt {
         run_id: String,

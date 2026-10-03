@@ -244,7 +244,7 @@ fn with_references(text: &str, references: &[String]) -> String {
     }
 }
 
-async fn call_tool(
+pub(super) async fn call_tool(
     data_dir: &Path,
     room_id: &str,
     participant_id: &str,
@@ -357,16 +357,35 @@ async fn call_tool(
                     return Err("target participant is not a member of this sidechat".into());
                 }
             }
+            let source_event_id = peer.pending_delivery.as_ref().and_then(|delivery| {
+                super::message_projection::delivery_source_event_id(
+                    &peer.run_id,
+                    &delivery.id,
+                    &peer.id,
+                    sidechat_id.as_deref(),
+                    target_id.as_deref(),
+                    body,
+                )
+            });
             let updated = store.append_message_in_sidechat(
                 room_id,
                 &peer.name,
                 body.to_owned(),
                 Some(participant_id.to_owned()),
                 target_id,
-                None,
+                source_event_id.clone(),
                 sidechat_id,
             )?;
-            Ok(json!({"message_posted":true,"message":updated.messages.last()}))
+            let message = source_event_id
+                .as_deref()
+                .and_then(|source| {
+                    updated
+                        .messages
+                        .iter()
+                        .find(|message| message.source_event_id.as_deref() == Some(source))
+                })
+                .or_else(|| updated.messages.last());
+            Ok(json!({"message_posted":true,"message":message}))
         }
         "create_task" => {
             operations::active_peer(&room, participant_id)?;

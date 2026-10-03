@@ -172,6 +172,7 @@ impl BroadcastEmitter {
 /// Extract event type name for logging
 fn event_type_name(event: &BusEvent) -> &'static str {
     match event {
+        BusEvent::ProviderTurnStarted { .. } => "provider_turn_started",
         BusEvent::SessionInit { .. } => "session_init",
         BusEvent::MessageDelta { .. } => "message_delta",
         BusEvent::MessageComplete { .. } => "message_complete",

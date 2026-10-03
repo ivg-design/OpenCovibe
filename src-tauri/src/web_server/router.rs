@@ -40,6 +40,11 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .merge(public_routes)
         .merge(ws_routes)
+        .merge(
+            Router::new()
+                .route("/mcp/ocv", post(crate::rooms::bridge::handler))
+                .layer(axum::extract::DefaultBodyLimit::max(128 * 1024)),
+        )
         .merge(cookie_routes)
         .layer(cors_layer)
         .with_state(state)

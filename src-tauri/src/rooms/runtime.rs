@@ -248,7 +248,11 @@ fn dormant_message_recipients(room: &Room) -> Vec<String> {
                 && peer.pending_delivery.is_none()
                 && !peer.turn_limit_reached()
                 && room.messages.iter().enumerate().any(|(index, message)| {
-                    message.source_event_id.is_none()
+                    (message.source_event_id.is_none()
+                        || message
+                            .source_event_id
+                            .as_deref()
+                            .is_some_and(super::message_projection::is_room_tool_source_event_id))
                         && ((message.sender == "Human" && message.participant_id.is_none())
                             || (message.is_directed()
                                 && message.participant_id.as_ref().is_some_and(|sender| {
@@ -321,6 +325,7 @@ pub fn plan(room: &Room, p: &Participant, now: i64) -> Option<Delivery> {
         created_at: now,
         state: "prepared".into(),
         turn_started: false,
+        provider_turn_id: None,
         task_id: None,
         timer_id: None,
         sidechat_id: None,
@@ -336,12 +341,19 @@ pub fn plan(room: &Room, p: &Participant, now: i64) -> Option<Delivery> {
             .map(|(_, m)| m)
             .collect::<Vec<_>>();
         let first = matching.first().copied();
-        let selected = first.filter(|m| m.sidechat_id.is_some()).or_else(|| {
-            if matching.iter().any(|m| m.sidechat_id.is_some()) {
-                first
-            } else {
-                matching.last().copied()
-            }
+        let external = matching.iter().copied().find(|m| {
+            m.source_event_id
+                .as_deref()
+                .is_some_and(|s| s.starts_with("bridge:"))
+        });
+        let selected = external.or_else(|| {
+            first.filter(|m| m.sidechat_id.is_some()).or_else(|| {
+                if matching.iter().any(|m| m.sidechat_id.is_some()) {
+                    first
+                } else {
+                    matching.last().copied()
+                }
+            })
         });
         if let Some(message) = selected {
             delivery.sidechat_id = message.sidechat_id.clone();
@@ -489,7 +501,7 @@ fn queue_due_timers(
     })
 }
 
-fn reserve_delivery(
+pub(super) fn reserve_delivery(
     store: &RoomStore,
     room_id: &str,
     peer_id: &str,
@@ -681,7 +693,11 @@ fn provider_attachments(
 }
 
 fn prompt(room: &Room, p: &Participant, d: &Delivery) -> String {
-    let mut conversation: Vec<_> = room.messages.iter().rev().filter(|m| m.targets(&p.id) && m.sidechat_id == d.sidechat_id).take(20).map(|m| serde_json::json!({"sender":m.sender,"target":m.target_participant_id,"body":m.body,"sidechat_id":m.sidechat_id,"attachments":m.attachments,"targets":m.target_participant_ids})).collect();
+    let cutoff = d
+        .message_id
+        .as_ref()
+        .and_then(|id| room.messages.iter().position(|m| &m.id == id));
+    let mut conversation: Vec<_> = room.messages.iter().enumerate().rev().filter(|(index,m)| m.targets(&p.id) && m.sidechat_id == d.sidechat_id && !(m.source_event_id.as_deref().is_some_and(|s| s.starts_with("bridge:")) && cutoff.is_none_or(|end| *index > end))).map(|(_,m)| m).take(20).map(|m| serde_json::json!({"sender":m.sender,"target":m.target_participant_id,"body":m.body,"sidechat_id":m.sidechat_id,"attachments":m.attachments,"targets":m.target_participant_ids})).collect();
     conversation.reverse();
     let source_context = d
         .sidechat_id
@@ -892,8 +908,18 @@ pub(crate) fn import_events(
     {
         return Ok(());
     }
-    store.update(room_id, |r| {
+    import_page(store, room_id, peer, &page)
+}
+
+pub(super) fn import_page(
+    store: &RoomStore,
+    room_id: &str,
+    peer: &Participant,
+    page: &storage::events::BusEventPage,
+) -> Result<(), String> {
+    store.update_projected(room_id, |r, connection| {
         for event in &page.events {
+            let before = super::bridge::snapshot(connection, r)?;
             let seq = event.get("_seq").and_then(|v| v.as_u64()).unwrap_or(0);
             let kind = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
             let completed_signature = (kind == "run_state"
@@ -915,13 +941,49 @@ pub(crate) fn import_events(
                     .get("text")
                     .and_then(|v| v.as_str())
                     .filter(|s| !s.trim().is_empty())
+                    .filter(|_| {
+                        !p.pending_delivery.as_ref().is_some_and(|delivery| {
+                            super::message_projection::has_public_main_room_post(
+                                &r.messages,
+                                &p.run_id,
+                                &delivery.id,
+                                &p.id,
+                            )
+                        })
+                    })
                 {
-                    let source = format!("{}:{seq}", p.run_id);
-                    if !r
-                        .messages
-                        .iter()
-                        .any(|m| m.source_event_id.as_ref() == Some(&source))
-                    {
+                    let source = p
+                        .pending_delivery
+                        .as_ref()
+                        .and_then(|delivery| {
+                            super::message_projection::delivery_source_event_id(
+                                &p.run_id,
+                                &delivery.id,
+                                &p.id,
+                                delivery.sidechat_id.as_deref(),
+                                None,
+                                text,
+                            )
+                        })
+                        .or_else(|| {
+                            event
+                                .get("message_id")
+                                .and_then(|value| value.as_str())
+                                .and_then(|message_id| {
+                                    super::message_projection::provider_message_source_event_id(
+                                        &p.run_id, message_id,
+                                    )
+                                })
+                        })
+                        .unwrap_or_else(|| format!("{}:{seq}", p.run_id));
+                    if !r.messages.iter().any(|m| {
+                        m.source_event_id.as_deref().is_some_and(|existing_source| {
+                            super::message_projection::is_delivery_projection(
+                                existing_source,
+                                &source,
+                            )
+                        })
+                    }) {
                         r.messages.push(Message {
                             id: uuid::Uuid::new_v4().to_string(),
                             sender: p.name.clone(),
@@ -939,6 +1001,18 @@ pub(crate) fn import_events(
             }
             apply_event_state(p, kind, event, completed_signature.as_deref());
             p.event_cursor = seq;
+            if let Some(before) = before {
+                super::bridge::reconcile(
+                    connection,
+                    &before,
+                    r,
+                    kind == "run_state"
+                        && matches!(
+                            event.get("state").and_then(|v| v.as_str()),
+                            Some("idle" | "completed")
+                        ),
+                )?;
+            }
         }
         if let Some(p) = r.participants.iter_mut().find(|p| p.id == peer.id) {
             if p.event_cursor <= page.last_seq {
@@ -960,6 +1034,14 @@ fn apply_event_state(
     const WAITING_MESSAGE: &str =
         "Waiting for human input to resolve a permission or clarification request.";
     match kind {
+        "provider_turn_started" => {
+            if let Some(delivery) = &mut peer.pending_delivery {
+                delivery.provider_turn_id = event
+                    .get("turn_id")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned);
+            }
+        }
         "permission_prompt" | "elicitation_prompt" | "hook_callback" => {
             if !peer.paused {
                 peer.state = "waiting".into();

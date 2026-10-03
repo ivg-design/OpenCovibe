@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 pub struct RoomStore {
-    connection: Mutex<Connection>,
+    pub(super) connection: Mutex<Connection>,
     pub(crate) attachment_root: std::path::PathBuf,
     pub project_operation: tokio::sync::Mutex<()>,
 }
@@ -33,6 +33,7 @@ impl RoomStore {
                  );",
             )
             .map_err(|e| e.to_string())?;
+        super::bridge::schema(&connection)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -190,6 +191,15 @@ impl RoomStore {
         id: &str,
         change: impl FnOnce(&mut Room) -> Result<(), String>,
     ) -> Result<Room, String> {
+        self.update_projected(id, |room, _| change(room))
+    }
+
+    // Event import projects each lifecycle transition inside the same transaction.
+    pub(super) fn update_projected(
+        &self,
+        id: &str,
+        change: impl FnOnce(&mut Room, &Connection) -> Result<(), String>,
+    ) -> Result<Room, String> {
         let mut conn = self.connection.lock().map_err(|e| e.to_string())?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -200,8 +210,12 @@ impl RoomStore {
             })
             .map_err(|e| format!("room not found or unreadable: {e}"))?;
         let mut room: Room = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
-        change(&mut room)?;
+        let before = super::bridge::snapshot(&tx, &room)?;
+        change(&mut room, &tx)?;
         room.updated_at = crate::models::now_iso();
+        if let Some(before) = before {
+            super::bridge::reconcile(&tx, &before, &room, false)?;
+        }
         tx.execute(
             "UPDATE rooms SET payload=?1 WHERE id=?2",
             params![serde_json::to_string(&room).map_err(|e| e.to_string())?, id],
@@ -418,7 +432,9 @@ impl RoomStore {
             let mut target_participant_id = target_participant_id.clone();
             let mut target_participant_ids = vec![];
             if (sender == "Human" && participant_id.is_none())
-                || (source_event_id.is_none()
+                || (source_event_id
+                    .as_deref()
+                    .is_none_or(super::message_projection::is_room_tool_source_event_id)
                     && participant_id.as_ref().is_some_and(|sender_id| {
                         room.participants.iter().any(|p| &p.id == sender_id)
                     }))

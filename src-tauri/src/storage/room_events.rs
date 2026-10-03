@@ -26,6 +26,8 @@ impl<'de> Deserialize<'de> for RoomEvent {
                 while let Some(key) = map.next_key::<String>()? {
                     if [
                         "type",
+                        "turn_id",
+                        "message_id",
                         "text",
                         "state",
                         "error",
@@ -92,7 +94,7 @@ pub fn list_room_events_page(
     page_from_reader(&mut reader, since_seq)
 }
 
-fn page_from_reader<R: BufRead + Seek>(
+pub(crate) fn page_from_reader<R: BufRead + Seek>(
     reader: &mut R,
     since_seq: u64,
 ) -> Result<BusEventPage, String> {
@@ -126,6 +128,7 @@ fn page_from_reader<R: BufRead + Seek>(
                 .and_then(Value::as_str)
                 .unwrap_or("");
             if [
+                "provider_turn_started",
                 "message_complete",
                 "permission_prompt",
                 "elicitation_prompt",

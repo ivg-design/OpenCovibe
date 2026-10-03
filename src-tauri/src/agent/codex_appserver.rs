@@ -1258,6 +1258,10 @@ impl CodexAppServer {
                     .and_then(|v| v.as_str())
                 {
                     self.active_turn_id = Some(id.to_string());
+                    out.events.push(BusEvent::ProviderTurnStarted {
+                        run_id: run_id.into(),
+                        turn_id: id.into(),
+                    });
                 }
                 out.lifecycle = Some(LifecycleSignal::TurnStarted);
             }

@@ -319,7 +319,12 @@ async fn spawn_server(
     let token_version = app.state::<crate::SharedTokenVersion>().inner().clone();
     let ws_shutdown = app.state::<crate::WsShutdownSender>().inner().clone();
 
+    let rooms = app
+        .state::<Arc<crate::rooms::store::RoomStore>>()
+        .inner()
+        .clone();
     let app_state = AppState {
+        rooms: rooms.clone(),
         process_map: app
             .state::<crate::agent::stream::ProcessMap>()
             .inner()
@@ -356,6 +361,7 @@ async fn spawn_server(
     let effective_port_cleanup = effective_port.clone();
     let generation_cleanup = generation.clone();
 
+    crate::rooms::bridge::start_events(rooms, ws_cancel_token.clone());
     let router = router::build_router(app_state);
 
     // Spawn serve task (use tokio::spawn directly for tokio::task::JoinHandle compatibility)

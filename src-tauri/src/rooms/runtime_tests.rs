@@ -64,6 +64,27 @@ impl Fixture {
     }
 }
 
+fn import_message_complete(fixture: &Fixture, seq: u64, message_id: &str, text: &str) {
+    let room = fixture.store.get(&fixture.room.id).unwrap();
+    let peer = room
+        .participants
+        .iter()
+        .find(|peer| peer.id == "peer-a")
+        .unwrap();
+    let page = crate::storage::events::BusEventPage {
+        events: vec![serde_json::json!({
+            "_seq": seq,
+            "type": "message_complete",
+            "message_id": message_id,
+            "text": text,
+        })],
+        last_seq: seq,
+        has_more: false,
+        next_offset: seq,
+    };
+    super::import_page(&fixture.store, &room.id, peer, &page).unwrap();
+}
+
 fn item(id: &str) -> BoardItem {
     BoardItem {
         id: id.into(),
@@ -228,6 +249,7 @@ fn delivery(reason: &str, timer_id: Option<&str>, created_at: i64) -> Delivery {
         created_at,
         state: "prepared".into(),
         turn_started: true,
+        provider_turn_id: None,
         task_id: None,
         timer_id: timer_id.map(str::to_owned),
         sidechat_id: None,
@@ -1665,6 +1687,396 @@ fn duplicate_source_event_messages_are_appended_only_once() {
             .count(),
         1
     );
+}
+
+#[test]
+fn room_tool_and_transcript_projection_dedupe_per_delivery() {
+    let fixture = Fixture::new();
+    let room_id = &fixture.room.id;
+    let source_for = |delivery_id: &str, target: Option<&str>| {
+        crate::rooms::message_projection::delivery_source_event_id(
+            "run-peer-a",
+            delivery_id,
+            "peer-a",
+            None,
+            target,
+            "Claude update",
+        )
+        .unwrap()
+    };
+
+    // MCP post_message and the later message_complete transcript event share
+    // the source identity for one room delivery.
+    let first_source = source_for("delivery-1", None);
+    fixture
+        .store
+        .append_message(
+            room_id,
+            "Claude",
+            "Claude update".into(),
+            Some("peer-a".into()),
+            None,
+            Some(first_source.clone()),
+        )
+        .unwrap();
+    fixture
+        .store
+        .append_message(
+            room_id,
+            "Claude",
+            "Claude update".into(),
+            Some("peer-a".into()),
+            None,
+            Some(first_source.clone()),
+        )
+        .unwrap();
+
+    // Identical text from a later delivery remains a separate message.
+    let second_source = source_for("delivery-2", None);
+    fixture
+        .store
+        .append_message(
+            room_id,
+            "Claude",
+            "Claude update".into(),
+            Some("peer-a".into()),
+            None,
+            Some(second_source.clone()),
+        )
+        .unwrap();
+
+    // A targeted post has a different identity from an unaddressed transcript
+    // message so recipient distinctions are not collapsed.
+    let targeted_source = source_for("delivery-1", Some("peer-b"));
+    fixture
+        .store
+        .append_message(
+            room_id,
+            "Claude",
+            "Claude update".into(),
+            Some("peer-a".into()),
+            Some("peer-b".into()),
+            Some(targeted_source.clone()),
+        )
+        .unwrap();
+
+    let saved = fixture.store.get(room_id).unwrap();
+    let projected = saved
+        .messages
+        .iter()
+        .filter(|message| message.body == "Claude update")
+        .collect::<Vec<_>>();
+    assert_eq!(projected.len(), 3);
+    assert!(projected
+        .iter()
+        .any(|message| message.source_event_id.as_deref() == Some(first_source.as_str())));
+    assert!(projected
+        .iter()
+        .any(|message| message.source_event_id.as_deref() == Some(second_source.as_str())));
+    assert!(projected.iter().any(|message| {
+        message.source_event_id.as_deref() == Some(targeted_source.as_str())
+            && message.target_participant_id.as_deref() == Some("peer-b")
+    }));
+}
+
+#[test]
+fn explicit_public_post_suppresses_a_paraphrased_transcript_echo_only_for_its_delivery() {
+    let fixture = Fixture::new();
+    fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            room.participants[0].pending_delivery = Some(delivery("message", None, 1));
+            Ok(())
+        })
+        .unwrap();
+    let room = fixture.store.get(&fixture.room.id).unwrap();
+    let pending = room.participants[0].pending_delivery.as_ref().unwrap();
+    let posted = "roundtrip nonce Q7M4";
+    let source = crate::rooms::message_projection::delivery_source_event_id(
+        &room.participants[0].run_id,
+        &pending.id,
+        &room.participants[0].id,
+        None,
+        None,
+        posted,
+    )
+    .unwrap();
+    fixture
+        .store
+        .append_message(
+            &room.id,
+            "Claude",
+            posted.into(),
+            Some(room.participants[0].id.clone()),
+            None,
+            Some(source),
+        )
+        .unwrap();
+    let before_echo = fixture.store.get(&room.id).unwrap();
+    import_message_complete(
+        &fixture,
+        1,
+        "provider-message-1",
+        "I posted the roundtrip nonce Q7M4 to the public room.",
+    );
+    let after_echo = fixture.store.get(&room.id).unwrap();
+    assert_eq!(after_echo.messages.len(), before_echo.messages.len());
+    assert!(after_echo
+        .messages
+        .iter()
+        .any(|message| message.body == posted));
+
+    // The ownership check is delivery-scoped, so an identical later message
+    // still appears when its delivery made no public room post.
+    fixture
+        .store
+        .update(&room.id, |room| {
+            room.participants[0].pending_delivery = Some(delivery("message", None, 2));
+            Ok(())
+        })
+        .unwrap();
+    import_message_complete(
+        &fixture,
+        2,
+        "provider-message-2",
+        "I posted roundtrip nonce Q7M4.",
+    );
+    let after_later_delivery = fixture.store.get(&room.id).unwrap();
+    assert_eq!(
+        after_later_delivery.messages.len(),
+        before_echo.messages.len() + 1
+    );
+    assert!(after_later_delivery
+        .messages
+        .iter()
+        .any(|message| message.body == "I posted roundtrip nonce Q7M4."));
+}
+
+#[test]
+fn directed_main_and_sidechat_posts_do_not_suppress_transcript_projection() {
+    let fixture = Fixture::new();
+    let root = fixture
+        .store
+        .append_message(
+            &fixture.room.id,
+            "Human",
+            "Sidechat source".into(),
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+        .messages
+        .last()
+        .unwrap()
+        .id
+        .clone();
+    let room = fixture
+        .store
+        .create_sidechat(
+            &fixture.room.id,
+            &root,
+            "Focused discussion",
+            vec!["peer-a".into(), "peer-b".into()],
+        )
+        .unwrap();
+    let sidechat_id = room.sidechats[0].id.clone();
+    fixture
+        .store
+        .update(&room.id, |room| {
+            room.participants[0].pending_delivery = Some(delivery("message", None, 10));
+            Ok(())
+        })
+        .unwrap();
+    let room = fixture.store.get(&room.id).unwrap();
+    let peer = &room.participants[0];
+    let directed_body = "Directed status for peer B";
+    let directed_source = crate::rooms::message_projection::delivery_source_event_id(
+        &peer.run_id,
+        &peer.pending_delivery.as_ref().unwrap().id,
+        &peer.id,
+        None,
+        Some("peer-b"),
+        directed_body,
+    )
+    .unwrap();
+    fixture
+        .store
+        .append_message(
+            &room.id,
+            &peer.name,
+            directed_body.into(),
+            Some(peer.id.clone()),
+            Some("peer-b".into()),
+            Some(directed_source),
+        )
+        .unwrap();
+    import_message_complete(
+        &fixture,
+        1,
+        "provider-message-directed",
+        "I sent peer B the directed status.",
+    );
+
+    fixture
+        .store
+        .update(&room.id, |room| {
+            room.participants[0].pending_delivery = Some(delivery("message", None, 20));
+            room.participants[0]
+                .pending_delivery
+                .as_mut()
+                .unwrap()
+                .sidechat_id = Some(sidechat_id.clone());
+            room.participants[0].active_sidechat_id = Some(sidechat_id.clone());
+            Ok(())
+        })
+        .unwrap();
+    let room = fixture.store.get(&room.id).unwrap();
+    let peer = &room.participants[0];
+    let sidechat_body = "Sidechat-only status";
+    let sidechat_source = crate::rooms::message_projection::delivery_source_event_id(
+        &peer.run_id,
+        &peer.pending_delivery.as_ref().unwrap().id,
+        &peer.id,
+        Some(&sidechat_id),
+        None,
+        sidechat_body,
+    )
+    .unwrap();
+    fixture
+        .store
+        .append_message_in_sidechat(
+            &room.id,
+            &peer.name,
+            sidechat_body.into(),
+            Some(peer.id.clone()),
+            None,
+            Some(sidechat_source),
+            Some(sidechat_id.clone()),
+        )
+        .unwrap();
+    let before_sidechat_echo = fixture.store.get(&room.id).unwrap();
+    import_message_complete(
+        &fixture,
+        2,
+        "provider-message-sidechat",
+        "I added the sidechat-only status in the focused discussion.",
+    );
+    let saved = fixture.store.get(&room.id).unwrap();
+    assert_eq!(
+        saved.messages.len(),
+        before_sidechat_echo.messages.len() + 1
+    );
+    let transcript = saved.messages.last().unwrap();
+    assert!(transcript.body.contains("focused discussion"));
+    assert_eq!(
+        transcript.sidechat_id.as_deref(),
+        Some(sidechat_id.as_str())
+    );
+}
+
+#[test]
+fn repeated_provider_message_ids_dedupe_transcript_projection() {
+    let fixture = Fixture::new();
+    let source = crate::rooms::message_projection::provider_message_source_event_id(
+        "run-peer-a",
+        "provider-message-1",
+    )
+    .unwrap();
+    fixture
+        .store
+        .append_message(
+            &fixture.room.id,
+            "Claude",
+            "First projection".into(),
+            Some("peer-a".into()),
+            None,
+            Some(source.clone()),
+        )
+        .unwrap();
+    fixture
+        .store
+        .append_message(
+            &fixture.room.id,
+            "Claude",
+            "Repeated event projection".into(),
+            Some("peer-a".into()),
+            None,
+            Some(source.clone()),
+        )
+        .unwrap();
+    let later_source = crate::rooms::message_projection::provider_message_source_event_id(
+        "run-peer-a",
+        "provider-message-2",
+    )
+    .unwrap();
+    let saved = fixture
+        .store
+        .append_message(
+            &fixture.room.id,
+            "Claude",
+            "First projection".into(),
+            Some("peer-a".into()),
+            None,
+            Some(later_source),
+        )
+        .unwrap();
+
+    assert_eq!(saved.messages.len(), fixture.room.messages.len() + 2);
+    assert_eq!(
+        saved
+            .messages
+            .iter()
+            .filter(|message| message.source_event_id.as_deref() == Some(source.as_str()))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn deduplicated_room_tool_messages_keep_mention_routing_and_dormant_wakeups() {
+    let fixture = Fixture::new();
+    fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            room.participants.push(participant("lead", "Lead"));
+            for peer in &mut room.participants[..2] {
+                peer.paused = true;
+                peer.state = "blocked".into();
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    let body = "@everyone please review this";
+    let source = crate::rooms::message_projection::delivery_source_event_id(
+        "run-lead",
+        "delivery-lead-1",
+        "lead",
+        None,
+        None,
+        body,
+    )
+    .unwrap();
+    let saved = fixture
+        .store
+        .append_message(
+            &fixture.room.id,
+            "Lead",
+            body.into(),
+            Some("lead".into()),
+            None,
+            Some(source),
+        )
+        .unwrap();
+
+    let routed = saved.messages.last().unwrap();
+    assert_eq!(routed.target_participant_ids, vec!["peer-a", "peer-b"]);
+    assert!(saved
+        .participants
+        .iter()
+        .filter(|peer| peer.id == "peer-a" || peer.id == "peer-b")
+        .all(|peer| !peer.paused && peer.state == "idle"));
 }
 
 #[test]
