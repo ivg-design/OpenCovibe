@@ -21,3 +21,10 @@ App-wide UI/UX remediation improves Matrix readability, responsive layouts, room
 request focus and keyboard replies, import clarity and identity settings. See the
 [UI/UX audit](UI_UX_AUDIT_2026-10-03.md) and
 [acceptance evidence](UI_UX_ACCEPTANCE_2026-10-03.md) for changes, validation and deployment status.
+
+## Version 0.3.2
+
+GitHub task-sync failures keep uncertain claims protected while leaving room messaging
+and coordination available. Legacy task-sync waits recover without overriding manual
+pauses or replaying interrupted deliveries. See
+[BidBot recovery evidence](BIDBOT_WAIT_RECOVERY_2026-10-03.md).

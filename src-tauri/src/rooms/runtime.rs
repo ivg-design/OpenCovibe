@@ -208,6 +208,7 @@ pub fn recover(store: &RoomStore) -> Result<(), String> {
         }
         store.update(&room.id, |r| {
             for p in &mut r.participants {
+                recover_task_sync_wait(p);
                 if p.pending_delivery.is_some() || matches!(p.state.as_str(), "busy" | "waiting") {
                     p.paused = true; p.state = "waiting".into();
                     p.last_error = Some("Previous delivery was interrupted. Inspect the session and resume explicitly; no message was replayed.".into());
@@ -217,6 +218,23 @@ pub fn recover(store: &RoomStore) -> Result<(), String> {
         })?;
     }
     Ok(())
+}
+
+// Older bundles paused the whole participant after a GitHub task-write failure.
+// Recover only that known automatic pause after its delivery has finished;
+// permission waits, manual pauses, and interrupted deliveries still need review.
+fn recover_task_sync_wait(peer: &mut Participant) {
+    if peer.paused
+        && peer.state == "waiting"
+        && peer.pending_delivery.is_none()
+        && peer
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("Task update unconfirmed:"))
+    {
+        peer.paused = false;
+        peer.state = "idle".into();
+    }
 }
 
 fn dormant_message_recipients(room: &Room) -> Vec<String> {

@@ -45,11 +45,12 @@ pub async fn claim_task(
             item.status = "In Progress".into();
             item.agent = Some(peer.name);
         }
+        clear_task_sync_error(room, participant_id);
         Ok(())
     })
 }
 
-fn mark_uncertain(
+pub(super) fn mark_uncertain(
     store: &RoomStore,
     room_id: &str,
     participant_id: &str,
@@ -57,13 +58,43 @@ fn mark_uncertain(
     error: &str,
 ) -> Result<Room, String> {
     store.update(room_id, |room| {
-        if let Some(claim) = room.claims.iter_mut().find(|c| c.task_id == task_id) { claim.state = "uncertain".into(); }
+        if let Some(claim) = room.claims.iter_mut().find(|c| c.task_id == task_id) {
+            claim.state = "uncertain".into();
+        }
         if let Some(peer) = room.participants.iter_mut().find(|p| p.id == participant_id) {
-            peer.paused = true; peer.state = "waiting".into(); peer.last_error = Some(format!("Task update unconfirmed: {error}. Refresh and reconcile or release the claim before continuing."));
+            // An uncertain task write blocks automatic work on that claim, not
+            // the participant's ability to reply, coordinate, or ask for recovery.
+            // Keep explicit pauses and in-flight delivery state unchanged.
+            peer.last_error = Some(format!("Task update unconfirmed: {error}. Reconcile or release this claim before continuing its work. Room messages remain available."));
         }
         room.board.error = Some(error.into());
         Ok(())
     })
+}
+
+pub(super) fn clear_task_sync_error(room: &mut Room, participant_id: &str) {
+    if room.claims.iter().any(|claim| {
+        claim.participant_id == participant_id
+            && matches!(
+                claim.state.as_str(),
+                "uncertain" | "completing" | "releasing"
+            )
+    }) {
+        return;
+    }
+    if let Some(peer) = room
+        .participants
+        .iter_mut()
+        .find(|p| p.id == participant_id)
+    {
+        if peer
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("Task update unconfirmed:"))
+        {
+            peer.last_error = None;
+        }
+    }
 }
 
 pub async fn finish_task(
@@ -128,6 +159,7 @@ pub async fn finish_task(
             item.status = "Done".into();
             item.agent = Some(peer.name.clone());
         }
+        clear_task_sync_error(room, participant_id);
         Ok(())
     })?;
     store.append_message(
@@ -300,6 +332,7 @@ async fn release_claim_with_owner(
                 attachments: vec![],
             });
         }
+        clear_task_sync_error(room, &peer.id);
         Ok(())
     })
 }

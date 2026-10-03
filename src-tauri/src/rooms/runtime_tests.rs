@@ -2377,3 +2377,210 @@ fn unpausing_an_agent_does_not_drop_messages_queued_in_a_paused_room() {
     assert_eq!(delivery.reason, "message");
     assert_eq!(delivery.message_id.as_deref(), Some(message_id.as_str()));
 }
+
+#[test]
+fn uncertain_task_write_keeps_room_communication_and_blocks_automatic_task_work() {
+    for inflight in [false, true] {
+        let fixture = Fixture::new();
+        fixture
+            .store
+            .reserve_claim(&fixture.room.id, "peer-a", "task-a")
+            .unwrap();
+        let before = fixture
+            .store
+            .update(&fixture.room.id, |room| {
+                let peer = &mut room.participants[0];
+                if inflight {
+                    peer.state = "busy".into();
+                    peer.pending_delivery = Some(delivery("task", None, fixture.now()));
+                }
+                Ok(())
+            })
+            .unwrap();
+        let failed = crate::rooms::operations::mark_uncertain(
+            &fixture.store,
+            &fixture.room.id,
+            "peer-a",
+            "task-a",
+            "GitHub rate limit exceeded",
+        )
+        .unwrap();
+        assert_eq!(failed.claims[0].state, "uncertain");
+        assert!(!failed.participants[0].paused);
+        assert_eq!(failed.participants[0].state, before.participants[0].state);
+        assert_eq!(
+            serde_json::to_value(&failed.participants[0].pending_delivery).unwrap(),
+            serde_json::to_value(&before.participants[0].pending_delivery).unwrap()
+        );
+        assert!(crate::rooms::operations::active_peer(&failed, "peer-a").is_ok());
+        assert!(plan(&failed, &failed.participants[0], fixture.now()).is_none());
+        // Even after the board refreshes, an uncertain claim stays exclusive.
+        fixture
+            .store
+            .update(&fixture.room.id, |room| {
+                room.board.error = None;
+                room.board.synced_at = Some(crate::models::now_iso());
+                Ok(())
+            })
+            .unwrap();
+        assert!(fixture
+            .store
+            .reserve_claim(&fixture.room.id, "peer-b", "task-a")
+            .is_err());
+        fixture
+            .store
+            .update(&fixture.room.id, |room| {
+                super::apply_event_state(
+                    &mut room.participants[0],
+                    "run_state",
+                    &serde_json::json!({"state":"completed"}),
+                    None,
+                );
+                Ok(())
+            })
+            .unwrap();
+        let addressed = fixture
+            .store
+            .append_message(
+                &fixture.room.id,
+                "Human",
+                "@Codex please answer my question".into(),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        let next = plan(&addressed, &addressed.participants[0], fixture.now()).unwrap();
+        assert_eq!(next.reason, "message");
+        assert_eq!(addressed.claims[0].state, "uncertain");
+    }
+}
+
+#[test]
+fn task_write_failure_does_not_override_a_manual_pause() {
+    let fixture = Fixture::new();
+    fixture
+        .store
+        .reserve_claim(&fixture.room.id, "peer-a", "task-a")
+        .unwrap();
+    fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            room.participants[0].paused = true;
+            room.participants[0].state = "paused".into();
+            Ok(())
+        })
+        .unwrap();
+    let room = crate::rooms::operations::mark_uncertain(
+        &fixture.store,
+        &fixture.room.id,
+        "peer-a",
+        "task-a",
+        "write timed out",
+    )
+    .unwrap();
+    assert!(room.participants[0].paused);
+    assert_eq!(room.participants[0].state, "paused");
+}
+
+#[test]
+fn recover_only_legacy_finished_task_sync_waits() {
+    for (state, error, inflight, wakes) in [
+        (
+            "waiting",
+            "Task update unconfirmed: GitHub rate limited",
+            false,
+            true,
+        ),
+        (
+            "waiting",
+            "Task update unconfirmed: write timed out",
+            true,
+            false,
+        ),
+        (
+            "paused",
+            "Task update unconfirmed: GitHub rate limited",
+            false,
+            false,
+        ),
+        (
+            "waiting",
+            "Waiting for human input to resolve a permission or clarification request.",
+            false,
+            false,
+        ),
+        ("waiting", "Previous delivery was interrupted", false, false),
+    ] {
+        let fixture = Fixture::new();
+        fixture
+            .store
+            .update(&fixture.room.id, |room| {
+                let peer = &mut room.participants[0];
+                peer.paused = true;
+                peer.state = state.into();
+                peer.last_error = Some(error.into());
+                if inflight {
+                    peer.pending_delivery = Some(delivery("message", None, fixture.now()));
+                }
+                Ok(())
+            })
+            .unwrap();
+        recover(&fixture.store).unwrap();
+        let restored = fixture.store.get(&fixture.room.id).unwrap();
+        assert_eq!(restored.participants[0].paused, !wakes, "{state}: {error}");
+        if wakes {
+            assert_eq!(restored.participants[0].state, "idle");
+        }
+        assert_eq!(
+            restored.participants[0].pending_delivery.is_some(),
+            inflight
+        );
+    }
+}
+
+#[test]
+fn task_sync_warning_clears_only_after_claim_recovery() {
+    let fixture = Fixture::new();
+    fixture
+        .store
+        .reserve_claim(&fixture.room.id, "peer-a", "task-a")
+        .unwrap();
+    crate::rooms::operations::mark_uncertain(
+        &fixture.store,
+        &fixture.room.id,
+        "peer-a",
+        "task-a",
+        "write timed out",
+    )
+    .unwrap();
+    let held = fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            crate::rooms::operations::clear_task_sync_error(room, "peer-a");
+            Ok(())
+        })
+        .unwrap();
+    assert!(held.participants[0].last_error.is_some());
+    let recovered = fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            room.claims[0].state = "done".into();
+            crate::rooms::operations::clear_task_sync_error(room, "peer-a");
+            Ok(())
+        })
+        .unwrap();
+    assert!(recovered.participants[0].last_error.is_none());
+    let permission = fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            room.participants[0].last_error = Some("Permission answer needed".into());
+            crate::rooms::operations::clear_task_sync_error(room, "peer-a");
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        permission.participants[0].last_error.as_deref(),
+        Some("Permission answer needed")
+    );
+}
