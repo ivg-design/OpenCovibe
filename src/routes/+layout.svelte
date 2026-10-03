@@ -39,6 +39,7 @@
   import { filterVisibleCandidates } from "$lib/utils/memory-helpers";
   import {
     buildProjectFolders,
+    compareSidebarLabels,
     autoExpandForRun,
     expandForProjectChange,
     normalizeCwd,
@@ -2279,7 +2280,7 @@
                   <p class="text-[10px] text-muted-foreground/60">{t("sidebar_startTeamHint")}</p>
                 </div>
               {:else}
-                {#each teamStore.teams as team}
+                {#each [...teamStore.teams].sort( (a, b) => compareSidebarLabels(a.name, b.name), ) as team}
                   <button
                     class="flex w-full flex-col gap-0.5 rounded-md px-2.5 py-2 text-left transition-colors mb-0.5
                         {teamStore.selectedTeam === team.name

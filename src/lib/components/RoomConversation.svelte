@@ -708,7 +708,7 @@
         {/each}
       </div>{/if}
     <div class="room-composer-row min-w-0 items-end gap-2">
-      <label class="min-w-0 w-28 flex-none space-y-1 text-xs text-muted-foreground"
+      <label class="min-w-0 w-28 flex-none text-xs text-muted-foreground"
         ><span class="sr-only">{tr("room_target")}</span><select
           class="h-9 w-full min-w-[90px] rounded-md border bg-background px-2 text-sm text-foreground"
           bind:value={targetParticipantId}
@@ -805,11 +805,19 @@
   }
   .room-composer-row {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
   }
   .room-composer-text {
-    order: -1;
-    flex-basis: 100%;
+    flex: 1 1 auto;
+  }
+  @container room-composer (max-width: 40rem) {
+    .room-composer-row {
+      flex-wrap: wrap;
+    }
+    .room-composer-text {
+      order: -1;
+      flex-basis: 100%;
+    }
   }
   .room-composer-row > label {
     max-width: 100%;

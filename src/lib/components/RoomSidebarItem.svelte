@@ -2,6 +2,8 @@
   import type { RoomSidebarEntry } from "$lib/rooms/types";
   import { roomParticipantColorAt } from "$lib/utils/room-participant-colors";
   import { roomAgentStateLabel } from "$lib/rooms/state-label";
+  import SidebarAgentStatus from "./SidebarAgentStatus.svelte";
+  import { sidebarRoomState } from "$lib/utils/sidebar-status";
   import { t } from "$lib/i18n/index.svelte";
   let {
     room,
@@ -66,7 +68,8 @@
         /></svg
       >
       <span class="min-w-0 flex-1 truncate">{room.title}</span>
-      <span class="shrink-0 text-[10px] text-muted-foreground">{t("room_sidebarRoom")}</span>
+      <span class="sr-only">{t("room_sidebarRoom")}</span>
+      <SidebarAgentStatus state={sidebarRoomState(room)} />
       {#if room.needs_answer}<span
           class="shrink-0 rounded bg-amber-500/20 px-1 text-amber-600 dark:text-amber-400"
           title={t("room_requestsNeedYou", { count: String(room.needs_answer) })}
@@ -91,6 +94,7 @@
           ></span>
           <span class="min-w-0 flex-1 truncate">{participant.name}</span>
           <span class="shrink-0 text-[10px] text-muted-foreground">{participant.provider}</span>
+          <SidebarAgentStatus state={participant.state} />
         </button>
       {/each}
       {#if !room.participants.length}<p class="px-2 py-1 text-xs text-muted-foreground">

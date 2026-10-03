@@ -1535,6 +1535,7 @@ pub fn list_room_agent_identities(
 
 #[derive(serde::Serialize)]
 pub struct RoomSidebarEntry {
+    paused: bool,
     id: String,
     title: String,
     repo_path: String,
@@ -1574,6 +1575,7 @@ pub async fn list_room_sidebar_entries(
                     })
                     .count();
                 RoomSidebarEntry {
+                    paused: room.paused,
                     id: room.id,
                     title: room.title,
                     repo_path: room.repo_path,

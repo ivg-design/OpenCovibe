@@ -263,6 +263,7 @@ export interface CreateRoomInput {
 }
 
 export interface RoomSidebarEntry {
+  paused?: boolean;
   id: string;
   title: string;
   repo_path: string;

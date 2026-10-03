@@ -2091,5 +2091,13 @@
   "room_showRoom": "Restore to sidebar",
   "room_rename": "Rename room",
   "room_saveName": "Save name",
-  "sidebar_removeFromSidebar": "Remove from sidebar"
+  "sidebar_removeFromSidebar": "Remove from sidebar",
+  "room_stateBusy": "busy",
+  "room_stateIdle": "idle",
+  "room_statePaused": "paused",
+  "room_stateWaiting": "waiting",
+  "room_stateBlocked": "blocked",
+  "room_stateFailed": "failed",
+  "room_stateStarting": "starting",
+  "room_stateUnknown": "unknown"
 }

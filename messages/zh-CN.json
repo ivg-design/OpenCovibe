@@ -2091,5 +2091,13 @@
   "room_showRoom": "恢复到侧边栏",
   "room_rename": "重命名房间",
   "room_saveName": "保存名称",
-  "sidebar_removeFromSidebar": "从侧边栏移除"
+  "sidebar_removeFromSidebar": "从侧边栏移除",
+  "room_stateBusy": "忙碌",
+  "room_stateIdle": "空闲",
+  "room_statePaused": "已暂停",
+  "room_stateWaiting": "等待",
+  "room_stateBlocked": "受阻",
+  "room_stateFailed": "失败",
+  "room_stateStarting": "启动中",
+  "room_stateUnknown": "未知"
 }

@@ -3,7 +3,7 @@
   import type { ConversationGroup } from "$lib/utils/sidebar-groups";
   import { TERMINAL_PHASES, canResumeNow } from "$lib/stores";
   import { getNoSessionPersistence } from "$lib/stores/agent-settings-cache.svelte";
-  import StatusBadge from "./StatusBadge.svelte";
+  import SidebarAgentStatus from "./SidebarAgentStatus.svelte";
   import { relativeTime } from "$lib/utils/format";
   import { PLATFORM_PRESETS } from "$lib/utils/platform-presets";
   import { t } from "$lib/i18n/index.svelte";
@@ -225,7 +225,7 @@
           >
         </button>
       {/if}
-      <StatusBadge status={displayStatus} attention={needsAttention} class="shrink-0" />
+      <SidebarAgentStatus state={displayStatus} attention={needsAttention} />
     </div>
   </div>
   <div class="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">

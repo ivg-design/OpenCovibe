@@ -44,12 +44,12 @@ async function refreshRoomParticipants() {
   }
 }
 
-/** Share one low-frequency room poll across all sidebar conversation rows. */
+/** Share one room status poll across all sidebar conversation rows. */
 export function retainRoomSidebarParticipants(): () => void {
   references++;
   if (references === 1) {
     void refreshRoomParticipants();
-    timer = setInterval(() => void refreshRoomParticipants(), 15_000);
+    timer = setInterval(() => void refreshRoomParticipants(), 5_000);
     window.addEventListener("ocv:room-changed", refreshRoomParticipants);
     window.addEventListener(roomVisibilityEvent, visibilityChanged);
   }

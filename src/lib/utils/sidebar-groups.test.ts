@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { TaskRun } from "$lib/types";
 import {
   buildProjectFolders,
+  projectSidebarEntries,
   autoExpandForRun,
   expandForProjectChange,
   normalizeCwd,
@@ -157,24 +158,26 @@ describe("buildProjectFolders", () => {
     expect(folders[0].conversations[0].isFavorite).toBe(true);
   });
 
-  it("sort_order_newest_first", () => {
+  it("sorts_conversations_by_title_instead_of_latest_activity", () => {
     const runs = [
       makeRun({
         id: "r1",
         session_id: "s1",
         started_at: "2024-01-01T00:00:00Z",
         last_activity_at: "2024-01-01T00:00:00Z",
+        name: "Alpha",
       }),
       makeRun({
         id: "r2",
         session_id: "s2",
         started_at: "2024-06-01T00:00:00Z",
         last_activity_at: "2024-06-01T00:00:00Z",
+        name: "Zulu",
       }),
     ];
     const folders = buildProjectFolders(runs, NO_FAVS, NO_PINS);
-    expect(folders[0].conversations[0].groupKey).toBe("s:s2");
-    expect(folders[0].conversations[1].groupKey).toBe("s:s1");
+    expect(folders[0].conversations[0].groupKey).toBe("s:s1");
+    expect(folders[0].conversations[1].groupKey).toBe("s:s2");
   });
 
   it("title_prefers_latest_name", () => {
@@ -428,6 +431,86 @@ describe("room hierarchy in project folders", () => {
     expect(folders[0].conversations).toEqual([]);
     expect(folders[0].rooms).toEqual([room]);
     expect(folders[0].conversationCount).toBe(1);
+  });
+  it("keeps every hierarchy level alphabetical across activity updates and reordered polls", () => {
+    const peers = [
+      {
+        ...room.participants[0],
+        participant_id: "z",
+        run_id: "peer-z",
+        name: "Zulu",
+        color_index: 2,
+      },
+      {
+        ...room.participants[0],
+        participant_id: "a",
+        run_id: "peer-a",
+        name: "alpha",
+        color_index: 0,
+      },
+    ];
+    const rooms = [
+      { ...room, id: "r10", title: "Room 10", repo_path: "/z/alpha", participants: peers },
+      { ...room, id: "r2", title: "room 2", repo_path: "/z/alpha", participants: [] },
+    ];
+    const runs = [
+      makeRun({
+        id: "z-project",
+        cwd: "/a/Zulu",
+        name: "New activity",
+        last_activity_at: "2030-01-01",
+      }),
+      makeRun({ id: "z-chat", cwd: "/z/alpha", name: "Zulu", last_activity_at: "2030-01-01" }),
+      makeRun({ id: "a-chat", cwd: "/z/alpha", name: "Alpha", last_activity_at: "2020-01-01" }),
+      makeRun({ id: "a-tie", cwd: "/z/alpha", name: "Alpha", last_activity_at: "2021-01-01" }),
+    ];
+    const snapshot = (folders: ReturnType<typeof buildProjectFolders>) =>
+      folders.map((folder) => ({
+        cwd: folder.cwd,
+        conversations: folder.conversations.map((conversation) => conversation.groupKey),
+        rooms: folder.rooms?.map((entry) => ({
+          id: entry.id,
+          participants: entry.participants.map((peer) => [peer.name, peer.color_index]),
+        })),
+      }));
+    const before = buildProjectFolders(runs, NO_FAVS, NO_PINS, [], rooms);
+    const after = buildProjectFolders(
+      [...runs]
+        .reverse()
+        .map((run) => ({ ...run, last_activity_at: "2040-01-01", status: "running" as const })),
+      NO_FAVS,
+      NO_PINS,
+      [],
+      [...rooms].reverse().map((entry) => ({
+        ...entry,
+        updated_at: "2040-01-01",
+        participants: [...entry.participants].reverse(),
+      })),
+    );
+    expect(snapshot(after)).toEqual(snapshot(before));
+    expect(before.map((folder) => folder.cwd)).toEqual(["/z/alpha", "/a/Zulu"]);
+    expect(before[0].conversations.map((conversation) => conversation.latestRun.id)).toEqual([
+      "a-chat",
+      "a-tie",
+      "z-chat",
+    ]);
+    expect(before[0].rooms?.map((entry) => entry.id)).toEqual(["r2", "r10"]);
+    expect(projectSidebarEntries(before[0]).map((entry) => entry.title)).toEqual([
+      "Alpha",
+      "Alpha",
+      "room 2",
+      "Room 10",
+      "Zulu",
+    ]);
+    expect(projectSidebarEntries(after[0]).map((entry) => entry.key)).toEqual(
+      projectSidebarEntries(before[0]).map((entry) => entry.key),
+    );
+    expect(before[0].rooms?.[1].participants.map((peer) => [peer.name, peer.color_index])).toEqual([
+      ["alpha", 0],
+      ["Zulu", 2],
+    ]);
+    expect(peers.map((peer) => peer.name)).toEqual(["Zulu", "alpha"]);
+    expect(before[0].latestActivityAt).toBe("2030-01-01");
   });
   it("keeps two rooms in the same repo distinct", () => {
     const folders = buildProjectFolders(

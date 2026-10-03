@@ -7,6 +7,7 @@
 
 import type { RoomSidebarEntry } from "$lib/rooms/types";
 import type { TaskRun } from "$lib/types";
+import { cwdDisplayLabel } from "$lib/utils/format";
 import { roomChatTitle } from "$lib/utils/room-presentation";
 
 // ── Public types ──
@@ -30,6 +31,24 @@ export interface ProjectFolder {
   latestActivityAt: string; // last_activity_at ?? started_at (safe)
 }
 
+/** Rooms and direct conversations share one alphabetical sibling list. */
+export function projectSidebarEntries(folder: ProjectFolder) {
+  return [
+    ...(folder.rooms ?? []).map((room) => ({
+      kind: "room" as const,
+      key: `room:${room.id}`,
+      title: room.title,
+      room,
+    })),
+    ...folder.conversations.map((conversation) => ({
+      kind: "conversation" as const,
+      key: conversation.groupKey,
+      title: conversation.title,
+      conversation,
+    })),
+  ].sort((a, b) => compareSidebarLabels(a.title, b.title) || compareSidebarLabels(a.key, b.key));
+}
+
 // ── normalizeCwd ──
 
 /** Normalize cwd: unify separators + strip trailing + uppercase drive; empty/"/"/"\" → "" */
@@ -50,7 +69,13 @@ export function normalizeCwd(cwd: string | undefined): string {
   return s.replace(/\/+$/, "");
 }
 
-// ── Sort key helper ──
+// Compare visible labels without activity timestamps; numeric names sort naturally.
+const sidebarCollator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
+export function compareSidebarLabels(a: string, b: string): number {
+  return sidebarCollator.compare(a, b) || (a < b ? -1 : a > b ? 1 : 0);
+}
+
+// ── Activity metadata helper ──
 
 function sortKey(run: TaskRun): string {
   return run.last_activity_at ?? run.started_at;
@@ -174,18 +199,29 @@ export function buildProjectFolders(
       });
     }
 
-    // Sort conversations by latest activity desc
-    conversations.sort((a, b) => sortKey(b.latestRun).localeCompare(sortKey(a.latestRun)));
+    // Stable alphabetical positions even while messages and statuses refresh.
+    conversations.sort(
+      (a, b) =>
+        compareSidebarLabels(a.title, b.title) || compareSidebarLabels(a.groupKey, b.groupKey),
+    );
 
     const folderRooms = rooms
       .filter((room) => normalizeCwd(room.repo_path) === cwd)
-      .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+      .map((room) => ({
+        ...room,
+        participants: [...room.participants].sort(
+          (a, b) =>
+            compareSidebarLabels(a.name, b.name) ||
+            compareSidebarLabels(a.participant_id, b.participant_id),
+        ),
+      }))
+      .sort((a, b) => compareSidebarLabels(a.title, b.title) || compareSidebarLabels(a.id, b.id));
     const standaloneConversations = conversations.filter(
       (conv) => !conv.runs.some((run) => roomForRun.has(run.id)),
     );
     const latestActivityAt =
       [
-        conversations.length > 0 ? sortKey(conversations[0].latestRun) : "",
+        ...conversations.map((conversation) => sortKey(conversation.latestRun)),
         ...folderRooms.map((room) => room.updated_at),
       ]
         .sort()
@@ -202,11 +238,14 @@ export function buildProjectFolders(
     });
   }
 
-  // 7. Sort: normal projects by latestActivityAt desc, Uncategorized always last
+  // 7. Sort by the displayed project name, with paths breaking duplicate-name ties.
   folders.sort((a, b) => {
     if (a.isUncategorized && !b.isUncategorized) return 1;
     if (!a.isUncategorized && b.isUncategorized) return -1;
-    return b.latestActivityAt.localeCompare(a.latestActivityAt);
+    return (
+      compareSidebarLabels(cwdDisplayLabel(a.cwd), cwdDisplayLabel(b.cwd)) ||
+      compareSidebarLabels(a.folderKey, b.folderKey)
+    );
   });
 
   return folders;
