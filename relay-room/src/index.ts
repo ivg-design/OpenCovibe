@@ -96,14 +96,27 @@ export class Broker implements DurableObject {
     const state = q.get("state") ?? "", challenge = q.get("code_challenge") ?? "", scope = q.get("scope") ?? SCOPES.join(" ");
     if (q.get("response_type") !== "code" || q.get("code_challenge_method") !== "S256" || !/^[A-Za-z0-9_-]{43}$/.test(challenge) || q.get("resource") !== this.requiredResource(req) || !validScope(scope) || state.length > 1024) return redirectWith(redirect, { error: "invalid_request", state });
     const id = "r_" + random(18), code = await this.consentCode(id), codeHash = await sha256(code);
-    if ((this.first<{ n: number }>("SELECT COUNT(*) n FROM pending WHERE status='pending' AND expires>?", now())?.n ?? 0) >= 20 || (this.first<{ n: number }>("SELECT COUNT(*) n FROM pending WHERE client=? AND status='pending' AND expires>?", client.id, now())?.n ?? 0) >= 3) return page("Approvals busy", "<h1>Too many pending approvals</h1>", 429);
-    this.sql.exec("INSERT INTO pending VALUES (?,?,?,?,?,?,?,?,0,0,'pending',?)", id, client.id, redirect, challenge, state, scope, this.requiredResource(req), now() + CONSENT_AGE, codeHash);
-    return page("Approve room access", `<h1>${htmlEscape(client.name)} requests room access</h1><p>Check this request in OpenCovibe on your Mac. Enter its one-time code here to approve access.</p><p><small>Access: ${htmlEscape(scope)}<br>Redirect: ${htmlEscape(redirect)}<br>Expires in 10 minutes</small></p><form action="/consent" method="post"><input type="hidden" name="id" value="${id}"><label>Code from your Mac<input name="code" inputmode="numeric" pattern="[0-9]{8}" maxlength="8" required></label><button>Approve connection</button></form>`);
+    const pending = this.ctx.storage.transactionSync(() => {
+      // Reloading this exact OAuth attempt must preserve its code and expiry.
+      const existing = this.first<Pending>("SELECT * FROM pending WHERE client=? AND redirect=? AND challenge=? AND state=? AND scope=? AND resource=? AND status='pending' AND expires>? ORDER BY expires DESC,id DESC LIMIT 1", client.id, redirect, challenge, state, scope, this.requiredResource(req), now());
+      if (existing) return existing;
+      if ((this.first<{ n: number }>("SELECT COUNT(*) n FROM pending WHERE status='pending' AND expires>?", now())?.n ?? 0) >= 20 || (this.first<{ n: number }>("SELECT COUNT(*) n FROM pending WHERE client=? AND status='pending' AND expires>?", client.id, now())?.n ?? 0) >= 3) return null;
+      this.sql.exec("INSERT INTO pending VALUES (?,?,?,?,?,?,?,?,0,0,'pending',?)", id, client.id, redirect, challenge, state, scope, this.requiredResource(req), now() + CONSENT_AGE, codeHash);
+      return this.first<Pending>("SELECT * FROM pending WHERE id=?", id);
+    });
+    if (!pending) return page("Approvals busy", "<h1>Too many pending approvals</h1>", 429);
+    if (pending.attempts >= 5) return page("Request locked", "<h1>Too many attempts</h1><p>Start a new connection from ChatGPT.</p>", 429);
+    return this.approvalPage(client.name, pending);
+  }
+
+  private approvalPage(clientName: string, pending: Pending, incorrect = false): Response {
+    const reference = pending.id.slice(-8).toUpperCase();
+    return page("Approve room access", `<h1>${htmlEscape(clientName)} requests room access</h1><p>Check this request in OpenCovibe on your Mac. Use the code for request <strong>${reference}</strong>.</p><p><small>Access: ${htmlEscape(pending.scope)}<br>Redirect: ${htmlEscape(pending.redirect)}<br>Expires in ${Math.max(1, Math.ceil((pending.expires - now()) / 60))} minutes</small></p>${incorrect ? '<p role="alert">The code is incorrect. Check the request number above before trying again.</p>' : ''}<form action="/consent" method="post"><input type="hidden" name="id" value="${pending.id}"><label>Code from your Mac<input name="code" inputmode="numeric" pattern="[0-9]{8}" maxlength="8" required></label><button>Approve connection</button></form>`, incorrect ? 403 : 200);
   }
 
   private async pending(): Promise<Response> {
     const rows = this.sql.exec("SELECT p.*,c.name client_name FROM pending p JOIN clients c ON c.id=p.client WHERE p.status='pending' AND p.expires>? ORDER BY p.expires LIMIT 20", now()).toArray() as (Pending & { client_name: string })[];
-    return json(200, { pending: await Promise.all(rows.map(async p => ({ id: p.id, client_name: p.client_name, redirect_uri: p.redirect, resource: p.resource, scope: p.scope, expires_at: p.expires, owner_approved: !!p.approved, code: await this.consentCode(p.id) }))) });
+    return json(200, { pending: await Promise.all(rows.map(async p => ({ id: p.id, request_reference: p.id.slice(-8).toUpperCase(), client_name: p.client_name, redirect_uri: p.redirect, resource: p.resource, scope: p.scope, expires_at: p.expires, owner_approved: !!p.approved, code: await this.consentCode(p.id) }))) });
   }
   private async approve(req: Request): Promise<Response> {
     const raw = await this.parseBody(req, 1024);
@@ -139,7 +152,7 @@ export class Broker implements DurableObject {
     if (p.attempts >= 5) return page("Request locked", "<h1>Too many attempts</h1>", 429);
     this.sql.exec("UPDATE pending SET attempts=attempts+1 WHERE id=? AND attempts<5 AND status='pending' AND expires>?", id, now());
     if ((this.first<{ n: number }>("SELECT changes() n")?.n ?? 0) !== 1) return page("Request locked", "<h1>Too many attempts</h1>", 429);
-    if (!/^[0-9]{8}$/.test(code) || !equal(await sha256(code), p.code_hash)) return page("Approval unavailable", "<h1>The code is incorrect</h1><p>Return to the original connection page and check the code shown on your Mac.</p>", 403);
+    if (!/^[0-9]{8}$/.test(code) || !equal(await sha256(code), p.code_hash)) return this.approvalPage(this.first<Client>("SELECT * FROM clients WHERE id=?", p.client)!.name, p, true);
     return this.finishConsent(p);
   }
 

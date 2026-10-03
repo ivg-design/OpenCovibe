@@ -124,7 +124,7 @@ def main():
     if args.pending:
         for pending in relay.remote("/bridge/pending").get("pending", []):
             safe = {k: ''.join(c for c in str(v) if c.isprintable()) for k, v in pending.items()}
-            print(f"{safe['client_name']} requests room access\nRedirect: {safe['redirect_uri']}\nScope: {safe['scope']}\nOne-time owner code: {safe['code']}\nExpires: {safe['expires_at']}")
+            print(f"{safe['client_name']} requests room access\nRequest: {safe.get('request_reference', safe['id'][-8:].upper())}\nRedirect: {safe['redirect_uri']}\nScope: {safe['scope']}\nOne-time owner code: {safe['code']}\nExpires: {safe['expires_at']}")
         record = private_json(journal) if journal.exists() else {}
         unknown = [r for r in relay.remote("/bridge/leased").get("requests", []) if r.get("key") != record.get("key")]
         if unknown:

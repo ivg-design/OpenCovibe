@@ -48,8 +48,20 @@ it("requires Mac-only consent, exact PKCE and audience, rotates refresh and burn
   const { pending } = await (await mac("/bridge/pending")).json() as { pending: { id: string; code: string }[] };
   expect(pending).toHaveLength(1);
   expect(pending[0].code).toMatch(/^[0-9]{8}$/);
-  const wrong = await fetch("/consent", { method: "POST", body: new URLSearchParams({ id: pending[0].id, code: "00000000" }) });
+  for (let i = 0; i < 6; i++) {
+    const reload = await fetch("/authorize?" + q);
+    expect(reload.status).toBe(200);
+    expect(await reload.text()).toContain(pending[0].id.slice(-8).toUpperCase());
+  }
+  const reloaded = await (await mac("/bridge/pending")).json();
+  expect(reloaded).toEqual({ pending });
+  const wrongCode = pending[0].code === "00000000" ? "11111111" : "00000000";
+  const wrong = await fetch("/consent", { method: "POST", body: new URLSearchParams({ id: pending[0].id, code: wrongCode }) });
   expect(wrong.status).toBe(403);
+  const incorrectPage = await wrong.text();
+  expect(incorrectPage).toContain(pending[0].id.slice(-8).toUpperCase());
+  expect(incorrectPage).toContain('<form action="/consent"');
+  expect((await fetch("/authorize?" + q)).status).toBe(200);
   const consent = await fetch("/consent", { method: "POST", body: new URLSearchParams({ id: pending[0].id, code: pending[0].code }), redirect: "manual" });
   expect(consent.status).toBe(302);
   const code = new URL(consent.headers.get("location")!).searchParams.get("code")!;
@@ -66,6 +78,24 @@ it("requires Mac-only consent, exact PKCE and audience, rotates refresh and burn
   expect(rotated.status).toBe(200);
   expect((await fetch("/token", { method: "POST", body: new URLSearchParams(refresh) })).status).toBe(400);
   expect((await fetch("/mcp", { method: "POST", headers: { authorization: "Bearer " + tokens.access_token }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }) })).status).toBe(401);
+});
+
+it("keeps separate OAuth attempts distinct and preserves lockout across reloads", async () => {
+  const { fetch, mac } = testRelay();
+  const registration = await fetch("/register", { method: "POST", body: JSON.stringify({ client_name: "BidBot", redirect_uris: ["https://client.example/callback"] }) });
+  const { client_id } = await registration.json() as { client_id: string };
+  const q = new URLSearchParams({ client_id, redirect_uri: "https://client.example/callback", response_type: "code", code_challenge: challenge, code_challenge_method: "S256", resource: origin + "/mcp", state: "first" });
+  await fetch("/authorize?" + q);
+  const { pending } = await (await mac("/bridge/pending")).json() as { pending: { id: string; code: string }[] };
+  const wrongCode = pending[0].code === "00000000" ? "11111111" : "00000000";
+  for (let i = 0; i < 5; i++) expect((await fetch("/consent", { method: "POST", body: new URLSearchParams({ id: pending[0].id, code: wrongCode }) })).status).toBe(403);
+  expect((await fetch("/authorize?" + q)).status).toBe(429);
+  expect((await fetch("/consent", { method: "POST", body: new URLSearchParams({ id: pending[0].id, code: pending[0].code }) })).status).toBe(429);
+  q.set("state", "second");
+  expect((await fetch("/authorize?" + q)).status).toBe(200);
+  const remaining = await (await mac("/bridge/pending")).json() as { pending: { id: string }[] };
+  expect(remaining.pending).toHaveLength(2);
+  expect(new Set(remaining.pending.map(p => p.id)).size).toBe(2);
 });
 
 it("leases once, accepts an exact response retry, and reuses the recorded RPC result", async () => {
