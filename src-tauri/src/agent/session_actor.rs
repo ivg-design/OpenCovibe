@@ -337,6 +337,7 @@ struct SessionActor {
     codex_startup: Vec<Value>,
     /// Codex thread/started seen — gates turn dispatch until the thread is open.
     codex_ready: bool,
+    codex_startup_error: Option<String>,
     /// Live per-turn Codex overrides (model/effort/approval/sandbox) set via control subtypes
     /// without respawning. Injected into each `turn/start`. Ignored for Claude.
     codex_overrides: CodexTurnOverrides,
@@ -453,6 +454,7 @@ pub fn spawn_actor(
         codex,
         codex_startup,
         codex_ready: false,
+        codex_startup_error: None,
         codex_overrides: CodexTurnOverrides::default(),
         state: String::new(),
         stdin: Some(stdin),
@@ -737,6 +739,10 @@ impl SessionActor {
         skills: Vec<CodexSkillRef>,
         reply: oneshot::Sender<Result<(), String>>,
     ) {
+        if let Some(error) = &self.codex_startup_error {
+            let _ = reply.send(Err(error.clone()));
+            return;
+        }
         if self.terminated {
             let _ = reply.send(Err("Session terminated".to_string()));
             return;
@@ -2136,6 +2142,17 @@ impl SessionActor {
         );
 
         let parsed = self.codex.as_mut().unwrap().parse_line(&self.run_id, text);
+        if let Some(error) = parsed.startup_error {
+            self.codex_startup_error = Some(error.clone());
+            self.fail_all_pending_replies(&error);
+            self.emit_state("failed", None, Some(error.clone()), false);
+            let _ = crate::storage::runs::with_meta(&self.run_id, |meta| {
+                meta.status = RunStatus::Failed;
+                meta.error_message = Some(error);
+                Ok(())
+            });
+            return;
+        }
 
         // Parser-generated requests (currently spawned-thread identity reads) must be written
         // before processing later notifications that can depend on their metadata.

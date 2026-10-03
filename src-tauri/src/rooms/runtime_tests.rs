@@ -2328,3 +2328,52 @@ fn live_rav_room_catches_up_past_oversized_tools_without_duplicate_messages() {
         started.elapsed()
     );
 }
+
+#[test]
+fn unpausing_an_agent_does_not_drop_messages_queued_in_a_paused_room() {
+    let fixture = Fixture::new();
+    fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            room.paused = true;
+            room.participants[0].paused = true;
+            Ok(())
+        })
+        .unwrap();
+    let queued = fixture
+        .store
+        .append_message(
+            &fixture.room.id,
+            "Human",
+            "Investigate the reconnect delay".into(),
+            None,
+            Some("peer-a".into()),
+            None,
+        )
+        .unwrap();
+    let message_id = queued.messages.last().unwrap().id.clone();
+    let agent_resumed = fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            room.participants[0].paused = false;
+            room.participants[0].state = "idle".into();
+            Ok(())
+        })
+        .unwrap();
+    assert!(plan(
+        &agent_resumed,
+        &agent_resumed.participants[0],
+        fixture.now()
+    )
+    .is_none());
+    let room_resumed = fixture
+        .store
+        .update(&fixture.room.id, |room| {
+            room.paused = false;
+            Ok(())
+        })
+        .unwrap();
+    let delivery = plan(&room_resumed, &room_resumed.participants[0], fixture.now()).unwrap();
+    assert_eq!(delivery.reason, "message");
+    assert_eq!(delivery.message_id.as_deref(), Some(message_id.as_str()));
+}

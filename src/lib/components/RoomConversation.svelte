@@ -32,6 +32,7 @@
     attachmentDrafts = $bindable<RoomAttachment[]>([]),
     onBranch,
     onParticipantAction,
+    onResumeRoom,
     submitMessage,
   }: {
     selected: Room;
@@ -42,6 +43,7 @@
     activeSidechatId?: string;
     attachmentDrafts?: RoomAttachment[];
     onParticipantAction: (action: string, participant: RoomParticipant) => void;
+    onResumeRoom: () => void;
     onBranch: (sourceMessageId: string, title: string, participantIds: string[]) => Promise<void>;
     submitMessage: (event: SubmitEvent) => Promise<void>;
   } = $props();
@@ -476,10 +478,16 @@
           >
         </div>
       {/each}
-      {#if selected.paused}<p class="w-full text-xs text-muted-foreground">
-          {tr("room_chatPausedCompact")}
-        </p>{/if}
     </div>
+    {#each visibleParticipants.filter((participant) => participant.last_error) as participant (participant.id)}
+      <p
+        class="mb-2 shrink-0 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-foreground"
+        role="alert"
+      >
+        <strong>{participant.name}:</strong>
+        {participant.last_error}
+      </p>
+    {/each}
     {#if sourceMessage}<aside class="mb-2 shrink-0 rounded-md border bg-muted/30 p-3 text-xs">
         <p class="font-medium">{tr("room_branchedFrom", { name: sourceMessage.sender })}</p>
         <p class="mt-1 line-clamp-3 whitespace-pre-wrap text-muted-foreground">
@@ -651,6 +659,15 @@
     ondragover={(event) => event.preventDefault()}
     ondrop={onComposerDrop}
   >
+    {#if selected.paused}<div
+        class="mb-2 flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-md border border-primary/60 bg-primary/10 px-3 py-2"
+        role="status"
+      >
+        <p class="min-w-0 flex-1 text-xs text-foreground">{tr("room_chatPausedCompact")}</p>
+        <Button type="button" size="sm" disabled={actionsDisabled} onclick={onResumeRoom}
+          >{tr("room_resume")}</Button
+        >
+      </div>{/if}
     {#if attachmentDrafts.length}<div
         class="mb-2 flex min-w-0 flex-wrap gap-1.5"
         aria-label={tr("room_attachments")}
@@ -764,9 +781,10 @@
           actionsDisabled ||
           attachmentBusy}
         loading={busyAction === "message"}
-        ><span class="sr-only">{tr("room_sendMessage")}</span><span
-          class="room-send-label"
-          aria-hidden="true">{tr("room_sendMessage")}</span
+        ><span class="sr-only"
+          >{tr(selected.paused ? "room_queueMessage" : "room_sendMessage")}</span
+        ><span class="room-send-label" aria-hidden="true"
+          >{tr(selected.paused ? "room_queueMessage" : "room_sendMessage")}</span
         ><svg
           class="room-send-icon h-4 w-4"
           viewBox="0 0 24 24"

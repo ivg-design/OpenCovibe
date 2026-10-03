@@ -488,7 +488,11 @@ impl CodexAppServer {
     /// Frame `thread/fork` — fork the current thread into a new one. Response carries the new
     /// thread at `result.thread.id`.
     pub fn frame_fork(&mut self, request_id: &str) -> Vec<Value> {
-        self.frame_tracked(request_id, "thread/fork", json!({}))
+        self.frame_tracked(
+            request_id,
+            "thread/fork",
+            json!({ "excludeTurns": true, "deferGoalContinuation": true }),
+        )
     }
 
     /// Frame `thread/goal/set` — set/update the thread goal. Only the provided fields are sent.
@@ -606,18 +610,25 @@ impl SessionProtocol for CodexAppServer {
                     "name": "opencovibe",
                     "version": env!("CARGO_PKG_VERSION"),
                     "title": "OpenCovibe"
-                }
+                },
+                "capabilities": { "experimentalApi": true }
             }
         });
 
         let open = if let Some(tid) = &ctx.resume_thread_id {
             // Resume: the thread id is already known; readiness comes from the id:2 ack.
             self.thread_id = Some(tid.clone());
+            let mut params = json!({ "threadId": tid, "excludeTurns": true });
+            if !ctx.cwd.is_empty() {
+                params["cwd"] = json!(ctx.cwd);
+            }
+            // The UI already owns a paged history projection. Hydrating every saved turn
+            // here stalls large desktop threads before their first room delivery.
             json!({
                 "jsonrpc": "2.0",
                 "id": 2,
                 "method": "thread/resume",
-                "params": { "threadId": tid }
+                "params": params
             })
         } else {
             let mut params = serde_json::Map::new();
@@ -870,6 +881,20 @@ impl SessionProtocol for CodexAppServer {
         // thread/start|resume ack. It carries `result.thread.id` for new threads — capture it
         // here so `thread_id` is set BEFORE we mark Ready (otherwise frame_user_turn fires with
         // no thread id and silently drops the first turn). thread/started also sets Ready.
+        if matches!(msg.get("id").and_then(Value::as_i64), Some(1 | 2)) {
+            if let Some(error) = msg.get("error") {
+                let message = error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("startup rejected");
+                out.startup_error = Some(if message.contains("active writer") {
+                    "This conversation is still open in another Codex session. Release that session or continue from a copy; no room message was sent.".into()
+                } else {
+                    format!("Codex could not open this conversation: {message}")
+                });
+                return out;
+            }
+        }
         if msg.get("id").and_then(|v| v.as_i64()) == Some(2) && msg.get("error").is_none() {
             if self.thread_id.is_none() {
                 if let Some(id) = msg
@@ -2176,6 +2201,54 @@ mod tests {
         });
         assert_eq!(msgs[1]["method"], "thread/resume");
         assert_eq!(msgs[1]["params"]["threadId"], "th-9");
+        assert_eq!(msgs[1]["params"]["excludeTurns"], true);
+        assert_eq!(msgs[0]["params"]["capabilities"]["experimentalApi"], true);
+        assert!(msgs[1]["params"].get("cwd").is_none());
+    }
+
+    #[test]
+    fn startup_resume_uses_selected_repository_without_hydrating_history() {
+        let mut s = CodexAppServer::new();
+        let msgs = s.startup_messages(&StartupCtx {
+            resume_thread_id: Some("th-imported".into()),
+            cwd: "/repos/selected-project".into(),
+            ..Default::default()
+        });
+        assert_eq!(msgs[1]["params"]["cwd"], "/repos/selected-project");
+        assert_eq!(msgs[1]["params"]["excludeTurns"], true);
+        s.parse_line(
+            "run",
+            r#"{"id":2,"result":{"thread":{"id":"th-imported","turns":[]}}}"#,
+        );
+        assert!(s.is_ready());
+        assert!(!s
+            .frame_user_turn(
+                "Continue the room request",
+                &[],
+                no_skills(),
+                &Default::default()
+            )
+            .is_empty());
+    }
+
+    #[test]
+    fn startup_rejections_surface_without_waiting_for_a_turn() {
+        for id in [1, 2] {
+            let mut s = CodexAppServer::new();
+            let out = s.parse_line("run", &format!(r#"{{"id":{id},"error":{{"code":-32600,"message":"thread already has an active writer"}}}}"#));
+            assert!(out
+                .startup_error
+                .unwrap()
+                .contains("still open in another Codex session"));
+            assert!(!s.is_ready());
+            assert!(out.lifecycle.is_none());
+        }
+        let mut s = CodexAppServer::new();
+        let out = s.parse_line("run", r#"{"id":2,"error":{"message":"thread not found"}}"#);
+        assert_eq!(
+            out.startup_error.as_deref(),
+            Some("Codex could not open this conversation: thread not found")
+        );
     }
 
     #[test]
@@ -4000,6 +4073,8 @@ mod tests {
         let fork = s.frame_fork("rf");
         assert_eq!(fork[0]["method"], "thread/fork");
         assert_eq!(fork[0]["params"]["threadId"], "th-123");
+        assert_eq!(fork[0]["params"]["excludeTurns"], true);
+        assert_eq!(fork[0]["params"]["deferGoalContinuation"], true);
 
         let gget = s.frame_goal_get("rg");
         assert_eq!(gget[0]["method"], "thread/goal/get");

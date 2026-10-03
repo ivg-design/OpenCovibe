@@ -1345,6 +1345,7 @@
                   onBranch={branchMessage}
                   {submitMessage}
                   onParticipantAction={participantAction}
+                  onResumeRoom={() => void perform("pause-room", (id) => setRoomPaused(id, false))}
                 />
               </div>
               <button
