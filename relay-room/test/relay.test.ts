@@ -35,14 +35,30 @@ it("rejects cross-room and cross-conversation requests before forwarding", () =>
   expect(guardRpc({ jsonrpc: "2.0", id: 1, method: "events/subscribe", params: { name: "ocv.reply.created", arguments: { conversation_ref: "other" }, delivery: { mode: "webhook", url: "https://example.org" } } }, room, conversation)).toHaveProperty("error", "Forbidden conversation");
 });
 
+it("allows session discovery and routing only with explicit all-session owner scope", () => {
+  const rpc = (name: string, args: object) => ({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } });
+  expect(guardRpc(rpc("ocv.list_agents", {}), "*", conversation)).toHaveProperty("request.params.arguments", {});
+  expect(guardRpc(rpc("ocv.list_agents", { room_id: room }), "*", conversation)).toHaveProperty("request.params.arguments.room_id", room);
+  expect(guardRpc(rpc("ocv.list_agents", { room_id: "../any" }), "*", conversation)).toHaveProperty("error", "Forbidden room");
+  const send = { agent_id: "session/" + room, client_message_id: "one", text: "hello" };
+  expect(guardRpc(rpc("ocv.send_message", send), "*", conversation)).toHaveProperty("request.params.arguments.conversation_ref", conversation);
+  expect(guardRpc(rpc("ocv.send_message", send), room, conversation)).toHaveProperty("error", "Forbidden agent");
+  expect(guardRpc(rpc("ocv.send_message", { ...send, conversation_ref: "other" }), "*", conversation)).toHaveProperty("error", "Forbidden conversation");
+  expect(guardRpc(rpc("ocv.send_message", { ...send, agent_id: "session/../../system" }), "*", conversation)).toHaveProperty("error", "Forbidden agent");
+});
+
 it("requires Mac-only consent, exact PKCE and audience, rotates refresh and burns replay", async () => {
   const { fetch, mac } = testRelay();
+  expect((await fetch("/.well-known/openid-configuration")).status).toBe(404);
   const registration = await fetch("/register", { method: "POST", body: JSON.stringify({ client_name: "BidBot", redirect_uris: ["https://client.example/callback"] }) });
   if (registration.status !== 201) throw new Error(await registration.text());
   expect(registration.status).toBe(201);
   const { client_id } = await registration.json() as { client_id: string };
   const q = new URLSearchParams({ client_id, redirect_uri: "https://client.example/callback", response_type: "code", code_challenge: challenge, code_challenge_method: "S256", resource: origin + "/mcp", state: "test" });
-  expect((await fetch("/authorize?" + q)).status).toBe(200);
+  const approval = await fetch("/authorize?" + q);
+  expect(approval.status).toBe(200);
+  expect(approval.headers.get("content-security-policy")).toContain("form-action 'self' https://client.example;");
+  expect(approval.headers.get("content-security-policy")).not.toContain("form-action *");
   expect((await fetch("/bridge/pending")).status).toBe(401);
   expect((await fetch("/bridge/pending", { headers: { authorization: "Bearer " + "x".repeat(48) } })).status).toBe(401);
   const { pending } = await (await mac("/bridge/pending")).json() as { pending: { id: string; code: string }[] };
@@ -59,6 +75,7 @@ it("requires Mac-only consent, exact PKCE and audience, rotates refresh and burn
   const wrong = await fetch("/consent", { method: "POST", body: new URLSearchParams({ id: pending[0].id, code: wrongCode }) });
   expect(wrong.status).toBe(403);
   const incorrectPage = await wrong.text();
+  expect(wrong.headers.get("content-security-policy")).toContain("form-action 'self' https://client.example;");
   expect(incorrectPage).toContain(pending[0].id.slice(-8).toUpperCase());
   expect(incorrectPage).toContain('<form action="/consent"');
   expect((await fetch("/authorize?" + q)).status).toBe(200);
@@ -110,7 +127,7 @@ it("leases once, accepts an exact response retry, and reuses the recorded RPC re
   const code = new URL(consent.headers.get("location")!).searchParams.get("code")!;
   const tokenResponse = await fetch("/token", { method: "POST", body: new URLSearchParams({ grant_type: "authorization_code", client_id, code, code_verifier: verifier, redirect_uri: "https://client.example/callback", resource: origin + "/mcp" }) });
   const { access_token } = await tokenResponse.json() as { access_token: string };
-  const initialize = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2026-07-28" } };
+  const initialize = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } };
   const initPending = fetch("/mcp", { method: "POST", headers: { authorization: "Bearer " + access_token }, body: JSON.stringify(initialize) });
   let initNext: { request: { key: string } | null } = { request: null };
   for (let i = 0; i < 20 && !initNext.request; i++) {
@@ -118,7 +135,7 @@ it("leases once, accepts an exact response retry, and reuses the recorded RPC re
     if (!initNext.request) await new Promise(resolve => setTimeout(resolve, 25));
   }
   expect(initNext.request).not.toBeNull();
-  expect((await mac("/bridge/respond", { method: "POST", body: JSON.stringify({ key: initNext.request!.key, response: { jsonrpc: "2.0", id: 1, result: { protocolVersion: "2026-07-28" } } }) })).status).toBe(200);
+  expect((await mac("/bridge/respond", { method: "POST", body: JSON.stringify({ key: initNext.request!.key, response: { jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-11-25" } } }) })).status).toBe(200);
   const initialized = await initPending;
   expect(initialized.status).toBe(200);
   const session = initialized.headers.get("mcp-session-id")!;
@@ -149,7 +166,7 @@ it("leases once, accepts an exact response retry, and reuses the recorded RPC re
     if (!reconnectNext.request) await new Promise(resolve => setTimeout(resolve, 25));
   }
   expect(reconnectNext.request).not.toBeNull();
-  await mac("/bridge/respond", { method: "POST", body: JSON.stringify({ key: reconnectNext.request!.key, response: { jsonrpc: "2.0", id: 1, result: { protocolVersion: "2026-07-28" } } }) });
+  await mac("/bridge/respond", { method: "POST", body: JSON.stringify({ key: reconnectNext.request!.key, response: { jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-11-25" } } }) });
   const secondSession = (await reconnect).headers.get("mcp-session-id")!;
   expect(secondSession).not.toBe(session);
   const changed = { ...rpc, params: { ...rpc.params, arguments: { ...rpc.params.arguments, text: "a new message", client_message_id: "message-2" } } };

@@ -43,7 +43,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 def request_json(url, bearer, payload=None):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     request = urllib.request.Request(url, data=None if payload is None else json.dumps(payload).encode(),
-                                     headers={"Authorization": "Bearer " + bearer, "Content-Type": "application/json", "User-Agent": "OpenCovibe-Room-Relay/0.3.4"})
+                                     headers={"Authorization": "Bearer " + bearer, "Content-Type": "application/json", "User-Agent": "OpenCovibe-Room-Relay/0.3.5"})
     try:
         with opener.open(request, timeout=25) as response:
             body = response.read(2 * 1024 * 1024 + 1)

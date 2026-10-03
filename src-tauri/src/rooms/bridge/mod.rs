@@ -1,4 +1,5 @@
 //! Private, scoped external messaging. This module never owns a provider process.
+mod direct;
 mod events;
 mod protocol;
 #[cfg(test)]
@@ -7,6 +8,13 @@ mod tests;
 pub use protocol::handler;
 pub fn start_events(store: std::sync::Arc<RoomStore>, cancel: tokio_util::sync::CancellationToken) {
     events::start(store, cancel);
+}
+pub fn start_direct(
+    store: std::sync::Arc<RoomStore>,
+    sessions: crate::agent::adapter::ActorSessionMap,
+    cancel: tokio_util::sync::CancellationToken,
+) {
+    direct::start(store, sessions, cancel);
 }
 use super::{
     models::{Message, Room},
@@ -23,6 +31,12 @@ pub struct Principal {
     pub id: String,
     pub token_sha256: String,
     pub bindings: Vec<Binding>,
+    #[serde(default)]
+    pub all_rooms: bool,
+    #[serde(default)]
+    pub all_sessions: bool,
+    #[serde(default)]
+    pub conversations: Vec<String>,
     pub callback_hosts: Vec<String>,
     pub scopes: Vec<String>,
 }
@@ -71,6 +85,9 @@ fn read_access(path: &std::path::Path) -> Result<Access, String> {
                 .bindings
                 .iter()
                 .any(|b| b.room_id.is_empty() || b.conversation_ref.is_empty())
+            || principal.conversations.iter().any(String::is_empty)
+            || ((principal.all_rooms || principal.all_sessions)
+                && principal.conversations.is_empty())
         {
             return Err("Invalid or duplicate bridge principal".into());
         }
@@ -110,6 +127,7 @@ impl Principal {
             .bindings
             .iter()
             .any(|b| b.room_id == room && b.conversation_ref == conversation)
+            || (self.all_rooms && self.conversations.iter().any(|c| c == conversation))
         {
             Ok(())
         } else {
@@ -124,7 +142,7 @@ impl Principal {
         }
     }
     fn room(&self, room: &str) -> Result<(), String> {
-        if self.bindings.iter().any(|b| b.room_id == room) {
+        if self.all_rooms || self.bindings.iter().any(|b| b.room_id == room) {
             Ok(())
         } else {
             Err("Forbidden room".into())
@@ -135,10 +153,19 @@ impl Principal {
             .bindings
             .iter()
             .any(|b| b.conversation_ref == conversation)
+            || ((self.all_rooms || self.all_sessions)
+                && self.conversations.iter().any(|c| c == conversation))
         {
             Ok(())
         } else {
             Err("Forbidden conversation".into())
+        }
+    }
+    fn session(&self, conversation: &str) -> Result<(), String> {
+        if self.all_sessions && self.conversations.iter().any(|c| c == conversation) {
+            Ok(())
+        } else {
+            Err("Forbidden session/conversation binding".into())
         }
     }
 }
@@ -163,6 +190,10 @@ fn queue_mode() -> String {
 pub struct Receipt {
     pub message_id: String,
     pub room_id: String,
+    #[serde(default = "room_target")]
+    pub target_kind: String,
+    #[serde(default)]
+    pub target_run_id: Option<String>,
     pub agent_id: String,
     pub conversation_ref: String,
     pub room_message_id: String,
@@ -176,6 +207,9 @@ pub struct Receipt {
     pub run_id: Option<String>,
     pub error: Option<String>,
     pub blocked_reason: Option<String>,
+}
+fn room_target() -> String {
+    "room".into()
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Reply {
@@ -202,6 +236,10 @@ pub(super) fn schema(conn: &Connection) -> Result<(), String> {
       seq INTEGER PRIMARY KEY AUTOINCREMENT, principal TEXT NOT NULL,
       conversation TEXT NOT NULL, event_key TEXT NOT NULL UNIQUE, payload TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS bridge_outbox_cursor ON bridge_outbox(principal,conversation,seq);
+      CREATE TABLE IF NOT EXISTS bridge_direct (
+      receipt_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, phase TEXT NOT NULL,
+      cursor INTEGER NOT NULL DEFAULT 0, offset INTEGER NOT NULL DEFAULT 0);
+      CREATE INDEX IF NOT EXISTS bridge_direct_run ON bridge_direct(run_id,phase);
       CREATE TABLE IF NOT EXISTS bridge_subscriptions (
       id TEXT PRIMARY KEY, principal TEXT NOT NULL, payload TEXT NOT NULL);",
     )
@@ -256,15 +294,21 @@ impl RoomStore {
             principal.room(id)?;
         }
         let rooms = self.list()?;
-        let agents: Vec<_> = rooms.iter().filter(|r| principal.room(&r.id).is_ok() && room_id.is_none_or(|id| id == r.id)).flat_map(|r| r.participants.iter().map(move |p| {
+        let mut agents: Vec<_> = rooms.iter().filter(|r| principal.room(&r.id).is_ok() && room_id.is_none_or(|id| id == r.id)).flat_map(|r| r.participants.iter().map(move |p| {
             let meta = crate::storage::runs::get_run(&p.run_id);
             serde_json::json!({"agent_id":format!("{}/{}",r.id,p.id),"room_id":r.id,"participant_id":p.id,"name":p.name,"provider":p.provider,"provider_thread_id":meta.as_ref().and_then(|m| m.resolved_conversation_ref()).map(|reference| match reference { crate::models::ConversationRef::ClaudeSession(id) | crate::models::ConversationRef::CodexThread(id) => id }),"run_id":p.run_id,"state":p.state,"room_paused":r.paused,"participant_paused":p.paused,"blocked_reason":blocked(r,p),"allowed_actions":if r.archived || !principal.scopes.contains(&"send".into()) { vec!["read"] } else { vec!["read","queue"] }})
         })).collect();
+        if room_id.is_none() {
+            agents.extend(direct::agents(principal, &rooms));
+        }
         Ok(serde_json::json!({"agents":agents}))
     }
     pub fn bridge_send(&self, principal: &Principal, input: &Send) -> Result<Receipt, String> {
         principal.scope("send")?;
         principal.conversation(&input.conversation_ref)?;
+        if let Some(run_id) = input.agent_id.strip_prefix("session/") {
+            return direct::send(self, principal, input, run_id);
+        }
         let (room_id, peer_id) = input.agent_id.split_once('/').ok_or("Invalid agent_id")?;
         principal.binding(room_id, &input.conversation_ref)?;
         if input.mode != "queue" {
@@ -314,8 +358,8 @@ impl RoomStore {
         }
         if let Some(reply) = &input.reply_to_message_id {
             let old: Receipt = authorized_receipt(&tx, principal, reply)?;
-            if old.conversation_ref != input.conversation_ref {
-                return Err("Reply conversation mismatch".into());
+            if old.conversation_ref != input.conversation_ref || old.room_id != room_id {
+                return Err("Reply room/conversation mismatch".into());
             }
         }
         let mut room = load_room(&tx, room_id)?;
@@ -333,6 +377,8 @@ impl RoomStore {
         let receipt = Receipt {
             message_id: id.clone(),
             room_id: room_id.into(),
+            target_kind: room_target(),
+            target_run_id: None,
             agent_id: input.agent_id.clone(),
             conversation_ref: input.conversation_ref.clone(),
             room_message_id: room_message_id.clone(),
@@ -414,7 +460,11 @@ impl RoomStore {
             let (seq, payload) = row.map_err(|e| e.to_string())?;
             let reply: Reply = decode(payload)?;
             let receipt = authorized_receipt(&conn, principal, &reply.reply_to_message_id)?;
-            principal.room(&receipt.room_id)?;
+            if receipt.target_kind == "session" {
+                principal.session(&receipt.conversation_ref)?;
+            } else {
+                principal.room(&receipt.room_id)?;
+            }
             replies.push(reply);
             next = seq;
         }
@@ -434,7 +484,11 @@ fn authorized_receipt(
         )
         .map_err(|_| "Message unavailable")?;
     let r: Receipt = decode(raw)?;
-    principal.binding(&r.room_id, &r.conversation_ref)?;
+    if r.target_kind == "session" {
+        principal.session(&r.conversation_ref)?;
+    } else {
+        principal.binding(&r.room_id, &r.conversation_ref)?;
+    }
     Ok(r)
 }
 pub(super) struct Snapshot {

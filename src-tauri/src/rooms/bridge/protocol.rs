@@ -64,9 +64,17 @@ pub(super) async fn dispatch(store: &RoomStore, principal: &Principal, request: 
         return json!({"jsonrpc":"2.0","id":id,"error":{"code":-32600,"message":"Invalid JSON-RPC request"}});
     }
     let result = match request.get("method").and_then(Value::as_str).unwrap_or("") {
-        "initialize" => Ok(
-            json!({"protocolVersion":"2026-07-28","capabilities":{"tools":{},"events":{}},"serverInfo":{"name":"OpenCovibe private room bridge","version":env!("CARGO_PKG_VERSION")}}),
-        ),
+        "initialize" => {
+            let requested = request["params"]["protocolVersion"].as_str().unwrap_or("");
+            let version = if requested == "2025-06-18" {
+                "2025-06-18"
+            } else {
+                "2025-11-25"
+            };
+            Ok(
+                json!({"protocolVersion":version,"capabilities":{"tools":{}},"serverInfo":{"name":"OpenCovibe private room bridge","version":env!("CARGO_PKG_VERSION")}}),
+            )
+        }
         "server/discover" => Ok(
             json!({"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{"tools":{},"events":{}}}),
         ),
@@ -85,7 +93,22 @@ pub(super) async fn dispatch(store: &RoomStore, principal: &Principal, request: 
         _ => Err("Unsupported method".into()),
     };
     match result {
-        Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
+        Ok(mut result) => {
+            if request["method"] != "initialize"
+                && request["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"]
+                    == "2026-07-28"
+            {
+                if let Some(object) = result.as_object_mut() {
+                    object.entry("resultType").or_insert(json!("complete"));
+                }
+            }
+            if request["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"] == "2026-07-28"
+            {
+                json!({"jsonrpc":"2.0","id":id,"result":result,"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"OpenCovibe private bridge","version":env!("CARGO_PKG_VERSION")}}})
+            } else {
+                json!({"jsonrpc":"2.0","id":id,"result":result})
+            }
+        }
         Err(error) => {
             if request["method"] == "events/subscribe"
                 && (error.starts_with("Callback")
@@ -155,9 +178,9 @@ fn call_tool(
 }
 fn tool_definitions() -> Value {
     json!([
-        {"name":"ocv.list_agents","description":"List authorized room agents and their actual scheduler state. No provider processes are started.","inputSchema":{"type":"object","properties":{"room_id":{"type":"string"}},"additionalProperties":false},"annotations":{"readOnlyHint":true}},
-        {"name":"ocv.send_message","description":"Persist one idempotent queued message through the existing owning room scheduler. Pauses, approvals, budgets and active turns remain enforced. Attachments are existing room attachment IDs. Queue only; never implicitly resumes, forks or steers.","inputSchema":{"type":"object","properties":{"agent_id":{"type":"string"},"text":{"type":"string","maxLength":32000},"client_message_id":{"type":"string","maxLength":200},"conversation_ref":{"type":"string"},"reply_to_message_id":{"type":"string"},"mode":{"enum":["queue"]},"attachments":{"type":"array","items":{"type":"string"},"maxItems":8}},"required":["agent_id","text","client_message_id","conversation_ref"],"additionalProperties":false}},
+        {"name":"ocv.list_agents","description":"List authorized room participants and standalone OCV Codex sessions. Session IDs use session/<run_id>; room participants use <room_id>/<participant_id>. No provider processes are started.","inputSchema":{"type":"object","properties":{"room_id":{"type":"string"}},"additionalProperties":false},"annotations":{"readOnlyHint":true}},
+        {"name":"ocv.send_message","description":"Persist one idempotent queued message for an authorized room participant or standalone session. Room work uses its owning scheduler; standalone work uses only an already connected, idle OCV actor. Pauses, approvals and active turns remain enforced. Attachments are existing room IDs and are unsupported for standalone sessions. Queue only; never implicitly resumes, forks or steers.","inputSchema":{"type":"object","properties":{"agent_id":{"type":"string"},"text":{"type":"string","maxLength":32000},"client_message_id":{"type":"string","maxLength":200},"conversation_ref":{"type":"string"},"reply_to_message_id":{"type":"string"},"mode":{"enum":["queue"]},"attachments":{"type":"array","items":{"type":"string"},"maxItems":8}},"required":["agent_id","text","client_message_id","conversation_ref"],"additionalProperties":false}},
         {"name":"ocv.get_message","description":"Read an authorized durable delivery receipt, including blocked or ambiguous state.","inputSchema":{"type":"object","properties":{"message_id":{"type":"string"}},"required":["message_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true}},
-        {"name":"ocv.read_replies","description":"Read durable correlated visible room replies. Hidden reasoning and raw tool output are excluded.","inputSchema":{"type":"object","properties":{"conversation_ref":{"type":"string"},"cursor":{"type":["string","integer","null"]},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["conversation_ref"],"additionalProperties":false},"annotations":{"readOnlyHint":true}}
+        {"name":"ocv.read_replies","description":"Read durable correlated visible replies from room participants or standalone sessions. Hidden reasoning and raw tool output are excluded.","inputSchema":{"type":"object","properties":{"conversation_ref":{"type":"string"},"cursor":{"type":["string","integer","null"]},"limit":{"type":"integer","minimum":1,"maximum":100}},"required":["conversation_ref"],"additionalProperties":false},"annotations":{"readOnlyHint":true}}
     ])
 }

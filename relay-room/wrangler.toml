@@ -5,7 +5,8 @@ workers_dev = true
 preview_urls = false
 
 [vars]
-ROOM_ID = "6159022b-e83d-4dcf-b80c-cdb788b0008c"
+# Explicit owner-authorized all-room and standalone-session routing.
+ROOM_ID = "*"
 CONVERSATION_REF = "dotcliffe:01a0f942-ad0f-7640-bd9b-e12d096430eb"
 
 # Required secret: wrangler secret put MAC_TOKEN_SHA256

@@ -38,7 +38,7 @@ export class Broker implements DurableObject {
     return (this.sql.exec(query, ...params).toArray()[0] as T | undefined) ?? null;
   }
   private configured(): boolean {
-    return /^[0-9a-f]{64}$/.test(this.env.MAC_TOKEN_SHA256 ?? "") && /^[0-9a-fA-F-]{36}$/.test(this.env.ROOM_ID ?? "") && !!this.env.CONVERSATION_REF;
+    return /^[0-9a-f]{64}$/.test(this.env.MAC_TOKEN_SHA256 ?? "") && (this.env.ROOM_ID === "*" || /^[0-9a-fA-F-]{36}$/.test(this.env.ROOM_ID ?? "")) && !!this.env.CONVERSATION_REF;
   }
   private async mac(req: Request): Promise<boolean> {
     const token = bearer(req);
@@ -111,7 +111,7 @@ export class Broker implements DurableObject {
 
   private approvalPage(clientName: string, pending: Pending, incorrect = false): Response {
     const reference = pending.id.slice(-8).toUpperCase();
-    return page("Approve room access", `<h1>${htmlEscape(clientName)} requests room access</h1><p>Check this request in OpenCovibe on your Mac. Use the code for request <strong>${reference}</strong>.</p><p><small>Access: ${htmlEscape(pending.scope)}<br>Redirect: ${htmlEscape(pending.redirect)}<br>Expires in ${Math.max(1, Math.ceil((pending.expires - now()) / 60))} minutes</small></p>${incorrect ? '<p role="alert">The code is incorrect. Check the request number above before trying again.</p>' : ''}<form action="/consent" method="post"><input type="hidden" name="id" value="${pending.id}"><label>Code from your Mac<input name="code" inputmode="numeric" pattern="[0-9]{8}" maxlength="8" required></label><button>Approve connection</button></form>`, incorrect ? 403 : 200);
+    return page("Approve room access", `<h1>${htmlEscape(clientName)} requests room access</h1><p>Check this request in OpenCovibe on your Mac. Use the code for request <strong>${reference}</strong>.</p><p><small>Access: ${htmlEscape(pending.scope)}<br>Redirect: ${htmlEscape(pending.redirect)}<br>Expires in ${Math.max(1, Math.ceil((pending.expires - now()) / 60))} minutes</small></p>${incorrect ? '<p role="alert">The code is incorrect. Check the request number above before trying again.</p>' : ''}<form action="/consent" method="post"><input type="hidden" name="id" value="${pending.id}"><label>Code from your Mac<input name="code" inputmode="numeric" pattern="[0-9]{8}" maxlength="8" required></label><button>Approve connection</button></form>`, incorrect ? 403 : 200, pending.redirect);
   }
 
   private async pending(): Promise<Response> {
@@ -276,9 +276,9 @@ export default {
     const cors = { "access-control-allow-origin": "*", "access-control-allow-methods": "GET, POST, OPTIONS", "access-control-allow-headers": "Authorization, Content-Type, MCP-Protocol-Version, MCP-Session-Id", "access-control-expose-headers": "MCP-Session-Id", "access-control-max-age": "600" };
     if (req.method === "OPTIONS" && ["/register", "/token", "/mcp", "/.well-known/oauth-authorization-server", "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"].includes(path)) return new Response(null, { status: 204, headers: cors });
     if (!/^[0-9a-f]{64}$/.test(env.MAC_TOKEN_SHA256 ?? "") || !env.ROOM_ID || !env.CONVERSATION_REF) return error(503, "misconfigured", "Owner relay configuration is incomplete");
-    if (path === "/" && req.method === "GET") return page("OpenCovibe private room relay", `<h1>OpenCovibe private room relay</h1><p>This private connector queues room requests for the owner's Mac. The Mac must be online and the owner must approve each OAuth connection.</p><p><small>Agent endpoint: ${htmlEscape(audience)}<br>Room access remains controlled in OpenCovibe.</small></p>`);
+    if (path === "/" && req.method === "GET") return page("OpenCovibe private room relay", `<h1>OpenCovibe private room relay</h1><p>This private connector queues OpenCovibe room and session requests for the owner's Mac. The Mac must be online and the owner must approve each OAuth connection.</p><p><small>Agent endpoint: ${htmlEscape(audience)}<br>Room access remains controlled in OpenCovibe.</small></p>`);
     if (path === "/health" && req.method === "GET") return json(200, { service: "opencovibe-private-room-relay", configured: true });
-    if ((path === "/.well-known/oauth-authorization-server" || path === "/.well-known/openid-configuration") && req.method === "GET") return json(200, metadata(origin), cors);
+    if (path === "/.well-known/oauth-authorization-server" && req.method === "GET") return json(200, metadata(origin), cors);
     if ((path === "/.well-known/oauth-protected-resource" || path === "/.well-known/oauth-protected-resource/mcp") && req.method === "GET") return json(200, { resource: audience, authorization_servers: [origin], scopes_supported: SCOPES, bearer_methods_supported: ["header"] }, cors);
     if (path === "/mcp" && req.method !== "POST") return error(405, "method_not_allowed", "POST only");
     if (!["/register", "/authorize", "/consent", "/token", "/mcp", "/bridge/pending", "/bridge/approve", "/bridge/next", "/bridge/leased", "/bridge/respond"].includes(path)) return error(404, "not_found", "Unknown route");

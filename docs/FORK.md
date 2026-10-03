@@ -40,3 +40,9 @@ See [implementation](PRIVATE_ROOM_BRIDGE_2026-10-03.md) and
 [acceptance evidence](ROOM_APPROVAL_MESSAGING_ACCEPTANCE_2026-10-03.md).
 
 Version 0.3.4 extends duplicate suppression to paraphrased automatic summaries after an explicit main-room post. It is installed and notarized. Dotcliffe independently verified BidBot replies through the existing Mac helper; direct cloud OAuth/event wake acceptance remains open.
+
+## Version 0.3.5
+
+The private Dotcliffe connection expands from one room to all owner-authorized OCV rooms and standalone Codex sessions. Imported sessions become eligible after OCV actor conversion. Messages use persistent queues and visible correlated replies, preserve provider ownership and pauses, and never implicitly start or resume a provider. Remote slash text is treated literally.
+
+The cloud OAuth callback policy is fixed, the account connection is complete, and the private coordination plugin is 0.1.1 with a registered-app mapping. Legacy MCP initialization now negotiates a compatible 2025 revision. Native source checks passed: 1,000 Rust tests, required Clippy, formatting, Svelte checks and frontend packaging; relay integration tests passed. Native 0.3.5 is installed and notarized. Dotcliffe directly discovered 13 targets and verified correlated cloud replies from a standalone Codex session and both BidBot room agents. Automatic cloud event wake remains unverified; see the October 3 acceptance report for exact receipts and limits.

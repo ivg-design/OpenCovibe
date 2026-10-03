@@ -11,6 +11,26 @@ pub(super) struct Fixture {
     pub agent: String,
     pub dir: tempfile::TempDir,
 }
+
+#[tokio::test]
+async fn bridge_uses_legacy_handshake_and_modern_discovery_separately() {
+    let f = fixture();
+    let legacy = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}});
+    assert_eq!(
+        protocol::dispatch(&f.store, &f.principal, &legacy).await["result"]["protocolVersion"],
+        "2025-06-18"
+    );
+    let newer = serde_json::json!({"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2026-07-28"}});
+    assert_eq!(
+        protocol::dispatch(&f.store, &f.principal, &newer).await["result"]["protocolVersion"],
+        "2025-11-25"
+    );
+    let modern = serde_json::json!({"jsonrpc":"2.0","id":3,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}});
+    let result = protocol::dispatch(&f.store, &f.principal, &modern).await;
+    assert_eq!(result["result"]["supportedVersions"][0], "2026-07-28");
+    assert_eq!(result["result"]["resultType"], "complete");
+    assert!(result["_meta"]["io.modelcontextprotocol/serverInfo"].is_object());
+}
 pub(super) fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(RoomStore::open(&dir.path().join("rooms.sqlite3")).unwrap());
@@ -39,6 +59,9 @@ pub(super) fn fixture() -> Fixture {
             room_id: room.id.clone(),
             conversation_ref: "fixture-conversation".into(),
         }],
+        all_rooms: false,
+        all_sessions: false,
+        conversations: vec![],
         callback_hosts: vec!["callback.example.org".into()],
         scopes: vec!["read".into(), "send".into(), "subscribe".into()],
     };
@@ -56,6 +79,42 @@ fn message(f: &Fixture, id: &str, text: &str) -> Send {
         text: text.into(),
         client_message_id: id.into(),
         conversation_ref: "fixture-conversation".into(),
+        reply_to_message_id: None,
+        mode: "queue".into(),
+        attachments: vec![],
+    }
+}
+fn add_room(f: &Fixture, title: &str) -> String {
+    let room = f
+        .store
+        .create(CreateRoomInput {
+            title: title.into(),
+            objective: "Test bridge grant".into(),
+            repo_path: f.dir.path().to_string_lossy().into(),
+            repository: "fixture/project".into(),
+            create_project: false,
+        })
+        .unwrap();
+    let peer: Participant = serde_json::from_value(serde_json::json!({
+        "id":"peer","name":"Fixture agent","provider":"codex","run_id":"fixture-run","paused":false
+    }))
+    .unwrap();
+    f.store
+        .update(&room.id, |r| {
+            r.paused = false;
+            r.auto_continue = false;
+            r.participants.push(peer);
+            Ok(())
+        })
+        .unwrap();
+    room.id
+}
+fn message_to(room: &str, conversation: &str, id: &str) -> Send {
+    Send {
+        agent_id: format!("{room}/peer"),
+        text: "fixture request".into(),
+        client_message_id: id.into(),
+        conversation_ref: conversation.into(),
         reply_to_message_id: None,
         mode: "queue".into(),
         attachments: vec![],
@@ -473,6 +532,138 @@ fn owner_access_is_private_bound_and_revocable_without_credentials_in_the_profil
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(read_access(&path).is_err());
     }
+}
+#[test]
+fn all_rooms_grant_reaches_existing_and_future_rooms_with_exact_conversation() {
+    let f = fixture();
+    let second = add_room(&f, "Existing room");
+    let mut broad = f.principal.clone();
+    broad.bindings.clear();
+    broad.all_rooms = true;
+    broad.conversations = vec!["dotcliff-session".into()];
+
+    let listed = f.store.bridge_agents(&broad, None).unwrap();
+    let agents = listed["agents"].as_array().unwrap();
+    assert!(agents.iter().any(|a| a["room_id"] == f.room));
+    assert!(agents.iter().any(|a| a["room_id"] == second));
+    let receipt = f
+        .store
+        .bridge_send(&broad, &message_to(&second, "dotcliff-session", "existing"))
+        .unwrap();
+    assert_eq!(
+        f.store
+            .bridge_get(&broad, &receipt.message_id)
+            .unwrap()
+            .room_id,
+        second
+    );
+    assert!(f
+        .store
+        .bridge_replies(&broad, "dotcliff-session", 0, 10)
+        .is_ok());
+    assert!(broad.conversation("dotcliff-session").is_ok());
+
+    let future = add_room(&f, "Future room");
+    assert_eq!(
+        f.store.bridge_agents(&broad, Some(&future)).unwrap()["agents"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(f
+        .store
+        .bridge_send(&broad, &message_to(&future, "dotcliff-session", "future"))
+        .is_ok());
+}
+
+#[test]
+fn legacy_narrow_grant_stays_isolated_and_broad_grant_preserves_pairs() {
+    let f = fixture();
+    let second = add_room(&f, "Other room");
+    let narrow = &f.principal;
+    assert_eq!(
+        f.store.bridge_agents(narrow, None).unwrap()["agents"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(f.store.bridge_agents(narrow, Some(&second)).is_err());
+    assert!(f
+        .store
+        .bridge_send(
+            narrow,
+            &message_to(&second, "fixture-conversation", "narrow")
+        )
+        .is_err());
+
+    let mut broad = narrow.clone();
+    broad.all_rooms = true;
+    broad.conversations = vec!["dotcliff-session".into()];
+    let wrong = message_to(&second, "unlisted-session", "wrong");
+    assert!(f.store.bridge_send(&broad, &wrong).is_err());
+    assert!(f
+        .store
+        .bridge_replies(&broad, "unlisted-session", 0, 10)
+        .is_err());
+    assert!(broad.conversation("unlisted-session").is_err());
+    let old_pair = f
+        .store
+        .bridge_send(
+            &broad,
+            &message_to(&f.room, "fixture-conversation", "old-pair"),
+        )
+        .unwrap();
+    let mut cross = message_to(&second, "dotcliff-session", "cross-reply");
+    cross.reply_to_message_id = Some(old_pair.message_id);
+    assert!(f
+        .store
+        .bridge_send(&broad, &cross)
+        .unwrap_err()
+        .contains("mismatch"));
+}
+
+#[test]
+fn owner_must_explicitly_configure_all_rooms_and_exact_conversations() {
+    let f = fixture();
+    let path = f.dir.path().join("broad-access.json");
+    let token = "fixture-only-token-not-a-real-credential-123456789";
+    let hash = format!("{:x}", Sha256::digest(token.as_bytes()));
+    let principal = serde_json::json!({
+        "id":"broad", "token_sha256":hash, "bindings":[],
+        "callback_hosts":[], "scopes":["read","send"]
+    });
+    let write = |p: serde_json::Value| {
+        std::fs::write(&path, serde_json::json!({"principals":[p]}).to_string()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    };
+    write(principal.clone());
+    let old = authenticate_access(read_access(&path).unwrap(), token).unwrap();
+    assert!(!old.all_rooms);
+    assert!(f.store.bridge_agents(&old, None).unwrap()["agents"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let mut incomplete = principal.clone();
+    incomplete["all_rooms"] = true.into();
+    write(incomplete.clone());
+    assert!(read_access(&path).is_err());
+    incomplete["conversations"] = serde_json::json!(["dotcliff-session"]);
+    write(incomplete);
+    let broad = authenticate_access(read_access(&path).unwrap(), token).unwrap();
+    assert!(broad.all_rooms);
+    assert_eq!(
+        f.store.bridge_agents(&broad, None).unwrap()["agents"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }
 #[test]
 fn idempotent_attachment_receipt_survives_removed_file() {

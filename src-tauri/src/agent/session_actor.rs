@@ -89,6 +89,10 @@ fn pending_kind_name(kind: PendingKind) -> &'static str {
     }
 }
 
+fn is_local_slash_command(text: &str, bridge_message_id: Option<&str>) -> bool {
+    bridge_message_id.is_none() && text.trim().starts_with('/')
+}
+
 fn ensure_control_cancel_supported(is_codex: bool) -> Result<(), String> {
     if is_codex {
         // Codex app-server has no stream-json control_cancel_request frame; emitting the Claude
@@ -253,6 +257,11 @@ pub enum ActorCommand {
         /// Codex skill picks → structured `{type:"skill"}` input items. Empty for Claude and for
         /// Codex turns with no skill selected (no behavior change).
         skills: Vec<CodexSkillRef>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    BridgeMessage {
+        text: String,
+        message_id: String,
         reply: oneshot::Sender<Result<(), String>>,
     },
     /// Two-phase control: actor writes stdin + registers waiter → returns (request_id, response_rx).
@@ -545,7 +554,10 @@ impl SessionActor {
                 cmd = cmd_rx.recv() => {
                     match cmd {
                         Some(ActorCommand::SendMessage { text, attachments, skills, reply }) => {
-                            self.handle_send_message(text, attachments, skills, reply).await;
+                            self.handle_send_message(text, attachments, skills, None, reply).await;
+                        }
+                        Some(ActorCommand::BridgeMessage { text, message_id, reply }) => {
+                            self.handle_send_message(text, Vec::new(), Vec::new(), Some(message_id), reply).await;
                         }
                         Some(ActorCommand::Stop { reply }) => {
                             let r = self.handle_stop().await;
@@ -737,6 +749,7 @@ impl SessionActor {
         text: String,
         attachments: Vec<AttachmentData>,
         skills: Vec<CodexSkillRef>,
+        bridge_message_id: Option<String>,
         reply: oneshot::Sender<Result<(), String>>,
     ) {
         if let Some(error) = &self.codex_startup_error {
@@ -760,7 +773,9 @@ impl SessionActor {
         let turn_index = self.next_turn_index;
         self.next_turn_index += 1;
 
-        let kind = if trimmed.starts_with('/') {
+        // External bridge text is always ordinary user content. A sender must not be
+        // able to invoke local slash/control commands by choosing a leading '/'.
+        let kind = if is_local_slash_command(trimmed, bridge_message_id.as_deref()) {
             UserTurnKind::Slash {
                 command: trimmed.to_string(),
             }
@@ -785,6 +800,7 @@ impl SessionActor {
             text,
             attachments,
             skills,
+            bridge_message_id,
             kind,
             turn_index,
             reply,
@@ -911,7 +927,7 @@ impl SessionActor {
             run_id: self.run_id.clone(),
             text: ticket.text.clone(),
             uuid: Some(user_uuid),
-            client_uuid: None,
+            client_uuid: ticket.bridge_message_id.clone(),
             attachments: vec![],
         });
         // New turn: drop error tracking from the last error result. The
@@ -3515,6 +3531,13 @@ mod tests {
     use std::task::{Context, Poll};
     use std::time::{Duration, Instant};
     use tokio::io::AsyncWrite;
+
+    #[test]
+    fn bridge_text_cannot_invoke_local_slash_commands() {
+        assert!(super::is_local_slash_command(" /clear", None));
+        assert!(!super::is_local_slash_command(" /clear", Some("receipt-1")));
+        assert!(!super::is_local_slash_command("/resume", Some("receipt-2")));
+    }
 
     struct FlushFailWriter(Vec<u8>);
 

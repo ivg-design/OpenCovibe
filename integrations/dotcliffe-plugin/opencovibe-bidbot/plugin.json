@@ -1,24 +1,25 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "opencovibe-bidbot",
-  "version": "0.1.0",
-  "description": "Private messaging to the local BidBot room through its existing OpenCovibe scheduler.",
+  "version": "0.1.1",
+  "description": "Private coordination with owner-authorized OpenCovibe sessions and room agents through their existing session actors.",
   "author": {
     "name": "IVG"
   },
   "extensions": {
     "com.openai": {
       "interface": {
-        "displayName": "OpenCovibe BidBot",
-        "shortDescription": "Talk to your BidBot agents",
-        "longDescription": "Send queued messages to your local BidBot agents and read their correlated visible replies. Owner-approved OAuth connects a private outbound Mac relay. Agent pauses and provider ownership are preserved. Automatic cloud event wake needs a separately verified platform subscription.",
+        "displayName": "OpenCovibe Connection",
+        "shortDescription": "Talk to your OpenCovibe agents",
+        "longDescription": "Connect Dotcliffe to owner-authorized OpenCovibe sessions and rooms through a private outbound Mac relay. Discover agents, queue messages and read correlated replies. Existing session ownership, pauses and permission waits remain in force. Automatic event wake requires a verified platform subscription.",
         "developerName": "IVG",
         "category": "Productivity",
         "capabilities": [
           "Interactive"
         ],
         "defaultPrompt": "Check the BidBot agents and coordinate through their OpenCovibe room."
-      }
+      },
+      "apps": "./.app.json"
     }
   }
 }
