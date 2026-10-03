@@ -65,6 +65,7 @@
     onExportHtml,
     onCreateRoom,
     roomExists = false,
+    roomTitle = "",
     onModelRefresh,
   }: {
     run?: TaskRun | null;
@@ -122,6 +123,7 @@
     onExportHtml?: () => void;
     onCreateRoom?: () => void;
     roomExists?: boolean;
+    roomTitle?: string;
     onModelRefresh?: () => void;
   } = $props();
 
@@ -568,7 +570,9 @@
       {#if onCreateRoom}<button
           class="flex items-center gap-1 rounded px-2 py-0.5 text-primary hover:bg-accent transition-colors"
           onclick={onCreateRoom}
-          title={t(roomExists ? "room_openRoom" : "room_fromSession")}
+          title={roomExists && roomTitle
+            ? t("room_openNamedRoom", { title: roomTitle })
+            : t(roomExists ? "room_openRoom" : "room_fromSession")}
           ><svg
             class="h-3.5 w-3.5"
             viewBox="0 0 24 24"
@@ -579,7 +583,9 @@
             ><circle cx="9" cy="7" r="4" /><path
               d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"
             /></svg
-          >{t(roomExists ? "room_openRoom" : "room_fromSession")}</button
+          >{roomExists && roomTitle
+            ? t("room_openNamedRoom", { title: roomTitle })
+            : t(roomExists ? "room_openRoom" : "room_fromSession")}</button
         >{/if}
       {#if onExportHtml}
         <button

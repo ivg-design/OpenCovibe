@@ -761,6 +761,7 @@
   type RoomRunSettingsBinding = {
     runId: string;
     room_id: string;
+    room_title: string;
     participant_id: string;
     model: string | null;
     effort: string | null;
@@ -4694,6 +4695,7 @@
             )
         : undefined}
       roomExists={!!roomRunSettings}
+      roomTitle={roomRunSettings?.room_title ?? ""}
       effort={statusBarEffort}
       onEffortChange={store.features.effortSelector && !isRoomSettingsScope
         ? handleEffortChange

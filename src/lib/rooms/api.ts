@@ -32,8 +32,11 @@ export function createRoom(input: CreateRoomInput): Promise<Room> {
   return getTransport().invoke("create_room", { input });
 }
 
-export function getRoomSessionSeed(runId: string): Promise<RoomSessionSeed> {
-  return getTransport().invoke("get_room_session_seed", { runId });
+export function getRoomSessionSeed(
+  runId: string,
+  repoPath: string | null = null,
+): Promise<RoomSessionSeed> {
+  return getTransport().invoke("get_room_session_seed", { runId, repoPath });
 }
 
 export function inspectRoomRepository(path: string): Promise<RepositoryInspection> {

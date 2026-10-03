@@ -413,6 +413,22 @@ describe("room hierarchy in project folders", () => {
     ).toHaveLength(1);
     expect(buildProjectFolders([], NO_FAVS, NO_PINS, ["/project"], [room])).toEqual([]);
   });
+  it("moves a General-folder source under its room without retaining a standalone copy", () => {
+    const folders = buildProjectFolders(
+      [
+        makeRun({ id: "room-peer", cwd: "/general", session_id: "saved-general-session" }),
+        makeRun({ id: "previous-import", cwd: "/general", session_id: "saved-general-session" }),
+      ],
+      NO_FAVS,
+      NO_PINS,
+      [],
+      [room],
+    );
+    expect(folders.map((f) => f.cwd)).toEqual(["/project"]);
+    expect(folders[0].conversations).toEqual([]);
+    expect(folders[0].rooms).toEqual([room]);
+    expect(folders[0].conversationCount).toBe(1);
+  });
   it("keeps two rooms in the same repo distinct", () => {
     const folders = buildProjectFolders(
       [],

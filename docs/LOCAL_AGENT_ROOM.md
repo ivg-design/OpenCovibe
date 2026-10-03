@@ -40,15 +40,22 @@ GitHub Project, independent peers, and a continuous shared conversation.
 10. To continue an existing conversation as a room, import its CLI session if needed, open
     the chat, and choose **Create room from session**. The original agent retains its provider
     session identity. Recent history is shared as context, with a link to the full transcript.
-    The primary Git repository is detected from its working folder. A single linked open
+    Setup shows the source title and saved working folder before creating anything. The
+    primary Git repository is detected from that folder; if it is General or another folder
+    outside Git, choose the intended repository using the folder picker. The chosen folder
+    becomes the original agent's working folder without changing its provider session or
+    transcript. After creation, its sidebar entry moves under the new room. A single linked open
     GitHub Project is selected automatically; multiple candidates require a choice. Existing
-    board fields are preserved. Add new agents, then explicitly resume when ready.
+    board fields are preserved. If this exact saved session already has a room, setup names
+    that room and offers an explicit Open action or restoration of the detached original
+    agent, paused. Setup errors stay in setup; Cancel returns to the source chat. Add new
+    agents, then explicitly resume when ready.
 11. The chat sidebar groups **project → room chat → named participants**. Select the room row for group chat or a colored participant row for its direct session. Standalone agent chats remain directly under their project. Room rows show a badge for requests needing your answer.
 12. **View source session** opens the session used to start the room, including its full preserved history. **Room settings** is a button in the room header.
 13. The sidebar **Project board** opens the selected room's board directly. Room briefings,
     automation envelopes, and generic protocol outputs render as readable summaries.
 
-Room settings → **Attach existing chat** → **Choose chat** reconnects a saved local Codex or Claude session from the same repository, including linked worktrees. Former room participants appear first and can be renamed before attachment. They return under the room sidebar row, paused, with the same provider conversation and working folder; resume explicitly when ready. A chat already owned by another room or currently running cannot be attached. Future removals retain the participant identity, model, effort and worktree settings; older removals recover the participant id/name from retained message provenance when available. No old transcript is replayed into the room, and removed timers are not recreated.
+Room settings → **Attach existing agent to room** → **Choose existing agent** reconnects an agent with a saved local Codex or Claude conversation from the same repository, including linked worktrees. Former room participants appear first and can be renamed before attachment. They return under the room sidebar row, paused, with the same provider conversation and working folder; resume explicitly when ready. An agent already owned by another room or currently running cannot be attached. Future removals retain the participant identity, model, effort and worktree settings; older removals recover the participant id/name from retained message provenance when available. No old transcript is replayed into the room, and removed timers are not recreated.
 
 The Chats/Teams switch is inherited from upstream: **Teams** displays local Claude Code teams, their tasks and inboxes. Mixed Codex/Claude rooms are managed through Rooms and do not require Teams.
 

@@ -26,9 +26,22 @@ pub struct RoomSessionSeed {
     repo_path: String,
     repository: String,
     provider: String,
+    source_cwd: String,
     existing_room_id: Option<String>,
+    existing_room: Option<SessionRoomMatch>,
     projects: Vec<RoomProject>,
     project_error: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct SessionRoomMatch {
+    id: String,
+    title: String,
+    repo_path: String,
+    repository: String,
+    source_attached: bool,
+    participant_name: String,
+    archived: bool,
 }
 
 async fn session_repository(cwd: &str) -> Result<(String, String), String> {
@@ -47,10 +60,20 @@ pub async fn inspect_room_repository(
 pub async fn get_room_session_seed(
     store: State<'_, Arc<RoomStore>>,
     run_id: String,
+    repo_path: Option<String>,
 ) -> Result<RoomSessionSeed, String> {
     let meta = storage::runs::get_run(&run_id).ok_or("Conversation not found")?;
+    room_session_seed(&store, meta, repo_path).await
+}
+
+async fn room_session_seed(
+    store: &RoomStore,
+    meta: crate::models::RunMeta,
+    selected_path: Option<String>,
+) -> Result<RoomSessionSeed, String> {
+    let run_id = meta.id.clone();
     let session_id = crate::rooms::session_seed::validate_source(&meta)?;
-    let existing_room_id = store
+    let existing_room = store
         .list()?
         .into_iter()
         .find(|room| {
@@ -60,9 +83,32 @@ pub async fn get_room_session_seed(
                     .as_ref()
                     .is_some_and(|o| o.provider == meta.agent && o.session_id == session_id)
         })
-        .map(|room| room.id);
-    let (repo_path, repository) = session_repository(&meta.cwd).await?;
-    let (projects, project_error) = if repository.is_empty() {
+        .map(|room| SessionRoomMatch {
+            id: room.id.clone(),
+            title: room.title.clone(),
+            repo_path: room.repo_path.clone(),
+            repository: room.repository.clone(),
+            source_attached: room.participants.iter().any(|p| p.run_id == run_id),
+            participant_name: crate::rooms::chat_attachment::former_peer(&room, &run_id)
+                .map(|p| p.name)
+                .unwrap_or_else(|| {
+                    format!(
+                        "Original {}",
+                        if meta.agent == "codex" {
+                            "Codex"
+                        } else {
+                            "Claude"
+                        }
+                    )
+                }),
+            archived: room.archived,
+        });
+    // A valid saved chat can originate in a general/non-Git folder. Keep its
+    // identity visible and let the human choose the repository in setup.
+    let (repo_path, repository) = session_repository(selected_path.as_deref().unwrap_or(&meta.cwd))
+        .await
+        .unwrap_or_default();
+    let (projects, project_error) = if repository.is_empty() || existing_room.is_some() {
         (vec![], None)
     } else {
         match github::list_repository_projects(&repository).await {
@@ -77,7 +123,9 @@ pub async fn get_room_session_seed(
         repo_path,
         repository,
         provider: meta.agent,
-        existing_room_id,
+        source_cwd: meta.cwd,
+        existing_room_id: existing_room.as_ref().map(|room| room.id.clone()),
+        existing_room,
         projects,
         project_error,
     })
@@ -104,9 +152,24 @@ pub async fn create_room_from_session(
                     .as_ref()
                     .is_some_and(|o| o.provider == meta.agent && o.session_id == session_id)
         }) {
-            return Ok(room);
+            return Err(format!(
+                "This chat already has a room: {}. Open that room from session setup.",
+                room.title
+            ));
         }
-        input.repo_path = session_repository(&meta.cwd).await?.0;
+        let inspection = repository::inspect(&input.repo_path).await?;
+        input.repo_path = inspection.repo_path;
+        // The selected folder is authoritative; require any supplied GitHub
+        // repository to be one of its actual remotes, rather than silently
+        // connecting an unrelated board.
+        if !inspection.repositories.is_empty()
+            && !inspection
+                .repositories
+                .iter()
+                .any(|r| r.repository == input.repository)
+        {
+            return Err("The GitHub repository does not match the selected folder. Choose its detected remote.".into());
+        }
         if input.title.trim().is_empty()
             || input.title.chars().count() > 120
             || input.objective.trim().is_empty()
@@ -150,6 +213,7 @@ pub async fn create_room_from_session(
         }
         // Restart on room delivery so the same provider thread receives room tools.
         meta.execution_path = Some(ExecutionPath::SessionActor);
+        meta.cwd = input.repo_path.clone();
         storage::runs::save_meta(&meta)?;
         peer.effort = storage::settings::get_agent_settings(&meta.agent).effort;
         let create_project = input.create_project && imported_project.is_none();
@@ -198,6 +262,7 @@ pub fn get_room_run_settings(
                     "model": participant.model,
                     "effort": participant.effort,
                     "room_id": room.id,
+                    "room_title": room.title,
                     "participant_id": participant.id,
                 })
             })
@@ -1534,4 +1599,66 @@ pub async fn get_room_clipboard_paths() -> Result<Vec<String>, String> {
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[cfg(test)]
+mod session_setup_tests {
+    use super::*;
+    #[tokio::test]
+    async fn general_folder_session_stays_in_setup_and_names_existing_destination() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = RoomStore::open(&tmp.path().join("rooms.db")).unwrap();
+        let meta: crate::models::RunMeta = serde_json::from_value(serde_json::json!({
+            "id":"general-source", "name":"Huion work", "prompt":"Continue wheel fixes", "cwd": tmp.path(),
+            "agent":"codex", "status":"stopped", "started_at":"2026-10-02", "session_id":"saved-thread"
+        })).unwrap();
+        let seed = room_session_seed(&store, meta.clone(), None).await.unwrap();
+        assert_eq!(seed.title, "Huion work");
+        assert_eq!(seed.source_cwd, meta.cwd);
+        assert!(seed.repo_path.is_empty());
+        assert!(seed.existing_room.is_none());
+        assert!(store.list().unwrap().is_empty());
+        let room = store
+            .create_from_session(
+                CreateRoomInput {
+                    title: "KDCustom room".into(),
+                    objective: "Work".into(),
+                    repo_path: meta.cwd.clone(),
+                    repository: "acme/test".into(),
+                    create_project: false,
+                },
+                crate::rooms::models::RoomOrigin {
+                    run_id: meta.id.clone(),
+                    provider: meta.agent.clone(),
+                    session_id: "saved-thread".into(),
+                    title: seed.title,
+                    message_count: 0,
+                    context: "Context".into(),
+                },
+                Participant {
+                    id: "original".into(),
+                    name: "Original Codex".into(),
+                    run_id: meta.id.clone(),
+                    paused: true,
+                    ..Default::default()
+                },
+                vec![],
+            )
+            .unwrap();
+        let seed = room_session_seed(&store, meta.clone(), None).await.unwrap();
+        let matched = seed.existing_room.unwrap();
+        assert_eq!(matched.id, room.id);
+        assert_eq!(matched.title, "KDCustom room");
+        assert!(matched.source_attached);
+        store
+            .update(&room.id, |r| {
+                r.participants.clear();
+                Ok(())
+            })
+            .unwrap();
+        let seed = room_session_seed(&store, meta, None).await.unwrap();
+        assert!(!seed.existing_room.unwrap().source_attached);
+        assert_eq!(store.list().unwrap().len(), 1);
+        assert_eq!(store.get(&room.id).unwrap().participants.len(), 0);
+    }
 }

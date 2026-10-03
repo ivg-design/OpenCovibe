@@ -518,7 +518,11 @@
                     >
                       {sessionPreview(session)}
                     </p>{/if}
-                  <p class="mt-1 break-all text-xs text-muted-foreground">{session.cwd}</p>
+                  <p
+                    class="mt-1 break-words text-xs text-muted-foreground [overflow-wrap:anywhere]"
+                  >
+                    {t("room_sourceFolder")}: {session.cwd}
+                  </p>
                   <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     {#if session.isAutomated}<span>{t("cliSync_automatedChat")}</span>{/if}
                     {#if session.isSubagent}<span>{t("cliSync_subagentChat")}</span>{/if}

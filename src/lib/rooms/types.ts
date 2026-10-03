@@ -164,7 +164,17 @@ export interface RoomSessionSeed {
   repo_path: string;
   repository: string;
   provider: string;
+  source_cwd: string;
   existing_room_id: string | null;
+  existing_room: {
+    id: string;
+    title: string;
+    repo_path: string;
+    repository: string;
+    source_attached: boolean;
+    participant_name: string;
+    archived: boolean;
+  } | null;
   projects: RoomProject[];
   project_error: string | null;
 }

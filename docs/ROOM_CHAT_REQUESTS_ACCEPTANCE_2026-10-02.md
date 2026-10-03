@@ -106,7 +106,7 @@ and reopening, the panel stayed hidden; reopening restored its wider width. Fixt
 remained paused. Archived-scope selection/restore was not newly completed through native
 UI automation; filtering and restore have unit/backend coverage.
 
-Room settings also exposes Attach existing chat. Candidate discovery reads metadata, not
+Room settings also exposes Attach existing agent to room. Candidate discovery reads metadata, not
 large event logs, and compares Git common directories so linked worktrees qualify while
 unrelated clones do not. Attachment retains provider identity and restores the former peer
 id from retained detached settings or old message provenance. Agents start paused, history
@@ -131,3 +131,47 @@ Original automatic-continuation preferences were restored from fresh room payloa
 preserving the user's latest removals and renames. Read-only verification of the real RAV
 picker listed Claude delegate, Codex delegate and Lead as former participants. No live
 chat was reassociated, no real request was answered, and no participant was resumed.
+
+
+## Source session onboarding and agent wording
+
+The Huion source's saved working folder was `/Users/ivg/Projects/general`, and its
+saved Codex project assignment was empty. General was therefore faithful imported
+metadata, rather than a reliable KDCustom repository association. Setup now shows
+that source title and folder, permits an explicit repository picker, and refreshes
+linked GitHub Project choices for the selected repository. Creation preserves the
+provider thread and transcript while assigning the selected working folder and
+moving the agent's sidebar entry beneath the new room.
+
+Source setup no longer opens an existing room implicitly or falls back to the last
+selected room after an error. A matching source room appears as a named destination
+with explicit Open or Restore original agent (paused) actions. Cancel/Back returns
+to the source. Loading and failures remain in setup, without unrelated agent removal
+controls. Room headings and direct-session Open room buttons name the destination.
+The reassociation controls now say Attach existing agent to room, Choose existing
+agent, and Attach agent to room (paused).
+
+Native isolated acceptance copied the stopped Huion source into the paused test
+profile. Create room from session showed its exact title and General folder, with
+creation disabled until a repository was chosen. The native folder picker selected
+KDCustom, detected its GitHub remote, and selected the existing Project #15. Creating
+Session setup acceptance moved Original Codex under KDCustom → room → agent;
+General's standalone source row disappeared. Its provider thread and source run id
+were unchanged, its working folder became KDCustom, and room/agent stayed paused.
+No GitHub project or item was created and no provider turn was sent.
+
+After detaching this fixture agent, source setup explicitly named Session setup
+acceptance, with no room settings/removal controls. Back returned to the exact source
+chat. Restore original agent (paused) reopened the named room and restored the
+paused participant row. The source history remained 40 shared messages.
+
+The full frontend suite passed 1,576 tests; the full Rust suite passed 955 tests,
+zero failed and five ignored. Final lint, formatting and Svelte checks passed with
+zero errors and 71 existing warnings. This covers native onboarding/reassociation
+and saved identity, not a new provider-resume end-to-end run.
+
+The updated Local bundle built and was restarted with no in-flight deliveries. Only
+automatic-continuation preferences were temporarily guarded, then restored into
+fresh room payloads. The user's restored RAV Lead, Codex delegate and Claude delegate
+remained present and paused. Native room settings showed the new agent attachment
+labels. No real source was converted, detached agent restored or participant resumed.
