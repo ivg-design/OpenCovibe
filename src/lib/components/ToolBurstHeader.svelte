@@ -29,7 +29,7 @@
   aria-label={ariaLabel}
   onclick={onToggle}
 >
-  <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+  <div class="flex min-w-0 items-start gap-1.5 text-xs text-muted-foreground">
     <!-- Collapse arrow -->
     <span class="inline-block w-3 shrink-0 text-center text-[10px]">
       {collapsed ? "\u25b8" : "\u25be"}
@@ -51,22 +51,24 @@
     {/if}
 
     <!-- Summary -->
-    <span>
+    <span class="min-w-0 flex-1 break-words">
       {t("toolBurst_calls", { total: String(burst.stats.total) })} &mdash; {summaryText}
     </span>
 
     <!-- Stats -->
-    <span class="ml-auto tabular-nums whitespace-nowrap">
-      {t("toolBurst_completed", {
-        completed: String(burst.stats.completed),
-        total: String(burst.stats.total),
-      })}
-    </span>
-    {#if burst.stats.failed > 0}
-      <span class="text-destructive tabular-nums">
-        {t("toolBurst_failed", { failed: String(burst.stats.failed) })}
+    <span class="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap tabular-nums">
+      <span>
+        {t("toolBurst_completed", {
+          completed: String(burst.stats.completed),
+          total: String(burst.stats.total),
+        })}
       </span>
-    {/if}
+      {#if burst.stats.failed > 0}
+        <span class="text-destructive">
+          {t("toolBurst_failed", { failed: String(burst.stats.failed) })}
+        </span>
+      {/if}
+    </span>
   </div>
 
   <!-- Progress bar -->

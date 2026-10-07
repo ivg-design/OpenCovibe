@@ -97,4 +97,4 @@ execSync(`git push`, { stdio: "inherit" });
 execSync(`git push origin ${tag}`, { stdio: "inherit" });
 
 console.log(`\n  ✓ Pushed ${tag} — Release workflow triggered`);
-console.log(`  Monitor: https://github.com/AnyiWang/OpenCovibe/actions`);
+console.log(`  Monitor: https://github.com/ivg-design/OpenCovibe/actions`);

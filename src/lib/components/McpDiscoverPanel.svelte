@@ -295,7 +295,7 @@
 </script>
 
 <!-- Health badge + search + agent + scope -->
-<div class="flex items-center gap-3 mb-4">
+<div class="flex min-w-0 flex-wrap items-center gap-3 mb-4">
   <!-- Health indicator + refresh -->
   <div class="flex items-center gap-1 shrink-0">
     <div class="flex items-center gap-1.5" title={registryHealth?.reason ?? ""}>
@@ -328,7 +328,7 @@
   </div>
 
   <!-- Search input -->
-  <div class="relative flex-1">
+  <div class="relative min-w-0 flex-1 basis-48">
     <svg
       class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground"
       viewBox="0 0 24 24"

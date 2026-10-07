@@ -1,0 +1,23 @@
+{
+  "interface": {
+    "displayName": "OpenCovibe Connection",
+    "shortDescription": "Talk to your OpenCovibe agents",
+    "longDescription": "Connect Dotcliffe to owner-authorized OpenCovibe sessions and rooms through a private outbound Mac relay. Discover agents, queue messages, explicitly resume rooms and wake existing room agents, and read correlated replies. Provider ownership and permission waits remain enforced. Automatic event wake requires a verified platform subscription.",
+    "developerName": "IVG",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive"
+    ],
+    "defaultPrompt": "Check the BidBot agents and coordinate through their OpenCovibe room."
+  },
+  "name": "opencovibe-bidbot",
+  "version": "0.1.2",
+  "description": "Private coordination with owner-authorized OpenCovibe sessions and room agents through their existing session actors.",
+  "author": {
+    "name": "IVG"
+  },
+  "keywords": [],
+  "skills": "./skills",
+  "mcpServers": "./.mcp.json",
+  "apps": "./.app.json"
+}

@@ -6,10 +6,14 @@
   let {
     status,
     attention = false,
+    label,
+    compact = false,
     class: className = "",
   }: {
     status: RunStatus;
     attention?: boolean;
+    label?: string;
+    compact?: boolean;
     class?: string;
   } = $props();
 
@@ -43,10 +47,10 @@
 </script>
 
 <span
-  class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium {colors[
-    displayStatus
-  ]} {className}"
+  class="inline-flex items-center whitespace-nowrap rounded-full py-0.5 font-medium {compact
+    ? 'gap-1 px-1.5 text-[10px]'
+    : 'gap-1.5 px-2 text-xs'} {colors[displayStatus]} {className}"
 >
   <span class="h-1.5 w-1.5 rounded-full {dots[displayStatus]}"></span>
-  {displayStatus}
+  {label ?? displayStatus}
 </span>

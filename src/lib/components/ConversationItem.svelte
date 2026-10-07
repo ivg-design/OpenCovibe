@@ -1,13 +1,19 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import type { ConversationGroup } from "$lib/utils/sidebar-groups";
   import { TERMINAL_PHASES, canResumeNow } from "$lib/stores";
   import { getNoSessionPersistence } from "$lib/stores/agent-settings-cache.svelte";
-  import StatusBadge from "./StatusBadge.svelte";
+  import SidebarAgentStatus from "./SidebarAgentStatus.svelte";
   import { relativeTime } from "$lib/utils/format";
   import { PLATFORM_PRESETS } from "$lib/utils/platform-presets";
   import { t } from "$lib/i18n/index.svelte";
   import { dbg, dbgWarn } from "$lib/utils/debug";
   import { hasAttention } from "$lib/stores/attention-store.svelte";
+  import {
+    retainRoomSidebarParticipants,
+    roomSidebarParticipant,
+  } from "$lib/stores/room-sidebar-participants.svelte";
+  import { roomParticipantColorAt } from "$lib/utils/room-participant-colors";
 
   function platformLabel(id: string): string {
     return PLATFORM_PRESETS.find((p) => p.id === id)?.name ?? id;
@@ -28,6 +34,13 @@
   } = $props();
 
   const run = $derived(conversation.latestRun);
+  let roomParticipant = $derived(roomSidebarParticipant(run.id));
+  let roomColor = $derived(
+    roomParticipant
+      ? roomParticipantColorAt(roomParticipant.color_index, roomParticipant.participant_id)
+      : "",
+  );
+  onMount(() => retainRoomSidebarParticipants());
   // Let CSS handle truncation (the title <span> has `truncate`). A hard JS char cap
   // here truncated titles at 28 chars regardless of available width, so they were
   // often cut off well before the rail ran out of room. (#132)
@@ -100,12 +113,15 @@
 </script>
 
 <div
-  class="group w-full text-left px-3 py-2 rounded-md transition-colors text-xs cursor-pointer
+  class="group w-full text-left px-3 py-2 rounded-md transition-colors text-xs cursor-pointer {roomParticipant
+    ? 'room-linked-conversation'
+    : ''}
     {selected
     ? 'bg-sidebar-accent text-sidebar-accent-foreground'
     : 'hover:bg-sidebar-accent/50 text-sidebar-foreground'}"
   role="button"
   tabindex="0"
+  style={roomParticipant ? `--room-agent-color:${roomColor}` : undefined}
   onclick={handleClick}
   onkeydown={handleKeydown}
 >
@@ -209,12 +225,26 @@
           >
         </button>
       {/if}
-      <StatusBadge status={displayStatus} attention={needsAttention} class="shrink-0" />
+      <SidebarAgentStatus state={displayStatus} attention={needsAttention} />
     </div>
   </div>
   <div class="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
     <div class="flex items-center gap-1.5 min-w-0">
-      <span class="shrink-0">{run.agent}</span>
+      {#if roomParticipant}
+        <span
+          class="flex min-w-0 items-center gap-1.5 truncate font-medium text-sidebar-foreground"
+        >
+          <span
+            class="h-2.5 w-2.5 shrink-0 rounded-full border-2 border-background"
+            style="background:var(--room-agent-color)"
+          ></span>
+          <span class="truncate"
+            >{roomParticipant.name} · {run.agent === "codex" ? "Codex" : "Claude"}</span
+          >
+        </span>
+      {:else}
+        <span class="shrink-0">{run.agent}</span>
+      {/if}
       {#if run.remote_host_name}
         <svg
           class="h-3 w-3 shrink-0 text-blue-400"
@@ -239,3 +269,11 @@
     <span class="ml-auto shrink-0">{time}</span>
   </div>
 </div>
+
+<style>
+  .room-linked-conversation {
+    border-color: color-mix(in srgb, var(--room-agent-color) 60%, hsl(var(--border)));
+    border-left: 3px solid var(--room-agent-color);
+    background: color-mix(in srgb, var(--room-agent-color) 12%, transparent);
+  }
+</style>

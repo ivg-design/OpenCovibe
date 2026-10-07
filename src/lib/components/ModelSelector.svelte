@@ -39,10 +39,12 @@
     if (!buttonEl) return;
     const rect = buttonEl.getBoundingClientRect();
     const spaceBelow = window.innerHeight - rect.bottom;
+    const dropdownWidth = Math.min(320, window.innerWidth - 32);
+    const left = Math.max(16, Math.min(rect.left, window.innerWidth - dropdownWidth - 16));
     if (spaceBelow < 260) {
-      dropdownStyle = `position:fixed; bottom:${window.innerHeight - rect.top + 4}px; left:${rect.left}px; z-index:50;`;
+      dropdownStyle = `position:fixed; bottom:${window.innerHeight - rect.top + 4}px; left:${left}px; z-index:50;`;
     } else {
-      dropdownStyle = `position:fixed; top:${rect.bottom + 4}px; left:${rect.left}px; z-index:50;`;
+      dropdownStyle = `position:fixed; top:${rect.bottom + 4}px; left:${left}px; z-index:50;`;
     }
   }
 
@@ -87,7 +89,7 @@
 <div bind:this={wrapperEl}>
   <button
     bind:this={buttonEl}
-    class="flex items-center gap-1.5 rounded-md border bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent transition-colors"
+    class="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border bg-background px-3 py-1.5 text-xs font-medium hover:bg-accent transition-colors"
     onclick={toggleDropdown}
   >
     <svg
@@ -114,7 +116,7 @@
 
   {#if dropdownOpen}
     <div
-      class="w-80 rounded-md border bg-background shadow-lg animate-fade-in"
+      class="w-[min(20rem,calc(100vw-2rem))] rounded-md border bg-background shadow-lg animate-fade-in"
       style={dropdownStyle}
     >
       <div class="p-1">

@@ -70,6 +70,13 @@ pub(super) async fn stop_actor(sessions: &ActorSessionMap, run_id: &str) -> Resu
     Ok(true)
 }
 
+pub(crate) async fn stop_room_session_actor(
+    sessions: &ActorSessionMap,
+    run_id: &str,
+) -> Result<bool, String> {
+    stop_actor(sessions, run_id).await
+}
+
 /// Resolve a RemoteHost from RunMeta.
 /// Prefers the snapshot (self-contained), falls back to name lookup for old runs.
 fn resolve_remote_host(meta: &RunMeta) -> Result<Option<RemoteHost>, String> {
@@ -548,6 +555,66 @@ pub(crate) async fn start_session_impl(
     platform_id: Option<String>,
     permission_mode_override: Option<String>,
 ) -> Result<(), String> {
+    start_session_impl_inner(
+        emitter,
+        sessions,
+        spawn_locks,
+        cancel_token,
+        run_id,
+        mode,
+        session_id,
+        initial_message,
+        attachments,
+        platform_id,
+        permission_mode_override,
+        true,
+    )
+    .await
+}
+
+/// Start an actor for a room peer without delivering a message. The room runtime
+/// revalidates time-sensitive deliveries after startup, then sends through the actor.
+pub(crate) async fn start_room_session_actor(
+    emitter: &Arc<BroadcastEmitter>,
+    sessions: &ActorSessionMap,
+    spawn_locks: &SpawnLocks,
+    cancel_token: &CancellationToken,
+    run_id: String,
+    mode: Option<SessionMode>,
+    session_id: Option<String>,
+) -> Result<(), String> {
+    start_session_impl_inner(
+        emitter,
+        sessions,
+        spawn_locks,
+        cancel_token,
+        run_id,
+        mode,
+        session_id,
+        None,
+        None,
+        None,
+        None,
+        false,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn start_session_impl_inner(
+    emitter: &Arc<BroadcastEmitter>,
+    sessions: &ActorSessionMap,
+    spawn_locks: &SpawnLocks,
+    cancel_token: &CancellationToken,
+    run_id: String,
+    mode: Option<SessionMode>,
+    session_id: Option<String>,
+    initial_message: Option<String>,
+    attachments: Option<Vec<AttachmentData>>,
+    platform_id: Option<String>,
+    permission_mode_override: Option<String>,
+    send_initial_prompt: bool,
+) -> Result<(), String> {
     let _guard = spawn_locks.acquire(&run_id).await;
     let session_mode = mode.unwrap_or_default();
     let att_list = attachments.unwrap_or_default();
@@ -580,9 +647,25 @@ pub(crate) async fn start_session_impl(
 
     // 2. Read settings and build unified adapter settings
     let agent_settings = storage::settings::get_agent_settings(&meta.agent);
-    let user_settings = storage::settings::get_user_settings();
+    let mut user_settings = storage::settings::get_user_settings();
+    let room_binding = crate::rooms::mcp::binding_for_run(&run_id)?;
+    if room_binding.is_some() {
+        user_settings.auth_mode = "cli".into();
+    }
     let mut adapter_settings =
         adapter::build_adapter_settings(&agent_settings, &user_settings, meta.model.clone());
+    // Room settings are scoped to this provider process; no global CLI config is changed.
+    if let Some((_room, peer)) = &room_binding {
+        adapter_settings.effort = peer.effort.clone();
+        adapter_settings.codex_provider = None;
+        adapter_settings.no_session_persistence = false;
+        adapter_settings.ephemeral = false;
+        for tool in crate::rooms::mcp::ROOM_TOOL_NAMES {
+            adapter_settings
+                .allowed_tools
+                .push(format!("mcp__room__{tool}"));
+        }
+    }
 
     // 2a. Apply per-session permission_mode override (e.g. ExitPlanMode → acceptEdits).
     //     Session-scoped: does not touch persisted user settings. Must run BEFORE spawn
@@ -612,12 +695,22 @@ pub(crate) async fn start_session_impl(
         &agent_settings.model,
         &resolved.models,
     );
-    let resolved = augment_with_shell_auth(
-        resolved,
-        &user_settings.auth_mode,
-        remote.is_some(),
-        &meta.cwd,
-    );
+    let resolved = if room_binding.is_some() {
+        ResolvedAuth {
+            api_key: None,
+            auth_token: None,
+            base_url: None,
+            models: None,
+            extra_env: None,
+        }
+    } else {
+        augment_with_shell_auth(
+            resolved,
+            &user_settings.auth_mode,
+            remote.is_some(),
+            &meta.cwd,
+        )
+    };
     if remote.is_some() {
         log::debug!(
             "[session] remote mode: host={:?}, remote_cwd={:?}, has_key={}",
@@ -632,6 +725,10 @@ pub(crate) async fn start_session_impl(
         SessionMode::Resume | SessionMode::Continue => {
             let sid = session_id
                 .or_else(|| meta.session_id.clone())
+                .or_else(|| match meta.resolved_conversation_ref() {
+                    Some(ConversationRef::CodexThread(thread_id)) => Some(thread_id),
+                    _ => None,
+                })
                 .ok_or_else(|| {
                     format!(
                         "session_id required for {:?} but not found in params or run metadata",
@@ -700,6 +797,7 @@ pub(crate) async fn start_session_impl(
             effective_cwd,
             &adapter_settings,
             resolved.extra_env.as_ref(),
+            &run_id,
         )
         .await?;
         let resume_tid = meta.resolved_conversation_ref().and_then(|r| match r {
@@ -801,13 +899,17 @@ pub(crate) async fn start_session_impl(
     // for a brand-new run's first turn. A stopped session re-spawned with a new message
     // passes initial_message (mode defaults to New, but the Codex thread resumes via
     // conversation_ref) — it must send that message, NOT re-run the original prompt.
-    let initial_text = initial_message.clone().or_else(|| {
-        if is_new {
-            Some(meta.prompt.clone())
-        } else {
-            None
-        }
-    });
+    let initial_text = if send_initial_prompt {
+        initial_message.clone().or_else(|| {
+            if is_new {
+                Some(meta.prompt.clone())
+            } else {
+                None
+            }
+        })
+    } else {
+        None
+    };
     if let Some(text) = initial_text {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         cmd_tx
@@ -1985,10 +2087,11 @@ pub(crate) fn codex_appserver_supported() -> bool {
     use std::sync::OnceLock;
     static CACHE: OnceLock<bool> = OnceLock::new();
     *CACHE.get_or_init(|| {
-        let Some(bin) = claude_stream::which_binary("codex") else {
+        let bin = claude_stream::resolve_codex_path();
+        if bin == "codex" {
             log::warn!("[codex] app-server probe: codex binary not found → exec fallback");
             return false;
-        };
+        }
         let out = std::process::Command::new(&bin)
             .arg("app-server")
             .arg("--help")
@@ -2030,6 +2133,7 @@ async fn spawn_codex_appserver_process(
     cwd: &str,
     settings: &adapter::AdapterSettings,
     extra_env: Option<&std::collections::HashMap<String, String>>,
+    run_id: &str,
 ) -> Result<
     (
         tokio::process::Child,
@@ -2041,16 +2145,18 @@ async fn spawn_codex_appserver_process(
 > {
     use tokio::process::Command;
 
-    let codex_bin = claude_stream::which_binary("codex")
-        .ok_or_else(|| "Codex CLI not found in PATH".to_string())?;
+    let codex_bin = claude_stream::resolve_codex_path();
+    if codex_bin == "codex" {
+        return Err("Codex CLI not found in PATH".to_string());
+    }
 
-    let mut args: Vec<String> = vec![
-        "app-server".into(),
-        "--enable".into(),
-        "default_mode_request_user_input".into(),
-        "-c".into(),
-        "suppress_unstable_features_warning=true".into(),
-    ];
+    let mut args = codex_appserver_base_args(settings.web_search);
+
+    let room_args = crate::rooms::mcp::codex_args_for_run(run_id)?;
+    let is_room = room_args.is_some();
+    if let Some(room_args) = room_args {
+        args.extend(room_args);
+    }
 
     // Third-party provider overrides (shared with the exec + side-question paths). The provider
     // API key is injected as an env var (env_key=api_key) below, mirroring chat.rs's run_agent.
@@ -2073,6 +2179,9 @@ async fn spawn_codex_appserver_process(
         .stderr(std::process::Stdio::piped())
         .hide_console()
         .kill_on_drop(true);
+    if is_room {
+        cmd.env_remove("OPENAI_API_KEY");
+    }
     if let Some(env) = extra_env {
         for (k, v) in env {
             cmd.env(k, v);
@@ -2093,6 +2202,20 @@ async fn spawn_codex_appserver_process(
     let stdout = child.stdout.take().ok_or("no app-server stdout")?;
     let stderr = child.stderr.take().ok_or("no app-server stderr")?;
     Ok((child, stdin, stdout, stderr))
+}
+
+/// Build the app-server base args with an explicit per-agent web-search setting. Keeping the
+/// config override before the subcommand makes the on/off preference apply to app-server too.
+fn codex_appserver_base_args(web_search: Option<bool>) -> Vec<String> {
+    let mut args = crate::agent::spawn::codex_web_search_config_args(web_search);
+    args.extend([
+        "app-server".into(),
+        "--enable".into(),
+        "default_mode_request_user_input".into(),
+        "-c".into(),
+        "suppress_unstable_features_warning=true".into(),
+    ]);
+    args
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2131,6 +2254,15 @@ async fn spawn_cli_process(
         "--permission-prompt-tool".into(),
         "stdio".into(),
     ];
+
+    let room_config = crate::rooms::mcp::config_for_run(_run_id)?;
+    let is_room = room_config.is_some();
+    if let Some(config) = room_config {
+        if remote_host.is_some() {
+            return Err("Room participants must use local providers".into());
+        }
+        claude_args.extend(["--mcp-config".into(), config.to_string_lossy().into_owned()]);
+    }
 
     // Session mode args
     match session_mode {
@@ -2218,6 +2350,19 @@ async fn spawn_cli_process(
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+
+        if is_room {
+            for key in [
+                "ANTHROPIC_API_KEY",
+                "ANTHROPIC_AUTH_TOKEN",
+                "ANTHROPIC_BASE_URL",
+                "CLAUDE_CODE_USE_BEDROCK",
+                "CLAUDE_CODE_USE_VERTEX",
+                "CLAUDE_CODE_USE_FOUNDRY",
+            ] {
+                cmd.env_remove(key);
+            }
+        }
 
         // Pass API key to CLI when using API Key authentication mode (x-api-key header).
         // MUST remove AUTH_TOKEN to avoid inherited shell env vars taking priority.
@@ -2687,8 +2832,10 @@ async fn codex_side_question(
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::process::Command;
 
-    let codex_bin = claude_stream::which_binary("codex")
-        .ok_or_else(|| "Codex CLI not found in PATH".to_string())?;
+    let codex_bin = claude_stream::resolve_codex_path();
+    if codex_bin == "codex" {
+        return Err("Codex CLI not found in PATH".to_string());
+    }
 
     let wrapped_question = format!(
         "The user is asking a side question. Answer it concisely. \
@@ -2995,6 +3142,22 @@ mod tests {
             models: None,
             extra_env: None,
         }
+    }
+
+    #[test]
+    fn codex_appserver_base_args_honor_tristate_web_search_preference() {
+        let enabled = codex_appserver_base_args(Some(true));
+        assert_eq!(enabled[..3], ["-c", "web_search=\"live\"", "app-server"]);
+
+        let disabled = codex_appserver_base_args(Some(false));
+        assert_eq!(
+            disabled[..3],
+            ["-c", "web_search=\"disabled\"", "app-server"]
+        );
+
+        let inherited = codex_appserver_base_args(None);
+        assert_eq!(inherited[0], "app-server");
+        assert!(!inherited.iter().any(|arg| arg.starts_with("web_search=")));
     }
 
     #[test]

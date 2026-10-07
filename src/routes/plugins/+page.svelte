@@ -935,7 +935,7 @@
   </div>
 {/if}
 
-<div class="px-6 py-5 h-full overflow-y-auto">
+<div class="min-w-0 h-full overflow-y-auto px-4 py-4 sm:px-5">
   {#if loading}
     <div class="flex items-center justify-center py-16">
       <div
@@ -961,7 +961,7 @@
     <!-- ═══════════════════════════════════════════════════════ -->
     <!-- Skills Section                                         -->
     <!-- ═══════════════════════════════════════════════════════ -->
-    <div class="space-y-4" class:hidden={activeTab !== "skills"}>
+    <div class="skills-surface space-y-4" class:hidden={activeTab !== "skills"}>
       <div>
         <h2 class="text-sm font-semibold text-foreground">{t("plugin_title")}</h2>
         <p class="text-xs text-muted-foreground">
@@ -1106,7 +1106,7 @@
       <!-- Discover sub-view (community skills) -->
       <div class:hidden={skillsSource !== "discover" || editorMode === "new"}>
         <!-- Health badge + search + scope -->
-        <div class="flex items-center gap-3 mb-4">
+        <div class="flex min-w-0 flex-wrap items-center gap-3 mb-4">
           <!-- Health indicator + refresh -->
           <div class="flex items-center gap-1 shrink-0">
             <div class="flex items-center gap-1.5" title={communityHealth?.reason ?? ""}>
@@ -1141,7 +1141,7 @@
           </div>
 
           <!-- Search input -->
-          <div class="relative flex-1">
+          <div class="relative min-w-0 flex-1 basis-48">
             <svg
               class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground"
               viewBox="0 0 24 24"
@@ -1235,9 +1235,14 @@
               </div>
             {:else}
               <!-- Side-by-side: skill list (left) + preview (right) -->
-              <div class="flex gap-3" style="height: calc(100vh - 320px); min-height: 300px;">
+              <div
+                class="skills-browser flex min-w-0 gap-3"
+                style="height: calc(100vh - 320px); min-height: 300px;"
+              >
                 <!-- Left: scrollable skill list -->
-                <div class="w-[280px] shrink-0 overflow-y-auto space-y-1.5 pr-1">
+                <div
+                  class="skills-browser-list w-[280px] shrink-0 overflow-y-auto space-y-1.5 pr-1"
+                >
                   {#each communityDisplayResults as skill}
                     {@const isInstalled = (
                       installedSlugsByScope[communityScope] ?? new Set<string>()
@@ -1294,7 +1299,7 @@
                 </div>
 
                 <!-- Right: preview panel (sticky) -->
-                <div class="flex-1 min-w-0 overflow-y-auto">
+                <div class="skills-browser-detail min-w-0 flex-1 overflow-y-auto">
                   {#if communityDetailLoading}
                     <div
                       class="rounded-lg border border-border/50 bg-muted/20 p-6 flex items-center justify-center h-full"
@@ -1446,9 +1451,12 @@
             </button>
           </div>
         {:else}
-          <div class="flex gap-3" style="height: calc(100vh - 320px); min-height: 300px;">
+          <div
+            class="skills-browser flex min-w-0 gap-3"
+            style="height: calc(100vh - 320px); min-height: 300px;"
+          >
             <!-- Left: scrollable skill list -->
-            <div class="w-[280px] shrink-0 overflow-y-auto space-y-1.5 pr-1">
+            <div class="skills-browser-list w-[280px] shrink-0 overflow-y-auto space-y-1.5 pr-1">
               {#each skills as skill}
                 <div
                   class="w-full text-left rounded-lg border px-3 py-2 transition-colors cursor-pointer {skill.enabled ===
@@ -1618,7 +1626,7 @@
             </div>
 
             <!-- Right: Edit editor / read-only detail / placeholder -->
-            <div class="flex-1 min-w-0 overflow-y-auto">
+            <div class="skills-browser-detail min-w-0 flex-1 overflow-y-auto">
               {#if editorMode === "edit"}
                 <!-- Skill edit editor -->
                 <div class="rounded-lg border border-border/50 bg-muted/20 px-4 py-4 space-y-3">
@@ -1778,7 +1786,7 @@
     <!-- ═══════════════════════════════════════════════════════ -->
     <!-- MCP Servers Section                                    -->
     <!-- ═══════════════════════════════════════════════════════ -->
-    <div class="space-y-4" class:hidden={activeTab !== "mcp"}>
+    <div class="mcp-surface space-y-4" class:hidden={activeTab !== "mcp"}>
       <div>
         <h2 class="text-sm font-semibold text-foreground">{t("plugin_mcpTitle")}</h2>
         <p class="text-xs text-muted-foreground">
@@ -1811,7 +1819,7 @@
       </div>
 
       <!-- Discover sub-view -->
-      <div class:hidden={mcpSource !== "discover"}>
+      <div class="mcp-pane" class:hidden={mcpSource !== "discover"}>
         <McpDiscoverPanel
           {projectCwd}
           visible={mcpSource === "discover"}
@@ -1821,7 +1829,7 @@
       </div>
 
       <!-- Configured sub-view -->
-      <div class:hidden={mcpSource !== "configured"}>
+      <div class="mcp-pane" class:hidden={mcpSource !== "configured"}>
         <McpConfiguredPanel
           {projectCwd}
           visible={mcpSource === "configured"}
@@ -1875,8 +1883,8 @@
       <!-- Marketplace sub-view -->
       <div class:hidden={pluginsSource !== "marketplace"}>
         <!-- Search + Filter + Scope -->
-        <div class="flex items-center gap-3 mb-4">
-          <div class="relative flex-1">
+        <div class="flex min-w-0 flex-wrap items-center gap-3 mb-4">
+          <div class="relative min-w-0 flex-1 basis-48">
             <svg
               class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground"
               viewBox="0 0 24 24"
@@ -2283,8 +2291,70 @@
     <!-- ═══════════════════════════════════════════════════════ -->
     <!-- Agents Section                                        -->
     <!-- ═══════════════════════════════════════════════════════ -->
-    <div class="space-y-4" class:hidden={activeTab !== "agents"}>
+    <div class="agent-surface space-y-4" class:hidden={activeTab !== "agents"}>
       <AgentsPanel {projectCwd} {showToast} />
     </div>
   {/if}
 </div>
+
+<style>
+  .skills-surface,
+  .mcp-surface,
+  .agent-surface {
+    container-type: inline-size;
+  }
+
+  @container (max-width: 680px) {
+    .skills-browser {
+      height: auto !important;
+      min-height: 0 !important;
+      flex-direction: column;
+    }
+
+    .skills-browser-list {
+      width: 100%;
+      max-height: 40vh;
+      flex: none;
+    }
+
+    .skills-browser-detail {
+      min-height: 16rem;
+    }
+  }
+
+  @container (max-width: 680px) {
+    :global(.mcp-pane div.flex.gap-3[style*="height: calc(100vh"]) {
+      height: auto !important;
+      min-height: 0 !important;
+      flex-direction: column;
+    }
+
+    :global(.mcp-pane div.flex.gap-3[style*="height: calc(100vh"] > div:first-child) {
+      width: 100%;
+      max-height: 40vh;
+      flex: none;
+    }
+  }
+
+  @container (max-width: 680px) {
+    :global(.agent-surface .flex.gap-4[style*="min-height: 400px"]) {
+      min-height: 0 !important;
+      flex-direction: column;
+    }
+
+    :global(.agent-surface .flex.gap-4[style*="min-height: 400px"] > div:first-child) {
+      width: 100%;
+      max-height: 40vh;
+      padding-right: 0;
+    }
+
+    :global(.agent-surface .flex.gap-4[style*="min-height: 400px"] > div:last-child) {
+      width: 100%;
+      max-height: none;
+      border-left: 0;
+      border-top: 1px solid hsl(var(--border));
+      padding-top: 1rem;
+      padding-left: 0;
+    }
+  }
+</style>

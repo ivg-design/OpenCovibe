@@ -9,6 +9,7 @@ import {
   mergeWithVirtual,
   isVirtualCommand,
   parseVirtualAction,
+  supportsVirtualAction,
   getKnownVirtualNames,
   getQuickActions,
   classifyCloseReason,
@@ -24,6 +25,18 @@ import {
   pathsEqual,
 } from "../slash-commands";
 import type { CliCommand } from "$lib/types";
+
+describe("agent-aware action dispatch", () => {
+  it("allows clear-context for Claude despite the earlier Codex-only alias variant", () => {
+    expect(parseVirtualAction("/clear", "claude")?.name).toBe("clear");
+    expect(supportsVirtualAction("clear-context", "claude")).toBe(true);
+    expect(supportsVirtualAction("clear-context", "codex")).toBe(true);
+  });
+  it("still rejects actions with no applicable provider variant", () => {
+    expect(supportsVirtualAction("codex-goal", "claude")).toBe(false);
+    expect(supportsVirtualAction("codex-goal", "codex")).toBe(true);
+  });
+});
 
 const MOCK_COMMANDS: CliCommand[] = [
   { name: "compact", description: "Compact context", aliases: ["c"] },

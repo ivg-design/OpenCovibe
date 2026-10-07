@@ -48,7 +48,9 @@
 
 <div class="flex h-full flex-col bg-background">
   <!-- Header -->
-  <div class="flex h-14 shrink-0 items-center gap-3 border-b border-border px-6">
+  <div
+    class="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-4 py-3 sm:gap-3 sm:px-5"
+  >
     <button
       class="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
       onclick={() => history.back()}
@@ -65,7 +67,7 @@
       >
     </button>
 
-    <div class="flex items-center gap-2">
+    <div class="flex min-w-0 flex-wrap items-center gap-2">
       <svg
         class="h-4 w-4 text-muted-foreground"
         viewBox="0 0 24 24"
@@ -88,10 +90,10 @@
       {/if}
     </div>
 
-    <div class="flex-1"></div>
+    <div class="min-w-4 flex-1"></div>
 
     <!-- Search -->
-    <div class="relative">
+    <div class="relative min-w-0 flex-1 basis-48 sm:flex-none">
       <svg
         class="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/50"
         viewBox="0 0 24 24"
@@ -105,7 +107,7 @@
         type="text"
         bind:value={searchQuery}
         placeholder={t("release_searchPlaceholder")}
-        class="h-8 w-56 rounded-md border border-border bg-background pl-8 pr-3 text-xs
+        class="h-8 w-full max-w-full rounded-md border border-border bg-background pl-8 pr-3 text-xs sm:w-56
           placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-ring"
       />
     </div>
@@ -114,7 +116,7 @@
       href="https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md"
       target="_blank"
       rel="noopener noreferrer"
-      class="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+      class="ml-auto flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
     >
       <svg
         class="h-3.5 w-3.5"
@@ -187,7 +189,7 @@
         {/if}
       </div>
     {:else}
-      <div class="mx-auto max-w-3xl px-6 py-6 space-y-1">
+      <div class="mx-auto max-w-3xl space-y-1 px-4 py-4 sm:px-5 sm:py-5">
         {#each filteredEntries as entry}
           {@const isCurrent = currentVersion && entry.version === currentVersion}
           <div

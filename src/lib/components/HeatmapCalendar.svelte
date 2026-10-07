@@ -33,11 +33,17 @@
 <div class="space-y-1">
   <!-- Month labels row -->
   <div
-    class="relative text-[10px] text-muted-foreground select-none"
-    style="height: 14px; margin-left: {DAY_LABEL_W}px;"
+    class="grid min-w-0 text-[10px] text-muted-foreground select-none"
+    style="height: 14px; margin-left: {DAY_LABEL_W}px; max-width: {grid.weeks * STEP -
+      GAP}px; grid-template-columns: repeat({grid.weeks}, minmax(0, 1fr)); gap: {GAP}px;"
   >
-    {#each grid.monthLabels as ml}
-      <span class="absolute top-0 whitespace-nowrap" style="left: {ml.col * STEP}px;">
+    {#each grid.monthLabels as ml, index}
+      {@const nextCol = grid.monthLabels[index + 1]?.col ?? grid.weeks}
+      <span
+        class="truncate whitespace-nowrap"
+        title={ml.label}
+        style="grid-column: {ml.col + 1} / {nextCol + 1};"
+      >
         {ml.label}
       </span>
     {/each}
@@ -57,8 +63,10 @@
 
     <!-- Grid: CSS Grid for precise cell placement -->
     <div
-      class="overflow-x-auto overflow-y-hidden"
-      style="display: grid; grid-template-rows: repeat(7, {CELL}px); grid-template-columns: repeat({grid.weeks}, {CELL}px); gap: {GAP}px;"
+      class="min-w-0 flex-1"
+      style="display: grid; grid-template-rows: repeat(7, {CELL}px); grid-template-columns: repeat({grid.weeks}, minmax(0, 1fr)); gap: {GAP}px; max-width: {grid.weeks *
+        STEP -
+        GAP}px;"
     >
       {#each { length: grid.weeks } as _, col}
         {#each { length: 7 } as _, row}

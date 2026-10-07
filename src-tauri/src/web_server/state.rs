@@ -23,6 +23,7 @@ pub struct SessionEntry {
 /// All fields are Arc-wrapped for cheap cloning.
 #[derive(Clone)]
 pub struct AppState {
+    pub rooms: Arc<crate::rooms::store::RoomStore>,
     pub process_map: ProcessMap,
     pub sessions: ActorSessionMap,
     pub writer: Arc<EventWriter>,

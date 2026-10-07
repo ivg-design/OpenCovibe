@@ -55,6 +55,8 @@ pub struct UserTurnTicket {
     pub attachments: Vec<AttachmentData>,
     /// Codex skill picks → structured `{type:"skill"}` input items. Empty for Claude / no skill.
     pub skills: Vec<CodexSkillRef>,
+    /// Durable external bridge receipt identity, if this turn came from the bridge.
+    pub bridge_message_id: Option<String>,
     pub kind: UserTurnKind,
     pub turn_index: u32,
     pub reply: oneshot::Sender<Result<(), String>>,

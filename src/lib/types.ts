@@ -79,10 +79,17 @@ export interface CliSessionSummary {
   sessionId: string;
   cwd: string;
   firstPrompt: string;
+  title?: string | null;
+  projectPath?: string;
+  isSubagent?: boolean;
+  isAutomated?: boolean;
+  parentSessionId?: string | null;
+  archived?: boolean;
   startedAt: string;
   lastActivityAt: string;
   /** Claude: message count; Codex: completed turn count */
   messageCount: number;
+  countsExact?: boolean;
   model?: string;
   cliVersion?: string;
   /** Claude: file size; Codex: sum of all rollout sizes */
@@ -148,6 +155,7 @@ export interface RunArtifact {
 }
 
 export interface UserSettings {
+  identity_name?: string | null;
   default_agent: string;
   default_model?: string;
   allowed_tools: string[];
@@ -291,7 +299,7 @@ export interface AgentSettings {
   ignore_user_config?: boolean;
   /** Codex `--ignore-rules` — skip execpolicy .rules files. */
   ignore_rules?: boolean;
-  /** Codex `--search` — enable the native web_search tool (new sessions only). */
+  /** Codex `--search` tri-state: true enables, false disables, and unset inherits config. */
   web_search?: boolean;
   updated_at: string;
 }

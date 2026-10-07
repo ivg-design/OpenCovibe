@@ -665,10 +665,13 @@ pub fn invalidate_claude_path_cache() {
 /// Shared cache for the resolved codex binary path.
 static CODEX_PATH_CACHE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
-/// Resolve the full path to the codex binary — mirror of `resolve_claude_path` for Codex.
-/// On Windows the npm-installed binary is `codex.cmd`; spawning the bare name `codex` ENOENTs
-/// (std only auto-appends `.exe`), so we resolve an explicit path from npm global dirs first,
-/// then fall back to a PATH lookup. Cached; clear with `invalidate_codex_path_cache()`.
+/// Resolve the full path to the Codex binary.
+///
+/// An explicit OPENCOVIBE_CODEX_PATH wins. On macOS prefer the notarized Codex CLI
+/// shipped inside ChatGPT.app, then use PATH and common install locations as fallbacks.
+/// Candidate discovery is filesystem-only: do not execute arbitrary PATH entries just to
+/// identify the CLI (notably npm shims and stale aliases can trigger system malware gates).
+/// Cached; clear with `invalidate_codex_path_cache()`.
 pub(crate) fn resolve_codex_path() -> String {
     let mut cached = CODEX_PATH_CACHE.lock().unwrap();
     if let Some(ref path) = *cached {
@@ -678,8 +681,15 @@ pub(crate) fn resolve_codex_path() -> String {
         .filter(|h| !h.is_empty())
         .map(PathBuf::from);
 
+    // Explicit caller configuration is authoritative and must not be silently replaced.
+    if let Some(path) = std::env::var_os("OPENCOVIBE_CODEX_PATH") {
+        let path = PathBuf::from(path).to_string_lossy().to_string();
+        *cached = Some(path.clone());
+        return path;
+    }
+
     #[cfg(windows)]
-    let candidates = {
+    let fallback_candidates = {
         let mut bases = Vec::new();
         if let Ok(d) = std::env::var("APPDATA") {
             if !d.is_empty() {
@@ -705,7 +715,7 @@ pub(crate) fn resolve_codex_path() -> String {
         cands
     };
     #[cfg(not(windows))]
-    let candidates = {
+    let fallback_candidates = {
         let mut cands = Vec::new();
         if let Some(ref h) = home {
             cands.push(h.join(".codex").join("bin").join("codex"));
@@ -715,23 +725,126 @@ pub(crate) fn resolve_codex_path() -> String {
         cands
     };
 
-    for c in &candidates {
-        if c.exists() {
-            let path_str = c.to_string_lossy().to_string();
-            log::debug!(
-                "[claude_stream] resolved codex binary (cached): {}",
-                path_str
-            );
-            *cached = Some(path_str.clone());
-            return path_str;
-        }
+    let mut bundled_candidates = Vec::new();
+    #[cfg(target_os = "macos")]
+    bundled_candidates.extend(chatgpt_bundled_codex_candidates(&home));
+
+    let probe_path = augmented_path();
+    let path_candidates = codex_path_candidates_from_path(&probe_path).unwrap_or_default();
+    let ordered = ordered_codex_candidates(
+        None,
+        bundled_candidates,
+        path_candidates,
+        fallback_candidates,
+    );
+
+    if let Some(c) = ordered
+        .into_iter()
+        .find(|candidate| codex_candidate_exists(candidate))
+    {
+        let path_str = c.to_string_lossy().to_string();
+        log::debug!(
+            "[claude_stream] resolved Codex binary by path priority (cached): {}",
+            path_str
+        );
+        *cached = Some(path_str.clone());
+        return path_str;
     }
     log::debug!(
-        "[claude_stream] codex binary not found in candidates, falling back to PATH lookup"
+        "[claude_stream] Codex binary not found in candidates, falling back to PATH lookup"
     );
-    let fallback = which_binary("codex").unwrap_or_else(|| "codex".to_string());
+    let fallback = "codex".to_string();
     *cached = Some(fallback.clone());
     fallback
+}
+
+#[cfg(target_os = "macos")]
+fn chatgpt_bundled_codex_candidates(home: &Option<PathBuf>) -> Vec<PathBuf> {
+    const RELATIVE: &[&str] = &["Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"];
+    let mut candidates = Vec::new();
+    for app in [PathBuf::from("/Applications/ChatGPT.app")]
+        .into_iter()
+        .chain(home.iter().map(|h| h.join("Applications/ChatGPT.app")))
+    {
+        for relative in RELATIVE {
+            candidates.push(app.join(relative));
+        }
+    }
+    candidates
+}
+
+fn codex_candidate_exists(candidate: &std::path::Path) -> bool {
+    if !candidate.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(candidate)
+            .map(|m| m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn ordered_codex_candidates(
+    explicit: Option<PathBuf>,
+    bundled: Vec<PathBuf>,
+    path: Vec<PathBuf>,
+    fallback: Vec<PathBuf>,
+) -> Vec<PathBuf> {
+    if let Some(explicit) = explicit {
+        return vec![explicit];
+    }
+    let mut seen = std::collections::HashSet::new();
+    bundled
+        .into_iter()
+        .chain(path)
+        .chain(fallback)
+        .filter(|candidate| seen.insert(candidate.clone()))
+        .collect()
+}
+
+fn codex_path_candidates_from_path(path: &str) -> Option<Vec<PathBuf>> {
+    #[cfg(windows)]
+    {
+        let output = std::process::Command::new("where")
+            .arg("codex")
+            .env("PATH", path)
+            .hide_console()
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return Some(Vec::new());
+        }
+        return Some(
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from)
+                .collect(),
+        );
+    }
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut paths = Vec::new();
+        for dir in std::env::split_paths(std::ffi::OsStr::new(path)) {
+            let candidate = dir.join("codex");
+            if candidate.is_file()
+                && std::fs::metadata(&candidate)
+                    .map(|m| m.permissions().mode() & 0o111 != 0)
+                    .unwrap_or(false)
+            {
+                paths.push(candidate);
+            }
+        }
+        Some(paths)
+    }
 }
 
 /// Clear the cached codex binary path so the next `resolve_codex_path()` re-scans.
@@ -744,6 +857,68 @@ pub fn invalidate_codex_path_cache() {
 mod tests {
     #[cfg(not(windows))]
     use super::extract_delimited;
+
+    #[test]
+    fn codex_resolver_prefers_official_bundle_before_path_and_legacy_locations() {
+        use super::ordered_codex_candidates;
+        use std::path::PathBuf;
+        let bundled = PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex");
+        let path = PathBuf::from("/usr/local/bin/codex");
+        let legacy = PathBuf::from("/Users/example/.local/bin/codex");
+        assert_eq!(
+            ordered_codex_candidates(
+                None,
+                vec![bundled.clone()],
+                vec![path.clone()],
+                vec![legacy.clone()],
+            ),
+            vec![bundled, path, legacy]
+        );
+    }
+
+    #[test]
+    fn explicit_codex_path_override_has_absolute_precedence() {
+        use super::ordered_codex_candidates;
+        use std::path::PathBuf;
+        let explicit = PathBuf::from("/custom/codex");
+        assert_eq!(
+            ordered_codex_candidates(
+                Some(explicit.clone()),
+                vec![PathBuf::from("/Applications/ChatGPT.app/codex")],
+                vec![PathBuf::from("/opt/homebrew/bin/codex")],
+                vec![PathBuf::from("/usr/local/bin/codex")],
+            ),
+            vec![explicit]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_candidate_check_is_filesystem_only_and_requires_executable_file() {
+        use super::codex_candidate_exists;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let candidate = dir.path().join("codex");
+        std::fs::write(&candidate, "not executed").unwrap();
+        assert!(!codex_candidate_exists(&candidate));
+        let mut permissions = std::fs::metadata(&candidate).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&candidate, permissions).unwrap();
+        assert!(codex_candidate_exists(&candidate));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bundled_codex_candidate_uses_chatgpt_app_resources_path() {
+        use super::chatgpt_bundled_codex_candidates;
+        let candidates = chatgpt_bundled_codex_candidates(&None);
+        assert_eq!(
+            candidates[0],
+            std::path::PathBuf::from(
+                "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
+            )
+        );
+    }
 
     #[cfg(not(windows))]
     #[test]

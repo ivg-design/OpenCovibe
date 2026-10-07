@@ -89,6 +89,6 @@
 </script>
 
 <pre
-  class="hljs h-full overflow-auto m-0 p-3 text-xs font-mono leading-relaxed whitespace-pre {className}"><code
+  class="hljs h-full overflow-y-auto overflow-x-hidden m-0 p-3 text-xs font-mono leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] {className}"><code
     >{@html highlighted}</code
   ></pre>

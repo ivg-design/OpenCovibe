@@ -6,6 +6,8 @@
   import { IMAGE_TYPES } from "$lib/utils/file-types";
   import type { ChatMessage, Attachment, HistoryContent } from "$lib/types";
   import HistoryContentPager from "./HistoryContentPager.svelte";
+  import RoomBriefing from "./RoomBriefing.svelte";
+  import { roomBriefing, readableProtocolOutput } from "$lib/utils/room-presentation";
 
   let {
     message,
@@ -37,13 +39,19 @@
   }
 
   const isUser = $derived(message.role === "user");
+  const briefing = $derived(isUser ? roomBriefing(message.content) : null);
+  const visibleContent = $derived(
+    briefing
+      ? `${t("room_briefing")} · ${briefing.participant}\n${briefing.objective}`
+      : readableProtocolOutput(message.content),
+  );
 
   let hovered = $state(false);
   let copied = $state(false);
   let collapsed = $state(true);
   let thinkingCollapsed = $state(true);
 
-  const lineCount = $derived(message.content.split("\n").length);
+  const lineCount = $derived(visibleContent.split("\n").length);
   const isLong = $derived(isUser && lineCount > 10);
 
   function formatTime(ts: string): string {
@@ -63,7 +71,7 @@
 
   async function copyContent() {
     try {
-      await navigator.clipboard.writeText(message.content);
+      await navigator.clipboard.writeText(visibleContent);
       copied = true;
       setTimeout(() => (copied = false), 1500);
     } catch {
@@ -73,12 +81,16 @@
 </script>
 
 <div
-  class="w-full {isUser ? 'bg-muted/50' : ''}"
+  class="w-full py-2"
   role="group"
   onmouseenter={() => (hovered = true)}
   onmouseleave={() => (hovered = false)}
 >
-  <div class="chat-content-width py-4">
+  <div
+    class="chat-message-bubble rounded-xl border px-4 py-3 {isUser
+      ? 'chat-message-sent bg-muted/50'
+      : 'chat-message-received'}"
+  >
     <!-- Header: icon + name + copy button + timestamp -->
     <div class="mb-1.5 flex items-center gap-2">
       {#if isUser}
@@ -96,7 +108,9 @@
             <circle cx="12" cy="7" r="4" />
           </svg>
         </div>
-        <span class="text-sm font-semibold text-foreground">{t("chat_roleYou")}</span>
+        <span class="text-sm font-semibold text-foreground"
+          >{briefing ? t("room_briefing") : t("chat_roleYou")}</span
+        >
       {:else}
         <div
           class="flex h-5 w-5 items-center justify-center rounded-sm {isCodex
@@ -204,14 +218,16 @@
             {/each}
           </div>
         {/if}
-        {#if isLong}
+        {#if briefing}
+          <RoomBriefing {briefing} />
+        {:else if isLong}
           <p
             class="whitespace-pre-wrap {collapsed ? 'max-h-24 overflow-hidden' : ''}"
             style={collapsed
               ? "mask-image: linear-gradient(to bottom, black 70%, transparent);"
               : ""}
           >
-            {message.content}
+            {visibleContent}
           </p>
           <button
             class="mt-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
@@ -222,7 +238,7 @@
               : t("common_collapse")}
           </button>
         {:else}
-          <p class="whitespace-pre-wrap">{message.content}</p>
+          <p class="whitespace-pre-wrap">{visibleContent}</p>
         {/if}
       {:else}
         {#if thinkingText}
@@ -245,7 +261,7 @@
             <div
               class="mb-3 rounded-md border border-blue-500/20 bg-blue-500/5 px-3 py-2 text-xs text-blue-300/80 whitespace-pre-wrap leading-relaxed"
             >
-              {thinkingText.trimEnd()}
+              {readableProtocolOutput(thinkingText.trimEnd())}
             </div>
             {#if thinkingHistoryContent && historyRunId && historyGenerationId}
               <HistoryContentPager
@@ -258,10 +274,10 @@
           {/if}
         {/if}
         <div class="prose-chat">
-          <MarkdownContent text={message.content} />
+          <MarkdownContent text={visibleContent} />
         </div>
       {/if}
-      {#if historyContent && historyRunId && historyGenerationId}
+      {#if !briefing && historyContent && historyRunId && historyGenerationId}
         <HistoryContentPager
           runId={historyRunId}
           generationId={historyGenerationId}

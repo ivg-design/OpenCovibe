@@ -3249,8 +3249,11 @@ fn manifest_matches_source(source: &Path, manifest: &HistoryManifest, allow_appe
     if meta.len() < manifest.source_size || (!allow_append && meta.len() != manifest.source_size) {
         return false;
     }
-    // Appends after publication are consumed by bounded catch-up from `source_size`; rebuilding
-    // here would defeat that handoff and retain a new immutable generation on every run load.
+    // Small active tails use bounded catch-up. A view left closed for many turns
+    // must reopen on a fresh latest page instead of replaying the entire backlog.
+    if allow_append && meta.len().saturating_sub(manifest.source_size) > PAGE_BYTE_LIMIT as u64 {
+        return false;
+    }
     // For an unchanged-length source, mtime still detects same-size replacement even when the
     // boundary windows happen to match.
     if meta.len() == manifest.source_size && modified_ns(&meta) != manifest.source_mtime_ns {
@@ -3654,6 +3657,14 @@ mod tests {
         let mut replacement = fs::read(&source).unwrap();
         replacement[1] = b'X';
         fs::write(&source, replacement).unwrap();
+        assert!(!manifest_matches_source(&source, &manifest, true));
+
+        let mut bounded = b"{\"seq\":1}\n".to_vec();
+        bounded.resize(source_size as usize + PAGE_BYTE_LIMIT, b' ');
+        fs::write(&source, &bounded).unwrap();
+        assert!(manifest_matches_source(&source, &manifest, true));
+        bounded.push(b' ');
+        fs::write(&source, bounded).unwrap();
         assert!(!manifest_matches_source(&source, &manifest, true));
     }
 

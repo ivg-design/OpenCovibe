@@ -6,7 +6,7 @@
 //! `model/list` request, read the response, then kill the process. Same spawn→write→
 //! read→kill→TTL-cache shape as `control::get_cli_info`.
 
-use crate::agent::claude_stream::{augmented_path, which_binary};
+use crate::agent::claude_stream::{augmented_path, resolve_codex_path};
 use crate::models::{CliInfoError, CliModelInfo, CodexModelList};
 use crate::process_ext::HideConsole;
 use serde_json::Value;
@@ -31,34 +31,18 @@ impl CodexInfoCache {
     }
 }
 
-/// Minimal fallback when app-server is unavailable (old Codex without `model/list`,
-/// not installed, or timeout). Intentionally tiny — the live catalog is the real source;
-/// this only keeps the picker non-empty so the user can still pick or type a model.
+/// Empty fallback when app-server is unavailable. Model availability is dynamic and
+/// account-specific; presenting a baked-in catalog here could offer models this account
+/// or selected Codex installation cannot run.
 pub fn fallback_models() -> CodexModelList {
-    let mk = |value: &str, name: &str, desc: &str| CliModelInfo {
-        value: value.to_string(),
-        display_name: name.to_string(),
-        description: desc.to_string(),
-        supports_effort: None,
-        supported_effort_levels: None,
-        supports_adaptive_thinking: None,
-    };
     CodexModelList {
-        models: vec![
-            mk("gpt-5.6-sol", "GPT-5.6 Sol", "Flagship coding model"),
-            mk("gpt-5.6-terra", "GPT-5.6 Terra", "Balanced coding model"),
-            mk(
-                "gpt-5.6-luna",
-                "GPT-5.6 Luna",
-                "Fast, economical coding model",
-            ),
-        ],
-        default_model: Some("gpt-5.6-sol".to_string()),
+        models: Vec::new(),
+        default_model: None,
     }
 }
 
 /// Get the Codex model catalog, using cache if fresh. On any failure the caller
-/// (Tauri command) substitutes `fallback_models()` — errors are returned, not swallowed.
+/// (Tauri command) substitutes an empty catalog — errors are returned, not swallowed.
 pub async fn get_codex_models(
     cache: &CodexInfoCache,
     force: bool,
@@ -76,7 +60,8 @@ pub async fn get_codex_models(
         }
     }
 
-    if which_binary("codex").is_none() {
+    let codex_path = resolve_codex_path();
+    if codex_path == "codex" {
         return Err(CliInfoError {
             code: "cli_not_found".to_string(),
             message: "Codex CLI binary not found".to_string(),
@@ -84,7 +69,7 @@ pub async fn get_codex_models(
     }
 
     let path_env = augmented_path();
-    let mut cmd = tokio::process::Command::new("codex");
+    let mut cmd = tokio::process::Command::new(&codex_path);
     cmd.arg("app-server")
         .env("PATH", &path_env)
         .stdin(std::process::Stdio::piped())
@@ -386,9 +371,9 @@ mod tests {
     }
 
     #[test]
-    fn fallback_is_non_empty() {
+    fn fallback_does_not_advertise_models_without_a_live_catalog() {
         let fb = fallback_models();
-        assert!(!fb.models.is_empty());
-        assert_eq!(fb.default_model.as_deref(), Some("gpt-5.6-sol"));
+        assert!(fb.models.is_empty());
+        assert!(fb.default_model.is_none());
     }
 }

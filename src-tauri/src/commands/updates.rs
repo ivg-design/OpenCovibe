@@ -1,22 +1,3 @@
-use reqwest::Client;
-use std::sync::LazyLock;
-use std::time::Duration;
-
-// ── Constants ──
-
-const GITHUB_API_URL: &str = "https://api.github.com/repos/AnyiWang/OpenCovibe/releases/latest";
-
-// ── HTTP client (reuse across requests) ──
-
-static CLIENT: LazyLock<Client> = LazyLock::new(|| {
-    Client::builder()
-        .timeout(Duration::from_secs(15))
-        .connect_timeout(Duration::from_secs(10))
-        .user_agent(format!("OpenCovibe/{}", env!("CARGO_PKG_VERSION")))
-        .build()
-        .unwrap_or_default()
-});
-
 // ── Types ──
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -34,6 +15,7 @@ pub struct UpdateInfo {
 /// Strips leading 'v' prefix. Pre-release versions (e.g. "1.0.0-beta.1") are considered
 /// older than the same version without pre-release suffix.
 /// Returns false on any parse failure (safe degradation).
+#[cfg(test)]
 fn parse_version(s: &str) -> Option<([u64; 3], bool)> {
     let s = s.strip_prefix('v').unwrap_or(s);
     let (main, has_pre) = if let Some(idx) = s.find('-') {
@@ -51,6 +33,7 @@ fn parse_version(s: &str) -> Option<([u64; 3], bool)> {
     Some(([major, minor, patch], has_pre))
 }
 
+#[cfg(test)]
 fn is_newer(current: &str, latest: &str) -> bool {
     let (cur_ver, cur_pre) = match parse_version(current) {
         Some(v) => v,
@@ -78,6 +61,7 @@ fn is_newer(current: &str, latest: &str) -> bool {
 }
 
 /// Platform-independent: select download URL given preferred extensions.
+#[cfg(test)]
 fn select_download_url_for_exts(body: &serde_json::Value, preferred_exts: &[&str]) -> String {
     let html_url = body["html_url"].as_str().unwrap_or("").to_string();
     let Some(assets) = body["assets"].as_array() else {
@@ -105,98 +89,10 @@ fn select_download_url_for_exts(body: &serde_json::Value, preferred_exts: &[&str
     html_url
 }
 
-fn select_download_url(body: &serde_json::Value) -> String {
-    #[cfg(target_os = "macos")]
-    let exts: &[&str] = &[".dmg"];
-    #[cfg(target_os = "windows")]
-    let exts: &[&str] = &[".msi", ".exe", ".zip"];
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let exts: &[&str] = &[".appimage", ".deb"];
-
-    select_download_url_for_exts(body, exts)
-}
-
-// ── Tauri command ──
-
+// Local development releases are installed manually. Never offer an upstream binary.
 #[tauri::command]
-pub async fn check_for_updates(app: tauri::AppHandle) -> Result<UpdateInfo, String> {
-    let current_version = app.package_info().version.to_string();
-    log::debug!(
-        "[updates] checking for updates, current={}",
-        current_version
-    );
-
-    let resp = match CLIENT
-        .get(GITHUB_API_URL)
-        .header("Accept", "application/vnd.github+json")
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            log::warn!("[updates] network error (offline/timeout): {}", e);
-            return Ok(UpdateInfo {
-                has_update: false,
-                latest_version: String::new(),
-                current_version,
-                download_url: String::new(),
-            });
-        }
-    };
-
-    let status = resp.status();
-    if !status.is_success() {
-        log::warn!("[updates] GitHub API returned HTTP {}", status);
-        return Ok(UpdateInfo {
-            has_update: false,
-            latest_version: String::new(),
-            current_version,
-            download_url: String::new(),
-        });
-    }
-
-    let body: serde_json::Value = match resp.json().await {
-        Ok(v) => v,
-        Err(e) => {
-            log::warn!("[updates] failed to parse response: {}", e);
-            return Ok(UpdateInfo {
-                has_update: false,
-                latest_version: String::new(),
-                current_version,
-                download_url: String::new(),
-            });
-        }
-    };
-
-    let tag = body["tag_name"].as_str().unwrap_or("");
-    let download_url = select_download_url(&body);
-
-    if tag.is_empty() {
-        log::warn!("[updates] empty tag_name in response");
-        return Ok(UpdateInfo {
-            has_update: false,
-            latest_version: String::new(),
-            current_version,
-            download_url: String::new(),
-        });
-    }
-
-    let latest_version = tag.strip_prefix('v').unwrap_or(tag).to_string();
-    let has_update = is_newer(&current_version, tag);
-
-    log::debug!(
-        "[updates] current={} latest={} has_update={}",
-        current_version,
-        latest_version,
-        has_update
-    );
-
-    Ok(UpdateInfo {
-        has_update,
-        latest_version,
-        current_version,
-        download_url,
-    })
+pub async fn check_for_updates(_app: tauri::AppHandle) -> Result<UpdateInfo, String> {
+    Err("Automatic update checks are disabled for this local fork. Builds are provided from ivg-design/OpenCovibe.".into())
 }
 
 // ── Tests ──
