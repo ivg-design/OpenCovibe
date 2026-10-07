@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "OpenCovibe"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -16,6 +16,7 @@ dependencies = [
  "libc",
  "log",
  "mime_guess",
+ "native-tls",
  "notify",
  "once_cell",
  "rand 0.8.5",
@@ -35,6 +36,7 @@ dependencies = [
  "tauri-plugin-shell",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
  "tokio-util",
  "toml 0.8.2",
  "toml_edit 0.22.27",
@@ -4951,7 +4953,9 @@ checksum = "edc5f74e248dc973e0dbb7b74c7e0d6fcc301c694ff50049504004ef4d0cdcd9"
 dependencies = [
  "futures-util",
  "log",
+ "native-tls",
  "tokio",
+ "tokio-native-tls",
  "tungstenite",
 ]
 
@@ -5226,6 +5230,7 @@ dependencies = [
  "http",
  "httparse",
  "log",
+ "native-tls",
  "rand 0.8.5",
  "sha1",
  "thiserror 1.0.69",

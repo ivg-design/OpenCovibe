@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 import stat
 import sys
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -130,17 +129,12 @@ def main():
         if unknown:
             print(f"{len(unknown)} interrupted relay requests need manual reconciliation; they will not be replayed")
         return
+    if not args.once:
+        parser.error("The reactive relay is owned by OpenCovibe. Open the app; the background polling service has been retired.")
     lock = os.open(args.config.with_name("bridge-relay.lock"), os.O_CREAT | os.O_RDWR, 0o600)
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    while True:
-        try:
-            relay.step()
-        except (OSError, ValueError):
-            # Never include request bodies, auth headers, callback URLs or raw exceptions.
-            print("Room relay temporarily unavailable; preserved execution state", file=sys.stderr)
-        if args.once:
-            break
-        time.sleep(1)
+    relay.step()
+
 
 
 if __name__ == "__main__":

@@ -367,6 +367,13 @@ async fn spawn_server(
         app_state.sessions.clone(),
         ws_cancel_token.clone(),
     );
+    crate::rooms::bridge::relay::start(
+        app_state.rooms.clone(),
+        bind,
+        actual_port,
+        ws_cancel_token.clone(),
+        app_cancel.clone(),
+    );
     let router = router::build_router(app_state);
 
     // Spawn serve task (use tokio::spawn directly for tokio::task::JoinHandle compatibility)

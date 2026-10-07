@@ -226,3 +226,65 @@ it("leases once, accepts an exact response retry, and reuses the recorded RPC re
   await mac("/bridge/respond", { method: "POST", body: JSON.stringify({ key: newNext.request!.key, response }) });
   expect((await newPending).status).toBe(200);
 });
+
+it("pushes queued work without idle polling and preserves leases on reconnection", async () => {
+  const {fetch,mac}=testRelay();
+  expect((await fetch('/bridge/connect',{headers:{upgrade:'websocket'}})).status).toBe(401);
+  expect((await mac('/bridge/connect')).status).toBe(426);
+  const channel=async () => {
+    const response=await mac('/bridge/connect',{headers:{upgrade:'websocket'}});
+    expect(response.status).toBe(101);
+    const ws=response.webSocket!; ws.accept();
+    const messages: Record<string,unknown>[]=[];
+    let waiter: ((v:Record<string,unknown>)=>void)|undefined;
+    ws.addEventListener('message',event=>{const value=JSON.parse(String(event.data));if(waiter){const w=waiter;waiter=undefined;w(value);}else messages.push(value);});
+    const next=()=>messages.length ? Promise.resolve(messages.shift()!) : new Promise<Record<string,unknown>>((resolve,reject)=>{const timeout=setTimeout(()=>reject(new Error('Missing push')),2000);waiter=v=>{clearTimeout(timeout);resolve(v);};});
+    return {ws,messages,next};
+  };
+  const original=await channel();
+  original.ws.send(JSON.stringify({type:'ready'}));
+  await new Promise(resolve=>setTimeout(resolve,80));
+  expect(original.messages).toHaveLength(0);
+  const registration=await fetch('/register',{method:'POST',body:JSON.stringify({client_name:'Reactive test',redirect_uris:['https://client.example/callback']})});
+  const {client_id}=await registration.json() as {client_id:string};
+  const q=new URLSearchParams({client_id,redirect_uri:'https://client.example/callback',response_type:'code',code_challenge:challenge,code_challenge_method:'S256',resource:origin+'/mcp'});
+  await fetch('/authorize?'+q);
+  const {pending}=await (await mac('/bridge/pending')).json() as {pending:{id:string;code:string}[]};
+  const approval=await fetch('/consent',{method:'POST',body:new URLSearchParams({id:pending[0].id,code:pending[0].code}),redirect:'manual'});
+  const code=new URL(approval.headers.get('location')!).searchParams.get('code')!;
+  const {access_token}=await (await fetch('/token',{method:'POST',body:new URLSearchParams({grant_type:'authorization_code',client_id,code,redirect_uri:'https://client.example/callback',code_verifier:verifier,resource:origin+'/mcp'})})).json() as {access_token:string};
+  const call=(id:string,session?:string)=>fetch('/mcp',{method:'POST',headers:{authorization:'Bearer '+access_token,...(session?{'mcp-session-id':session}:{})},body:JSON.stringify({jsonrpc:'2.0',id,method:session?'ping':'initialize',...(session?{}:{params:{protocolVersion:'2025-11-25'}})})});
+  const initializing=call('init');
+  const init=await original.next();
+  expect(init.type).toBe('work');
+  original.ws.send(JSON.stringify({type:'response',key:init.key,response:{jsonrpc:'2.0',id:'init',result:{protocolVersion:'2025-11-25'}}}));
+  expect(await original.next()).toMatchObject({type:'ack',key:init.key});
+  const session=(await initializing).headers.get('mcp-session-id')!;
+  const firstPending=call('one',session);
+  await new Promise(resolve=>setTimeout(resolve,80));
+  expect(original.messages).toHaveLength(0); // ack alone doesn't lease another turn
+  original.ws.send(JSON.stringify({type:'ready'}));
+  const first=await original.next();
+  const secondPending=call('two',session);
+  await new Promise(resolve=>setTimeout(resolve,80));
+  expect(original.messages).toHaveLength(0); // one lease in flight
+  const replacement=await channel();
+  const saved={type:'response',key:first.key,response:{jsonrpc:'2.0',id:'one',result:{saved:true}}};
+  replacement.ws.send(JSON.stringify(saved)); // recovery before readiness
+  expect(await replacement.next()).toMatchObject({type:'ack',key:first.key});
+  expect((await firstPending).status).toBe(200);
+  replacement.ws.send(JSON.stringify(saved));
+  expect(await replacement.next()).toMatchObject({type:'ack',key:first.key});
+  replacement.ws.send(JSON.stringify({type:'ready'}));
+  const second=await replacement.next();
+  expect(second).toMatchObject({type:'work',rpc:{id:'two'}});
+  expect(second.key).not.toBe(first.key);
+  replacement.ws.send(JSON.stringify({type:'response',key:second.key,response:{jsonrpc:'2.0',id:'two',result:{}}}));
+  expect(await replacement.next()).toMatchObject({type:'ack',key:second.key});
+  expect((await secondPending).status).toBe(200);
+  replacement.ws.send(JSON.stringify({type:'ready'}));
+  await new Promise(resolve=>setTimeout(resolve,80));
+  expect(replacement.messages).toHaveLength(0);
+  const closed=new Promise<void>(resolve=>replacement.ws.addEventListener('close',()=>resolve(),{once:true}));
+  replacement.ws.send('not-json'); await closed;
+},15000);

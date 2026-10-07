@@ -31,7 +31,8 @@ export class Broker implements DurableObject {
       CREATE TABLE IF NOT EXISTS families(id TEXT PRIMARY KEY,revoked INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,family TEXT NOT NULL,expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS work(key TEXT PRIMARY KEY,owner TEXT NOT NULL,payload_hash TEXT NOT NULL,rpc TEXT NOT NULL,state TEXT NOT NULL,result TEXT,result_hash TEXT,created INTEGER NOT NULL,updated INTEGER NOT NULL);
-      CREATE INDEX IF NOT EXISTS work_queue ON work(state,created);`);
+      CREATE INDEX IF NOT EXISTS work_queue ON work(state,created);
+      CREATE TABLE IF NOT EXISTS transport_counts(key TEXT PRIMARY KEY,value INTEGER NOT NULL);`);
   }
 
   private first<T>(query: string, ...params: (string | number)[]): T | null {
@@ -59,10 +60,16 @@ export class Broker implements DurableObject {
   async fetch(req: Request): Promise<Response> {
     if (!this.configured()) return error(503, "misconfigured", "Owner relay configuration is incomplete");
     const u = new URL(req.url), p = u.pathname;
+    this.count("http:" + p);
     if (p.startsWith("/bridge/")) {
       if (!(await this.mac(req))) return error(401, "unauthorized", "Mac bearer required");
       if (p === "/bridge/pending" && req.method === "GET") return this.pending();
       if (p === "/bridge/approve" && req.method === "POST") return this.approve(req);
+      if (p === "/bridge/connect" && req.method === "GET") return this.connectMac(req);
+      if (p === "/bridge/status" && req.method === "GET") return json(200, {
+        connections: this.ctx.getWebSockets("mac").length,
+        counts: this.sql.exec("SELECT key,value FROM transport_counts ORDER BY key").toArray(),
+      });
       if (p === "/bridge/next" && req.method === "GET") return this.next();
       if (p === "/bridge/leased" && req.method === "GET") return this.leased();
       if (p === "/bridge/respond" && req.method === "POST") return this.respond(req);
@@ -227,6 +234,7 @@ export class Broker implements DurableObject {
       if (count >= 100) return reply(503, jsonRpcError(rpc.id, "Relay queue full"));
       this.sql.exec("INSERT INTO work VALUES (?,?,?,?,'queued',NULL,NULL,?,?)", key, g.family, payloadHash, payload, now(), now());
       work = this.first<Work>("SELECT * FROM work WHERE key=?", key)!;
+      this.pushQueued();
     }
     for (let i = 0; i < 15; i++) {
       const current = this.first<Work>("SELECT * FROM work WHERE key=?", key)!;
@@ -243,6 +251,62 @@ export class Broker implements DurableObject {
     this.sql.exec("UPDATE work SET state='leased',updated=? WHERE key=? AND state='queued'", now(), row.key);
     return json(200, { request: { key: row.key, rpc: JSON.parse(row.rpc), created_at: row.created } });
   }
+
+  private connectMac(req: Request): Response {
+    if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") return error(426, "upgrade_required", "WebSocket required");
+    // One app-owned transport. Leased work is never replayed on reconnection.
+    for (const old of this.ctx.getWebSockets("mac")) old.close(1000, "Replaced by current app connection");
+    const [client, server] = Object.values(new WebSocketPair());
+    this.ctx.acceptWebSocket(server, ["mac"]);
+    server.serializeAttachment({ auth: this.env.MAC_TOKEN_SHA256, ready: false, busy: null });
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  private count(key: string): void {
+    this.sql.exec("INSERT INTO transport_counts VALUES (?,1) ON CONFLICT(key) DO UPDATE SET value=value+1", key);
+  }
+
+  private pushQueued(): void {
+    for (const ws of this.ctx.getWebSockets("mac")) {
+      const state = ws.deserializeAttachment();
+      if (!state || state.auth !== this.env.MAC_TOKEN_SHA256 || !state.ready || state.busy) continue;
+      const row = this.first<Work>("SELECT * FROM work WHERE state='queued' ORDER BY created,key LIMIT 1");
+      if (!row) return;
+      this.sql.exec("UPDATE work SET state='leased',updated=? WHERE key=? AND state='queued'", now(), row.key);
+      state.busy = row.key;
+      ws.serializeAttachment(state);
+      try { ws.send(JSON.stringify({ type: "work", key: row.key, rpc: JSON.parse(row.rpc) })); this.count("push:work"); }
+      catch { ws.close(1011, "Delivery uncertain; lease preserved"); }
+    }
+  }
+
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    const state = ws.deserializeAttachment();
+    if (!this.configured() || !state || state.auth !== this.env.MAC_TOKEN_SHA256) { ws.close(1008, "Access revoked"); return; }
+    if (typeof message !== "string" || new TextEncoder().encode(message).length > 64 * 1024) { ws.close(1009, "Invalid frame"); return; }
+    let input: unknown;
+    try { input = JSON.parse(message); } catch { ws.close(1008, "Invalid frame"); return; }
+    if (!object(input)) { ws.close(1008, "Invalid frame"); return; }
+    this.count("socket:" + (typeof input.type === "string" && ["ready", "response"].includes(input.type) ? input.type : "invalid"));
+    if (input.type === "ready" && Object.keys(input).length === 1) {
+      state.ready = true;
+      ws.serializeAttachment(state);
+      this.pushQueued();
+      return;
+    }
+    if (input.type !== "response" || (state.busy && state.busy !== input.key) || Object.keys(input).some(k => !["type", "key", "response"].includes(k))) { ws.close(1008, "Invalid response"); return; }
+    const result = await this.respond(new Request("https://relay/bridge/respond", { method: "POST", body: JSON.stringify({ key: input.key, response: input.response }) }));
+    if (result.status !== 200) { ws.close(1008, "Response conflict; inspect preserved lease"); return; }
+    ws.send(JSON.stringify({ type: "ack", key: input.key }));
+    // Wait for explicit ready after the Mac durably records this acknowledgement.
+    state.busy = null;
+    state.ready = false;
+    ws.serializeAttachment(state);
+  }
+
+  // Abrupt app/network shutdown can report reserved code 1006, which cannot be sent.
+  webSocketClose(ws: WebSocket): void { ws.close(1000); }
+  webSocketError(ws: WebSocket): void { ws.close(1011, "Connection lost; lease preserved"); }
   private leased(): Response {
     const rows = this.sql.exec("SELECT * FROM work WHERE state='leased' ORDER BY created,key LIMIT 100").toArray() as Work[];
     return json(200, { requests: rows.map(row => ({ key: row.key, rpc: JSON.parse(row.rpc), created_at: row.created, leased_at: row.updated })) });
@@ -281,7 +345,7 @@ export default {
     if (path === "/.well-known/oauth-authorization-server" && req.method === "GET") return json(200, metadata(origin), cors);
     if ((path === "/.well-known/oauth-protected-resource" || path === "/.well-known/oauth-protected-resource/mcp") && req.method === "GET") return json(200, { resource: audience, authorization_servers: [origin], scopes_supported: SCOPES, bearer_methods_supported: ["header"] }, cors);
     if (path === "/mcp" && req.method !== "POST") return error(405, "method_not_allowed", "POST only");
-    if (!["/register", "/authorize", "/consent", "/token", "/mcp", "/bridge/pending", "/bridge/approve", "/bridge/next", "/bridge/leased", "/bridge/respond"].includes(path)) return error(404, "not_found", "Unknown route");
+    if (!["/register", "/authorize", "/consent", "/token", "/mcp", "/bridge/pending", "/bridge/approve", "/bridge/connect", "/bridge/status", "/bridge/next", "/bridge/leased", "/bridge/respond"].includes(path)) return error(404, "not_found", "Unknown route");
     if (path.startsWith("/bridge/") && !bearer(req)) return error(401, "unauthorized", "Mac bearer required");
     const stub = env.BROKER.get(env.BROKER.idFromName("single-owner-room"));
     const h = new Headers(req.headers);

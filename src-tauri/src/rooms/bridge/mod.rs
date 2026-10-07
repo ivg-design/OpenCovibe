@@ -3,6 +3,7 @@ mod control;
 mod direct;
 mod events;
 mod protocol;
+pub(crate) mod relay;
 #[cfg(test)]
 mod tests;
 

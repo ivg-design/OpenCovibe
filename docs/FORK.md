@@ -50,3 +50,7 @@ The cloud OAuth callback policy is fixed, the account connection is complete, an
 ## Version 0.3.6
 
 Dotcliffe can explicitly resume owner-authorized rooms and unpause, wake or cold-start their existing Codex/Claude agents through the owning scheduler. Durable control retries never replay a start or undo a later pause. Provider permission/quota waits and turn limits stay enforced. The participant form also keeps its disclosure open while editing and during room refreshes. See [control acceptance](DOTCLIFFE_ROOM_CONTROLS_ACCEPTANCE_2026-10-03.md).
+
+## Version 0.3.7
+
+The private Mac relay is reactive and owned by OCV's lifecycle. A hibernating outbound WebSocket receives queued requests; healthy idle transport sends no periodic HTTP polls or heartbeat frames. Quit closes it. The always-running polling LaunchAgent is retired. Durable leases, native access guards and uncertain-response recovery are preserved. See [reactive relay acceptance](REACTIVE_RELAY_ACCEPTANCE_2026-10-06.md).
